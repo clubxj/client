@@ -73,8 +73,9 @@ Usage: `injector run [--script <path> [--lib <dir>]] [pid]`. Lines are `\u{1e}`-
 
 ## Cross-repo contracts
 
-- **`HOST_API`** (`lib.rs`, now 21): bump when adding or changing a sandbox global. Pair with `lib/HOST_API`, bumped in the lib commit that starts using it; `lib/tools/check-host-api.sh` fails the lib release when `host.luau` gains a global without a bump.
-- **Lib selection** (`loader/src/libs.rs::choose`): the loader takes the newest lib release whose `requires_host <= injector::HOST_API`, warning when a newer one was skipped. A missed bump pairs a lib with an injector that lacks the global.
+- **`HOST_API`** (`lib.rs`): bump when adding or changing a sandbox global. Pair with `lib/HOST_API`, bumped in the lib commit that starts using it; `lib/tools/check-host-api.sh` fails the lib release when `host.luau` gains a global without a bump.
+- **`HOST_API_MIN`** (`lib.rs`): the oldest lib API this injector still runs. Raise it to the new `HOST_API` when a global is removed or changes meaning (22 dropped `project`'s `via`), so no older lib is paired with an injector that can't serve it.
+- **Lib selection** (`loader/src/libs.rs::choose`): the loader takes the newest lib release whose `requires_host` is between `HOST_API_MIN` and `HOST_API`, warning when a newer one was skipped. The cached lib is used offline only if its `requires_host` (`.requires_host` beside `.version`) is in that range too. A missed bump pairs a lib with an injector that lacks the global; a missed `HOST_API_MIN` bump pairs one with an injector that changed a global under it.
 - **`PROTOCOL_VERSION`** (`ipc`): any IPC layout change bumps it and updates agent, injector and `lib/host.luau` together. `Connection::problem` reports a mismatch.
 - **Adding a global**: implement and bind in `sandbox.rs`, add the `offline` stub, bump `HOST_API`, add type/wrapper to `lib/host.luau` and document it in `lib/docs/host.md`.
 - Loader line formats (`form.rs`, `http.rs`, `prices.rs`, `antiban.rs`) are shared code with `src/loader`; change both sides together. See [loader-gui.md](loader-gui.md).

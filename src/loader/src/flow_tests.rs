@@ -842,6 +842,7 @@ fn quote(price: i64, fee: i64, required: i64) -> Quote {
         rank: i64::from(fee > 0),
         fee,
         required,
+        requires_host: None,
     }
 }
 
@@ -888,6 +889,23 @@ fn a_start_is_refused_without_the_balance_or_the_access() {
     let mut unpublished = script();
     unpublished.revision = None;
     assert!(start_block(&unpublished, &quote(180_000, 0, 30_000), 30_000).is_some());
+}
+
+#[test]
+fn a_revision_published_against_a_newer_lib_needs_a_newer_loader() {
+    let published = |host| Quote {
+        requires_host: host,
+        ..quote(180_000, 0, 30_000)
+    };
+    assert_eq!(
+        start_block(&script(), &published(Some(injector::HOST_API)), 30_000),
+        None
+    );
+    assert_eq!(start_block(&script(), &published(None), 30_000), None);
+    assert!(
+        start_block(&script(), &published(Some(injector::HOST_API + 1)), 30_000)
+            .is_some_and(|why| why.contains("newer loader"))
+    );
 }
 
 #[test]

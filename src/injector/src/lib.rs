@@ -15,6 +15,7 @@ pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
 pub const HOST_API: u32 = 22;
+pub const HOST_API_MIN: u32 = 22;
 
 pub mod antiban;
 pub mod async_input;

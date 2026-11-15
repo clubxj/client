@@ -189,6 +189,14 @@ pub fn start_block(script: &StoreScript, quote: &Quote, microcredits: i64) -> Op
     if !script.can_access {
         return Some("You don't have access to this script.".into());
     }
+    if quote
+        .requires_host
+        .is_some_and(|host| host > injector::HOST_API)
+    {
+        return Some(
+            "This script's live revision needs a newer loader. Update the loader to run it.".into(),
+        );
+    }
     script
         .revision
         .is_none()

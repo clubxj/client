@@ -60,7 +60,8 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 - Store files are AES-256-GCM encrypted (`session::decrypt_file`; `key: null` means plain, pre-encryption revisions), downloaded on every start, never written to disk, sent to the injector over stdin (`MODULES`). The revision cache folder is empty and only anchors relative `require`.
 - Community scripts: the warning's acceptance is stored per script and revision (`Confirmed`, max 500). `session::prepare` refuses and ends a session whose started revision isn't the confirmed one, so a revision published after the warning never runs unseen.
 - One script per client, enforced across processes by a lock file (see [mcp.md](mcp.md)). A store start in progress (quoting, dialog, downloading) holds its client.
-- Store scripts use the newest lib in `lib/index.json` whose `requires_host` is at most `injector::HOST_API` (`libs.rs`); if a newer lib needs a newer loader, the script log says to update.
+- Store scripts use the newest lib in `lib/index.json` whose `requires_host` is between `injector::HOST_API_MIN` and `HOST_API` (`libs.rs`); if a newer lib needs a newer loader, the script log says to update.
+- `session::start_block` refuses a script whose live revision has a `requires_host` (from the quote) above `HOST_API`: it passed the API's type check only against a newer lib, which this loader can't run. Revisions published before checks have none.
 
 ## Update flow
 

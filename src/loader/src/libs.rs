@@ -13,6 +13,7 @@ use crate::{
 };
 
 const VERSION_FILE: &str = ".version";
+const HOST_FILE: &str = ".requires_host";
 const MAX_INDEX_BYTES: u64 = 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
@@ -32,11 +33,18 @@ struct Index {
     versions: Vec<Release>,
 }
 
-fn choose(releases: &[Release], host_api: u32) -> Option<(&Release, bool)> {
+fn runs_on(requires_host: u32, min: u32, max: u32) -> bool {
+    (min..=max).contains(&requires_host)
+}
+
+fn choose(releases: &[Release], min: u32, max: u32) -> Option<(&Release, bool)> {
     let position = releases
         .iter()
-        .position(|release| release.requires_host <= host_api)?;
-    Some((&releases[position], position > 0))
+        .position(|release| runs_on(release.requires_host, min, max))?;
+    let outdated = releases[..position]
+        .iter()
+        .any(|release| release.requires_host > max);
+    Some((&releases[position], outdated))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -52,7 +60,18 @@ pub fn ensure(api: &Api, root: &Path) -> Result<Lib, String> {
     let installed = fs::read_to_string(dir.join(VERSION_FILE))
         .ok()
         .map(|v| v.trim().to_owned());
+    let installed_host = fs::read_to_string(dir.join(HOST_FILE))
+        .ok()
+        .and_then(|h| h.trim().parse::<u32>().ok());
     let cached = |why: String| match &installed {
+        Some(_)
+            if !installed_host
+                .is_some_and(|host| runs_on(host, injector::HOST_API_MIN, injector::HOST_API)) =>
+        {
+            Err(format!(
+                "Couldn't get the script library, and the cached one doesn't work with this loader: {why}"
+            ))
+        }
         Some(version) => {
             eprintln!(
                 "lib: using the cached copy ({version}), couldn't check for a newer one: {why}"
@@ -68,7 +87,9 @@ pub fn ensure(api: &Api, root: &Path) -> Result<Lib, String> {
         Ok(index) => index,
         Err(error) => return cached(error),
     };
-    let Some((release, outdated)) = choose(&index.versions, injector::HOST_API) else {
+    let Some((release, outdated)) =
+        choose(&index.versions, injector::HOST_API_MIN, injector::HOST_API)
+    else {
         return cached("no published script library works with this loader, update it".into());
     };
     let warning = outdated.then(|| OUTDATED.to_owned());
@@ -124,6 +145,10 @@ fn install(api: &Api, root: &Path, manifest: &Release) -> Result<(), String> {
     let result = unpack(&bytes, &staging)
         .and_then(|()| {
             fs::write(staging.join(VERSION_FILE), &manifest.version).map_err(|e| e.to_string())
+        })
+        .and_then(|()| {
+            fs::write(staging.join(HOST_FILE), manifest.requires_host.to_string())
+                .map_err(|e| e.to_string())
         })
         .and_then(|()| {
             let dir = root.join("lib");
@@ -291,21 +316,33 @@ mod tests {
     #[test]
     fn picks_the_newest_lib_the_loader_can_run() {
         let releases = [release("c", 3), release("b", 2), release("a", 1)];
+        let pick = |min, max| {
+            choose(&releases, min, max).map(|(r, outdated)| (r.version.as_str(), outdated))
+        };
+        assert_eq!(pick(1, 3), Some(("c", false)));
+        assert_eq!(pick(1, 2), Some(("b", true)), "c needs a newer loader");
+        assert_eq!(pick(1, 1), Some(("a", true)));
         assert_eq!(
-            choose(&releases, 3).map(|(r, outdated)| (r.version.as_str(), outdated)),
-            Some(("c", false))
+            pick(1, 4),
+            Some(("c", false)),
+            "a loader ahead of every lib runs the newest"
+        );
+        assert!(pick(0, 0).is_none());
+        assert!(choose(&[], 1, 1).is_none());
+    }
+
+    #[test]
+    fn never_picks_a_lib_older_than_the_injector_still_supports() {
+        let releases = [release("b", 2), release("a", 1)];
+        assert_eq!(
+            choose(&releases, 3, 4).map(|(r, _)| r.version.as_str()),
+            None,
+            "the injector dropped globals both libs call"
         );
         assert_eq!(
-            choose(&releases, 2).map(|(r, outdated)| (r.version.as_str(), outdated)),
-            Some(("b", true)),
-            "c needs a newer loader"
+            choose(&releases, 2, 4).map(|(r, outdated)| (r.version.as_str(), outdated)),
+            Some(("b", false))
         );
-        assert_eq!(
-            choose(&releases, 1).map(|(r, outdated)| (r.version.as_str(), outdated)),
-            Some(("a", true))
-        );
-        assert!(choose(&releases, 0).is_none());
-        assert!(choose(&[], 1).is_none());
     }
 
     #[test]

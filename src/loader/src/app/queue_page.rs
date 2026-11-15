@@ -1114,7 +1114,7 @@ mod tests {
             )]),
             quotes: HashMap::from([(
                 "s1".to_owned(),
-                Ok(crate::api::models::Quote { price, rank: 0, fee: 0, required: 0 }),
+                Ok(crate::api::models::Quote { price, rank: 0, fee: 0, required: 0, requires_host: None }),
             )]),
             lib: Err("unused".into()),
         }

@@ -170,6 +170,8 @@ pub struct Quote {
     pub rank: i64,
     pub fee: i64,
     pub required: i64,
+    #[serde(default)]
+    pub requires_host: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
