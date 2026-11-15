@@ -71,7 +71,11 @@ impl Entry {
                 self.title
             ));
         }
-        if self.goal.as_ref().is_some_and(|g| g.target.is_nan() || g.target <= 0.0) {
+        if self
+            .goal
+            .as_ref()
+            .is_some_and(|g| g.target.is_nan() || g.target <= 0.0)
+        {
             return Some(format!("{}: a goal needs a number above 0.", self.title));
         }
         None
@@ -192,7 +196,12 @@ pub enum Outcome {
     Stopped,
 }
 
-pub fn outcome(result: &Result<(), String>, exit: Option<&Exit>, killed: bool, stopped: bool) -> Outcome {
+pub fn outcome(
+    result: &Result<(), String>,
+    exit: Option<&Exit>,
+    killed: bool,
+    stopped: bool,
+) -> Outcome {
     if killed {
         return Outcome::Failed;
     }
@@ -251,8 +260,13 @@ pub fn resumed(plan: &BreakPlan, reported: Instant, now: Instant) -> BreakPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Phase {
     Starting,
-    Running { run: u64, finish_sent: Option<Instant> },
-    LoggingOut { run: u64 },
+    Running {
+        run: u64,
+        finish_sent: Option<Instant>,
+    },
+    LoggingOut {
+        run: u64,
+    },
 }
 
 pub struct Runner {
@@ -429,8 +443,14 @@ mod tests {
             reason: None,
         };
         assert_eq!(outcome(&Ok(()), None, false, false), Outcome::Done);
-        assert_eq!(outcome(&Ok(()), Some(&blocked), false, false), Outcome::Blocked);
-        assert_eq!(outcome(&Err("boom".into()), None, false, false), Outcome::Failed);
+        assert_eq!(
+            outcome(&Ok(()), Some(&blocked), false, false),
+            Outcome::Blocked
+        );
+        assert_eq!(
+            outcome(&Err("boom".into()), None, false, false),
+            Outcome::Failed
+        );
         assert_eq!(outcome(&Ok(()), None, true, true), Outcome::Failed);
         assert_eq!(outcome(&Ok(()), None, false, true), Outcome::Stopped);
     }

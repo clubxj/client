@@ -1,6 +1,8 @@
 pub mod act;
 pub mod cache;
+pub mod definitions;
 pub mod detour;
+pub mod drawn;
 pub mod focus;
 pub mod graphics;
 pub mod hooks;
@@ -13,7 +15,6 @@ pub mod name;
 pub mod offsets;
 pub mod own;
 pub mod packets;
-pub mod projection;
 pub mod scene;
 pub mod script_runs;
 pub mod state;

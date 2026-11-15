@@ -264,7 +264,6 @@ fn step(job: &mut Job, offset: (i32, i32)) -> Outcome {
     let faces = match model::faces(&job.request.model) {
         Ok(faces) => faces,
         Err(model_status::NO_MODEL | model_status::NO_NPC) => Vec::new(),
-        Err(model_status::OTHER_THREAD) => return Outcome::of(act_status::OTHER_THREAD),
         Err(model_status::NOT_IN_GAME) => return Outcome::of(act_status::NOT_IN_GAME),
         Err(_) => return Outcome::of(act_status::NOT_FOUND),
     };

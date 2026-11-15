@@ -41,18 +41,18 @@ use super::graphics::{
     restore_state,
 };
 use super::offsets::{
-    find_actor_lists, find_actor_names, find_actor_orientation, find_actor_path,
-    find_actor_position, find_animation_height, find_appearance_decoder, find_camera, find_chat,
-    find_collision_maps, find_component_fields, find_component_invalidate, find_component_sprite,
+    find_actor_lists, find_actor_names, find_actor_path, find_actor_position,
+    find_animation_height, find_appearance_decoder, find_camera, find_chat, find_collision_maps,
+    find_component_fields, find_component_invalidate, find_component_sprite,
     find_decoration_layout, find_destination, find_game_object_layout, find_game_state,
-    find_game_vals, find_ground_items, find_instance_flag, find_interfaces, find_item_containers,
-    find_item_icon, find_item_pile, find_item_setter, find_loc_configs, find_loc_names,
-    find_local_player, find_local_projection, find_login_panel, find_menu, find_menu_click,
-    find_menu_layout, find_menu_open, find_minimap, find_model_faces, find_model_vertices,
-    find_npc_head_icons, find_npc_model, find_obj_type_lookup, find_packet_layouts, find_packets,
-    find_projectiles, find_projection, find_run_energy, find_scene, find_script_runs,
-    find_selection, find_skills, find_spot_anims, find_tick_count, find_type_models,
-    find_varc_setters, find_varcs, find_varps, find_world_select, Pe, ScanError, World,
+    find_ground_items, find_instance_flag, find_interfaces, find_item_containers, find_item_icon,
+    find_item_pile, find_item_setter, find_loc_configs, find_local_player, find_local_projection,
+    find_login_panel, find_menu, find_menu_click, find_menu_layout, find_menu_open, find_minimap,
+    find_model_faces, find_model_vertices, find_npc_head_icons, find_npc_model,
+    find_packet_layouts, find_packets, find_projectiles, find_projection, find_render,
+    find_run_energy, find_scene, find_script_runs, find_selection, find_skills, find_spot_anims,
+    find_tick_count, find_varc_setters, find_varcs, find_varps, find_world_select, Pe, ScanError,
+    World,
 };
 use super::state::{LayoutMap, LAYOUT_MAP};
 use super::unload::HookCall;
@@ -61,8 +61,7 @@ use crate::shared::{
     sync::event_listener,
 };
 use ipc::input::{
-    ACT_MESSAGE, CACHE_MESSAGE, GAME_VALS_MESSAGE, ITEM_NAMES_MESSAGE, LOCS_MESSAGE, MENU_MESSAGE,
-    MODEL_MESSAGE, MODIFIERS_MESSAGE, NAME_MESSAGE, OPEN_CONSOLE_MESSAGE, PROJECT_MESSAGE,
+    ACT_MESSAGE, CACHE_MESSAGE, MODIFIERS_MESSAGE, NAME_MESSAGE, OPEN_CONSOLE_MESSAGE,
     TOTAL_XP_MESSAGE,
 };
 use ipc::state::{
@@ -186,12 +185,6 @@ unsafe fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESU
         MODIFIERS_MESSAGE => toggle_modifiers(hwnd, wparam),
         NAME_MESSAGE => super::name::on_request(),
         TOTAL_XP_MESSAGE => super::total_xp::on_request(),
-        ITEM_NAMES_MESSAGE => super::items::on_request(),
-        GAME_VALS_MESSAGE => super::items::on_game_val_request(),
-        PROJECT_MESSAGE => super::projection::on_request(),
-        MENU_MESSAGE => super::menu::on_request(),
-        MODEL_MESSAGE => super::model::on_request(),
-        LOCS_MESSAGE => super::scene::on_locs_request(),
         CACHE_MESSAGE => super::cache::on_request(),
         ACT_MESSAGE => super::act::on_request(),
         WM_KILLFOCUS | WM_IME_SETCONTEXT | WM_IME_NOTIFY => {}
@@ -297,7 +290,9 @@ unsafe fn draw_frame() {
     let window_height = client_rect.bottom - client_rect.top;
     let offset_y_top_down = window_height - offset_y - height;
 
+    let _ = catch_unwind(super::drawn::on_frame);
     let _ = catch_unwind(|| super::act::on_frame((offset_x, offset_y_top_down)));
+    let _ = catch_unwind(super::menu::capture);
 
     let fits = frame_fits(width, height);
     let (mouse, dest, overlay, (cursor, cursor_color, cursor_size)) = {
@@ -394,6 +389,7 @@ pub unsafe fn unhook_all() {
     super::script_runs::unhook();
     super::varc_log::unhook();
     super::item_log::unhook();
+    super::drawn::unhook();
 }
 
 pub(super) unsafe fn client_image<'a>() -> Option<&'a [u8]> {
@@ -783,6 +779,44 @@ unsafe fn find_offsets() {
         };
     }
 
+    if let Some(rule) = found("Menu", find_menu(pe)) {
+        layout.found |= part::MENU;
+        layout.menu.object = rule.object;
+        layout.menu.entry_vtable = rule.entry_vtable;
+        layout.menu.entry_size = rule.entry_size;
+        layout.menu.target = rule.target;
+        layout.menu.option = rule.option;
+        layout.menu.ids = rule.ids;
+        layout.menu.priority = rule.priority;
+        layout.menu.kind = rule.kind;
+        layout.menu.cancel = rule.cancel;
+        if let Some(click) = found("Menu click", find_menu_click(pe, &rule)) {
+            layout.found |= part::MENU_CLICK;
+            layout.menu.minimenu_vtable = click.minimenu_vtable;
+            layout.menu.click_entry = click.entry;
+            layout.menu.click_x = click.click_x;
+            layout.menu.click_counter = click.counter;
+            if let Some(open) = found("Menu open", find_menu_open(pe, &click)) {
+                layout.found |= part::MENU_OPEN;
+                layout.menu.open = open;
+            }
+            if let Some(menu_layout) = found("Menu layout", find_menu_layout(pe, &click)) {
+                super::menu::set_menu_layout(menu_layout);
+            }
+        }
+        if let Some(selection) = found("Selection", find_selection(pe, &rule)) {
+            layout.found |= part::SELECTION;
+            layout.menu.selection = selection.offset;
+            layout.menu.selection_verb = selection.verb;
+            layout.menu.selection_name = selection.name;
+            layout.menu.selection_id = selection.id;
+            layout.menu.selection_child = selection.child;
+            layout.menu.selection_item = selection.item;
+            layout.menu.selection_flags = selection.flags;
+            layout.menu.selection_selected = selection.selected;
+        }
+    }
+
     if let Some(map) = LAYOUT_MAP.get() {
         map.publish(&layout);
     }
@@ -815,83 +849,40 @@ unsafe fn find_offsets() {
     if let Some(builder) = found("Item icon builder", find_item_icon(pe)) {
         super::cache::set_item_icon(module_base, builder);
     }
-    let item_lookup = found("Item definition lookup", find_obj_type_lookup(pe));
-    if let Some(rule) = item_lookup {
-        super::items::set_lookup(module_base, rule);
-        if let Some(game_vals) =
-            player.and_then(|p| found("Game vals", find_game_vals(pe, p.client, &rule)))
-        {
-            super::items::set_game_vals(module_base, game_vals);
-        }
-    }
-    if let Some(rule) = projection {
-        super::projection::set_projection(module_base, rule);
-    }
     if let (Some(projection), Some(scene)) = (projection, scene) {
         let game = found("Game objects", find_game_object_layout(pe, &scene));
         let decoration = found("Decorations", find_decoration_layout(pe, &scene));
-        let names = found("Loc names", find_loc_names(pe));
         let item_pile = decoration.and_then(|d| found("Item pile", find_item_pile(pe, &d)));
-        if let (Some(game), Some(decoration), Some(names)) = (game, decoration, names) {
+        if let Some(game) = game {
             let configs = found("Loc configs", find_loc_configs(pe, &scene, &game));
             super::scene::set_scene(super::scene::Rules {
                 module_base,
                 scene,
                 game,
-                decoration,
-                names,
                 configs,
                 plane: projection.plane,
-                decoration_height: local_projection.map(|l| l.decoration_height),
                 item_pile,
             });
-        }
-    }
-    if let Some(rule) = found("Menu", find_menu(pe)) {
-        super::menu::set_menu(module_base, rule);
-        if let Some(click) = found("Menu click", find_menu_click(pe, &rule)) {
-            super::menu::set_menu_click(click);
-            if let Some(open) = found("Menu open", find_menu_open(pe, &click)) {
-                super::menu::set_menu_open(open);
-            }
-            if let Some(layout) = found("Menu layout", find_menu_layout(pe, &click)) {
-                super::menu::set_menu_layout(layout);
-            }
-        }
-        if let Some(selection) = found("Selection", find_selection(pe, &rule)) {
-            super::menu::set_selection(selection);
         }
     }
     if let Some((w, rule)) = world.and_then(|w| {
         found("NPC model", find_npc_model(pe, w.names.npc_definition)).map(|rule| (w, rule))
     }) {
         let vertices = found("Model vertices", find_model_vertices(pe, &rule));
-        let orientation = found("Actor orientation", find_actor_orientation(pe));
         let height = found(
             "Animation height",
             find_animation_height(pe, w.names.npc_definition),
         );
         let faces = vertices.and_then(|v| found("Model faces", find_model_faces(pe, &v)));
-        if let (Some(vertices), Some(faces), Some(orientation), Some(height)) =
-            (vertices, faces, orientation, height)
-        {
-            super::model::set_npc_model(
-                module_base,
-                image,
-                rule,
-                vertices,
-                faces,
-                orientation,
-                height,
-            );
+        if let (Some(vertices), Some(faces)) = (vertices, faces) {
+            super::model::set_npc_model(rule, vertices, faces);
         }
-        if let Some(lookup) = item_lookup {
-            if let Some(types) = found(
-                "Type models",
-                find_type_models(pe, lookup.function, rule.get_model, w.names.npc_definition),
-            ) {
-                super::model::set_type_models(types);
-            }
+        let animation_slot = height.and_then(|height| {
+            super::model::animation_slot(image, module_base, rule.get_model, height)
+        });
+        println!("[Agent]: Renderable animation height slot: {animation_slot:x?}.\r\n");
+        if let (Some(render), Some(slot)) = (found("Render", find_render(pe)), animation_slot) {
+            super::drawn::hook(module_base, render, slot);
         }
     }
     set_found(
@@ -914,6 +905,7 @@ pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
         super::focus::hook();
         hook_wgl_swap_buffers();
         find_offsets();
+        super::definitions::start();
 
         event_listener(pid);
     }));

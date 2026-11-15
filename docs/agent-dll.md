@@ -5,8 +5,8 @@
 ## Lifecycle
 
 - **Load:** the injector copies the DLL to `%TEMP%\agent\` under a versioned name, so a new build can replace a loaded one, then `LoadLibraryW`s it. Only `DllMain` is exported; everything else goes through shared memory, named events and window messages.
-- **Start** (`hooks::start`, own thread): find the `JagRenderView` window, run every offset rule, install `retour` detours, patch `GetFocus` (below).
-- **Per frame** (swap hook): advance the act job (below); publish state; capture pixels only when a reader set `capture_enabled` (only `injector screenshot`; Luau never reads pixels); draw the overlay, re-uploaded only when its serial changes. Capture and overlay are skipped while the viewport exceeds `IMAGE_DATA_SIZE`. Rule results go to the header's `offsets_state`, shown by the loader.
+- **Start** (`hooks::start`, own thread): find the `JagRenderView` window, run every offset rule, install `retour` detours, patch `GetFocus` (below), then decode the loc and varbit definitions from the client's disk cache on a thread of its own (`definitions::start`; unload joins it). The cache folder is found once, through the client's open handle to `main_file_cache.dat2`.
+- **Per frame** (swap hook): publish the models drawn this frame (below); advance the act job (below); copy the finished menu for the worker (`menu::capture`, see [ipc-protocol.md](ipc-protocol.md)); publish state; capture pixels only when a reader set `capture_enabled` (only `injector screenshot`; Luau never reads pixels); draw the overlay, re-uploaded only when its serial changes. Capture and overlay are skipped while the viewport exceeds `IMAGE_DATA_SIZE`. Rule results go to the header's `offsets_state`, shown by the loader.
 - **Commands:** custom `ipc::input::*_MESSAGE` window messages handled by the WndProc hook. Worker requests (polled decoders) are signalled on `AGENT_WORK_<pid>` and answered by `client/worker.rs`.
 - **Unload:** named event `AGENT_UNLOAD_<pid>` (works with the WndProc hook off): unhook, drain in-flight hook calls, restore `GetFocus`, close mappings, `FreeLibraryAndExitThread` (`client/unload.rs`).
 
@@ -15,12 +15,23 @@
 - Real mouse input is dropped for `REAL_MOUSE_BLOCK_MS` after synthetic input (`SYNTHETIC` flag).
 - The client drops keys unless `GetFocus` returns its window, so `client/focus.rs` patches the main module's `USER32!GetFocus` import slot to return the render view. Only the client's own calls are affected. The WndProc hook also swallows `WM_KILLFOCUS`.
 
+## Drawn models (`client/drawn.rs`)
+
+The client already poses and places every model it draws, so the agent keeps what it drew instead of building models itself. Building one calls client code, which only the game thread may do.
+
+- Two detours, both found by `find_render` (see [reverse-engineering.md](reverse-engineering.md)): the per-renderable draw stashes the renderable, orientation and camera-relative placement; the pass classifier, which the draw calls only for models that survived culling, records that placement with the posed model.
+- Posed models (the transient flag, `Render::transient`) are copied when recorded, because the client poses every animated model into one reused scratch model, so a later draw in the same frame overwrites it. Cached models are never changed, so the agent keeps them instead: one more shared_ptr use (the control block is `model - 0x20`), so they outlive the client's own release and the worker reads their vertices off the game thread.
+- Every use the agent adds is released on the game thread: at the swap the building frame is published, the previous one is retired, and a retired frame is released once no worker read holds it.
+- The animation lift (renderable vtable slot `model::animation_slot`) is subtracted from the height, as the draw does before it submits.
+- The camera for the frame is read at the swap (`decode::camera::Camera::current`), so a projection never mixes two frames.
+- Unload first asks the next frame to release everything (`drawn::stop`); if no frame comes within a second, the uses are leaked rather than released off the game thread.
+
 ## Act (`client/act.rs`)
 
 Clicking a moving thing from outside the client is always a frame or more late, so the agent makes the click decision itself on the frame the client drew.
 
 - `ACT_MESSAGE` arms or cancels one job from `act_request`; a new arm replaces the old job.
-- Each frame, in the swap hook on the game thread: project the job's model (`model::faces`), keep a spot on one triangle (barycentric, re-picked only when that triangle shrinks or leaves the visible area), read the menu the frame just built (`menu::snapshot`), then write `act_state` (spot, mouse, status).
+- Each frame, in the swap hook on the game thread: project the job's model from the frame just published (`model::faces`), keep a spot on one triangle (barycentric, re-picked only when that triangle shrinks or leaves the visible area), read the menu the frame just built (`menu::snapshot`), then write `act_state` (spot, mouse, status).
 - It presses only when an entry matches the target and the mouse is within `near_px` of the spot plus the spot's speed times `FOLLOW_LAG_MS`: left when the left-click entry is a wanted option, else right if allowed. The press is posted as a move to the mouse position this frame's menu was built for, then the button down, so moves still queued from the injector can't shift it.
 - The agent only presses; the injector moves the mouse (WindMouse after `act_state.spot`) and releases the button.
 - `GONE` means no model for `GONE_FRAMES`; a model that exists but is covered keeps tracking until the timeout.

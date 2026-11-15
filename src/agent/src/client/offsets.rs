@@ -18,12 +18,12 @@ mod packet_layouts;
 mod packets;
 mod projectiles;
 mod projection;
+mod render;
 mod scene;
 mod scene_loader;
 mod script_runs;
 mod scripts;
 mod spot_anims;
-mod types;
 mod values;
 mod varc_setters;
 mod world_select;
@@ -33,25 +33,23 @@ pub use chat::find_chat;
 pub use ground_items::{find_ground_items, find_item_pile};
 pub use item_icon::find_item_icon;
 pub use item_setter::find_item_setter;
-pub use items::{find_game_vals, find_obj_type_lookup, CacheTable, GameVals, ObjTypeLookup};
 pub use local_projection::find_local_projection;
 pub use menu::{
-    find_menu, find_menu_click, find_menu_layout, find_menu_open, find_selection, Menu, MenuClick,
-    MenuLayout, Selection,
+    find_menu, find_menu_click, find_menu_layout, find_menu_open, find_selection, MenuLayout,
 };
 pub use minimap::{find_destination, find_minimap};
 pub use model::{
-    find_actor_orientation, find_animation_height, find_model_faces, find_model_vertices,
-    find_npc_model, render_slots, ActorOrientation, ModelFaces, ModelVertices, NpcModel,
+    find_animation_height, find_model_faces, find_model_vertices, find_npc_model, render_slots,
+    ModelFaces, ModelVertices, NpcModel,
 };
 pub use packet_layouts::{find_packet_layouts, PacketLayouts};
 pub use packets::{find_packets, Packets, BUFFER_SIZE};
 pub use projectiles::find_projectiles;
-pub use projection::{find_projection, Projection};
+pub use projection::find_projection;
+pub use render::{find_render, Render};
 pub use scene::{
     find_collision_maps, find_decoration_layout, find_game_object_layout, find_loc_configs,
-    find_loc_names, find_scene, loc_kind, DecorationLayout, GameObjectLayout, LocConfigs, LocNames,
-    Scene,
+    find_scene, loc_kind, GameObjectLayout, LocConfigs, Scene,
 };
 pub use scene_loader::find_instance_flag;
 pub use script_runs::{find_script_runs, ScriptRuns, ARG_KIND, ARG_SIZE, KIND_INT};
@@ -59,7 +57,6 @@ pub use scripts::{
     find_component_fields, find_component_invalidate, find_component_sprite, ComponentInvalidate,
 };
 pub use spot_anims::find_spot_anims;
-pub use types::{find_type_models, TypeModels};
 pub use values::{
     find_actor_lists, find_actor_names, find_appearance_decoder, find_item_containers,
     find_npc_head_icons, find_run_energy, find_varcs, AppearanceDecoder, ItemContainers, World,
@@ -1483,6 +1480,8 @@ pub fn find_interfaces(pe: &Pe) -> Result<Interfaces, ScanError> {
 
 #[cfg(test)]
 mod tests {
+    use super::menu::{MenuClick, Selection};
+    use super::projection::Projection;
     use super::spot_anims::SpotAnims;
     use super::values::{
         ActorLists, ActorNames, AppearanceDecoder, ItemContainers, RunEnergy, Varcs,
@@ -1751,35 +1750,6 @@ mod tests {
         let sprite = find_component_sprite(&pe).expect("component sprite not found");
         println!("component sprite +{sprite:#x}");
         assert_eq!(sprite, 0xc8);
-        let lookup = find_obj_type_lookup(&pe).expect("obj type lookup not found");
-        println!("{lookup:x?}");
-        assert_eq!(
-            lookup,
-            ObjTypeLookup {
-                function: 0x5f5e20,
-                name: 0x8,
-                desc: 0x20
-            }
-        );
-        let game_vals = find_game_vals(&pe, player.client, &lookup).expect("game vals not found");
-        println!("{game_vals:x?}");
-        assert_eq!(
-            game_vals,
-            GameVals {
-                index: 0x2490,
-                reader: 0x625ba0,
-                table: CacheTable {
-                    archive_count: 0x28,
-                    archives: 0x30,
-                    archive_stride: 0x70,
-                    archive_missing: 0x4,
-                    file_count: 0x40,
-                    files: 0x48,
-                    file_stride: 0x20,
-                    file_missing: 0x8,
-                },
-            }
-        );
         let projection = find_projection(&pe, player.client).expect("projection not found");
         println!("{projection:x?}");
         let menu = find_menu(&pe).expect("menu not found");
@@ -2073,26 +2043,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_type_models_in_archived_builds() {
-        for_each_archived_build(|build, pe| {
-            let lookup = find_obj_type_lookup(pe).expect("item definition lookup");
-            let names = find_actor_names(pe).expect("actor names");
-            let model = find_npc_model(pe, names.npc_definition).expect("NPC model");
-            let types = found(
-                "type models",
-                build,
-                find_type_models(pe, lookup.function, model.get_model, names.npc_definition),
-            );
-            assert_eq!(
-                (types.seq_frame_count, types.seq_frames),
-                (0x48, 0x50),
-                "{}",
-                build.display()
-            );
-        });
-    }
-
-    #[test]
     fn finds_instance_flag_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             found("instance flag", build, find_instance_flag(pe));
@@ -2196,6 +2146,13 @@ mod tests {
     }
 
     #[test]
+    fn finds_render_in_archived_builds() {
+        for_each_archived_build(|build, pe| {
+            found("render", build, find_render(pe));
+        });
+    }
+
+    #[test]
     fn finds_every_offset_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             let game_state = found("game state", build, find_game_state(pe));
@@ -2210,7 +2167,6 @@ mod tests {
             found("component invalidate", build, find_component_invalidate(pe));
             found("component sprite", build, find_component_sprite(pe));
             found("component fields", build, find_component_fields(pe));
-            let lookup = found("object type lookup", build, find_obj_type_lookup(pe));
             let projection = found("projection", build, find_projection(pe, player.client));
             let menu = found("menu", build, find_menu(pe));
             let click = found("menu click", build, find_menu_click(pe, &menu));
@@ -2226,11 +2182,6 @@ mod tests {
             assert_eq!(camera.yaw, minimap.angle);
             found("world select", build, find_world_select(pe, player.client));
             found(
-                "game vals",
-                build,
-                find_game_vals(pe, player.client, &lookup),
-            );
-            found(
                 "appearance decoder",
                 build,
                 find_appearance_decoder(pe, names.player_name, player.player_index),
@@ -2238,22 +2189,10 @@ mod tests {
             let model = found("NPC model", build, find_npc_model(pe, names.npc_definition));
             let vertices = found("model vertices", build, find_model_vertices(pe, &model));
             found("model faces", build, find_model_faces(pe, &vertices));
-            found("actor orientation", build, find_actor_orientation(pe));
             found(
                 "animation height",
                 build,
                 find_animation_height(pe, names.npc_definition),
-            );
-            let types = found(
-                "type models",
-                build,
-                find_type_models(pe, lookup.function, model.get_model, names.npc_definition),
-            );
-            assert_eq!(
-                (types.seq_frame_count, types.seq_frames),
-                (0x48, 0x50),
-                "{}",
-                build.display()
             );
             let scene = found("scene", build, find_scene(pe));
             let collision = found("collision maps", build, find_collision_maps(pe, &scene));
@@ -2276,7 +2215,6 @@ mod tests {
                 find_decoration_layout(pe, &scene),
             );
             found("item pile", build, find_item_pile(pe, &decoration));
-            found("loc names", build, find_loc_names(pe));
             found(
                 "local projection",
                 build,

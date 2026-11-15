@@ -128,7 +128,7 @@ pub fn parts(kind_id: u32) -> Option<u64> {
     })
 }
 
-fn put<T: Serialize>(value: &T, out: &mut [u8]) -> Result<usize, i32> {
+pub fn put<T: Serialize>(value: &T, out: &mut [u8]) -> Result<usize, i32> {
     postcard::to_slice(value, out)
         .map(|used| used.len())
         .map_err(|_| status::TOO_BIG)

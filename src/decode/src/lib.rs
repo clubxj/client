@@ -3,8 +3,16 @@ pub use postcard;
 use ipc::state::game_state;
 use serde::{Deserialize, Serialize};
 
+pub mod camera;
 pub mod chat;
+pub mod definitions;
+pub mod js5;
+pub mod locs;
 pub mod memory;
+pub mod menu;
+pub mod model;
+pub mod model_data;
+pub mod npc_types;
 pub mod state;
 pub mod widgets;
 pub mod worker;

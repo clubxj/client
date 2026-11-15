@@ -3,23 +3,17 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use decode::locs::{request as locs_request, Loc, Locs, Unavailable};
 use ipc::{
     read::{self, Memory},
-    state::{
-        game_state, loc_status, locs_request, LocInfo, LocsReply, LOC_CLICKABLE, LOC_NAME_SIZE,
-        LOC_PLANE_MASK, LOC_PLANE_SHIFT, MAX_LOCS, MAX_LOC_NAMES, NO_NAME,
-    },
+    state::{game_state, Layout},
 };
 
 use super::{
-    detour::function,
+    definitions::Definitions,
     hooks::client_image,
-    model::Placement,
-    offsets::{
-        loc_kind, render_slots, DecorationLayout, GameObjectLayout, LocConfigs, LocNames, Scene,
-    },
-    own::{on_other_thread, OwnMemory, LAYOUT},
-    state::mapping,
+    offsets::{loc_kind, render_slots, GameObjectLayout, LocConfigs, Scene},
+    own::{OwnMemory, LAYOUT},
 };
 
 const TAG_TYPE_SHIFT: u64 = 16;
@@ -31,22 +25,14 @@ const MAX_GAME_OBJECTS: i32 = 64;
 const MAX_SCENE_SIZE: i32 = 1024;
 const SHAPE_MASK: i32 = 0x3f;
 const ROTATION_SHIFT: i32 = 6;
-const UNKNOWN: u8 = 0xff;
-const NULL_NAME: &str = "null";
-
-type Lookup = unsafe extern "system" fn(i32) -> *const [u64; 2];
-type Transform = unsafe extern "system" fn(u64) -> *const [u64; 2];
 
 #[derive(Clone, Copy)]
 pub struct Rules {
     pub module_base: u64,
     pub scene: Scene,
     pub game: GameObjectLayout,
-    pub decoration: DecorationLayout,
-    pub names: LocNames,
     pub configs: Option<LocConfigs>,
     pub plane: u32,
-    pub decoration_height: Option<u32>,
     pub item_pile: Option<u32>,
 }
 
@@ -279,50 +265,43 @@ fn game_objects(
         .collect()
 }
 
-unsafe fn definition(memory: &OwnMemory, rules: &Rules, id: i32) -> Option<u64> {
-    let lookup: Lookup = function(rules.module_base + rules.names.lookup as u64);
-    memory.ptr(lookup(id) as u64 + 8)
+fn shown(
+    memory: &OwnMemory,
+    layout: &Layout,
+    definitions: &Definitions,
+    id: i32,
+) -> Option<(Option<String>, i16)> {
+    let loc = definitions.locs.get(&u32::try_from(id).ok()?)?;
+    let height = loc.decoration_height as i16;
+    let Some(transforms) = &loc.transforms else {
+        return Some((loc.name.clone(), height));
+    };
+    let varp = |id: u16| decode::state::varp(memory, layout, id as usize);
+    let value = match (transforms.varbit, transforms.varp) {
+        (Some(varbit), _) => {
+            let def = definitions.varbits.get(&(varbit as u32))?;
+            Some(def.value(varp(def.varp)?))
+        }
+        (None, Some(id)) => Some(varp(id)?),
+        (None, None) => None,
+    };
+    let name = transforms
+        .pick(value)
+        .and_then(|id| definitions.locs.get(&id))
+        .and_then(|shown| shown.name.clone());
+    Some((name, height))
 }
 
-unsafe fn decoration_height(memory: &OwnMemory, rules: &Rules, id: i32) -> i16 {
-    let height = rules
-        .decoration_height
-        .and_then(|field| memory.i32(definition(memory, rules, id)? + field as u64));
-    height.unwrap_or(0).clamp(i16::MIN as i32, i16::MAX as i32) as i16
-}
-
-unsafe fn name(memory: &OwnMemory, rules: &Rules, id: i32) -> Option<String> {
-    let n = &rules.names;
-    let transform: Transform = function(rules.module_base + n.transform as u64);
-    let mut definition = definition(memory, rules, id)?;
-    if memory
-        .u64(definition + n.transforms as u64)
-        .is_some_and(|t| t != 0)
-    {
-        let pair = transform(definition);
-        definition = memory.ptr(pair as u64 + 8)?;
-    }
-    read::read_string(memory, definition + n.name as u64)
-        .filter(|name| !name.is_empty() && name != NULL_NAME)
-}
-
-fn fill_locs(reply: &mut LocsReply, request: i32) -> i32 {
+pub fn locs(request: i32) -> Result<Locs, Unavailable> {
     let memory = OwnMemory;
-    let Some(layout) = LAYOUT.get() else {
-        return loc_status::NOT_FOUND;
+    let (Some(layout), Some(rules)) = (LAYOUT.get(), RULES.get()) else {
+        return Err(Unavailable::NotFound);
     };
-    let Some(rules) = RULES.get() else {
-        return loc_status::NOT_FOUND;
-    };
-    if on_other_thread() {
-        return loc_status::OTHER_THREAD;
-    }
     if read::current_game_state(&memory, layout) != Some(game_state::LOGGED_IN) {
-        return loc_status::NOT_IN_GAME;
+        return Err(Unavailable::NotInGame);
     }
-    let Some(view) = view(&memory, rules) else {
-        return loc_status::NOT_IN_GAME;
-    };
+    let view = view(&memory, rules).ok_or(Unavailable::NotInGame)?;
+    let definitions = super::definitions::get()?;
     let s = &rules.scene;
     let planes = match request & locs_request::PLANES {
         locs_request::ALL_PLANES => 0..4,
@@ -330,38 +309,18 @@ fn fill_locs(reply: &mut LocsReply, request: i32) -> i32 {
         _ => view.plane..view.plane + 1,
     };
     let clickable_only = request & locs_request::CLICKABLE_ONLY != 0;
-    reply.plane = view.plane;
-    reply.base_x = view.base_x;
-    reply.base_y = view.base_y;
-
-    let mut names: HashMap<i32, u16> = HashMap::new();
-    let mut decoration_heights: HashMap<i32, i16> = HashMap::new();
-    let mut name_count = 0usize;
-    let mut count = 0usize;
-    let mut push = |reply: &mut LocsReply, mut info: LocInfo, tag: u64, plane: i32| {
+    let mut found: Vec<Loc> = Vec::new();
+    let mut push = |info: Loc, tag: u64, plane: i32| {
         let clickable = tag & TAG_NOT_CLICKABLE == 0;
-        if count >= MAX_LOCS || (clickable_only && !clickable) {
+        if clickable_only && !clickable {
             return;
         }
-        info.id = loc_id(rules, tag);
-        info.flags = if clickable { LOC_CLICKABLE } else { 0 }
-            | (plane as u8 & LOC_PLANE_MASK) << LOC_PLANE_SHIFT;
-        info.name = *names.entry(info.id).or_insert_with(|| {
-            match unsafe { name(&memory, rules, info.id) } {
-                Some(name) if name_count < MAX_LOC_NAMES => {
-                    let slot = &mut reply.names[name_count];
-                    let bytes = name.as_bytes();
-                    let len = bytes.len().min(LOC_NAME_SIZE - 1);
-                    slot.fill(0);
-                    slot[..len].copy_from_slice(&bytes[..len]);
-                    name_count += 1;
-                    (name_count - 1) as u16
-                }
-                _ => NO_NAME,
-            }
+        found.push(Loc {
+            id: loc_id(rules, tag),
+            clickable,
+            plane: plane as u8,
+            ..info
         });
-        reply.locs[count] = info;
-        count += 1;
     };
     let mut blocks = Blocks::new(rules);
     for plane in planes {
@@ -380,14 +339,19 @@ fn fill_locs(reply: &mut LocsReply, request: i32) -> i32 {
                 else {
                     continue;
                 };
-                let base = LocInfo {
+                let base = Loc {
+                    id: 0,
                     x: x as u8,
                     y: y as u8,
                     size_x: 1,
                     size_y: 1,
-                    shape: UNKNOWN,
-                    rotation: UNKNOWN,
-                    ..LocInfo::default()
+                    kind: 0,
+                    shape: None,
+                    rotation: None,
+                    plane: 0,
+                    clickable: false,
+                    name: None,
+                    decoration_height: 0,
                 };
                 for (slot, kind, config) in single_slots(rules) {
                     let Some(object) = tile.ptr(slot) else {
@@ -400,21 +364,11 @@ fn fill_locs(reply: &mut LocsReply, request: i32) -> i32 {
                     let Some(tag) = fields.u64(s.tag) else {
                         continue;
                     };
-                    let id = loc_id(rules, tag);
-                    let decoration_height = match kind {
-                        loc_kind::GROUND_DECORATION => *decoration_heights
-                            .entry(id)
-                            .or_insert_with(|| unsafe { decoration_height(&memory, rules, id) }),
-                        _ => 0,
-                    };
                     let config = config.and_then(|c| fields.u8(c));
-                    let (shape, rotation) =
-                        config.map_or((UNKNOWN, UNKNOWN), |c| shape_rotation(c as i32));
+                    let (shape, rotation) = config.map(|c| shape_rotation(c as i32)).unzip();
                     push(
-                        reply,
-                        LocInfo {
+                        Loc {
                             kind,
-                            decoration_height,
                             shape,
                             rotation,
                             ..base
@@ -429,13 +383,12 @@ fn fill_locs(reply: &mut LocsReply, request: i32) -> i32 {
                     }
                     let (shape, rotation) = shape_rotation(object.config);
                     push(
-                        reply,
-                        LocInfo {
+                        Loc {
                             kind: loc_kind::GAME,
                             size_x: (object.x2 - object.x1 + 1).clamp(1, 255) as u8,
                             size_y: (object.y2 - object.y1 + 1).clamp(1, 255) as u8,
-                            shape,
-                            rotation,
+                            shape: Some(shape),
+                            rotation: Some(rotation),
                             ..base
                         },
                         object.tag,
@@ -445,23 +398,34 @@ fn fill_locs(reply: &mut LocsReply, request: i32) -> i32 {
             }
         }
     }
-    reply.count = count as u32;
-    reply.name_count = name_count as u32;
-    loc_status::OK
-}
-
-pub fn on_locs_request() {
-    let Some(mapping) = mapping() else { return };
-    let shared = mapping.shared();
-    let Some((sequence, request)) = shared.read_locs_request() else {
-        return;
-    };
-    shared.write_locs_reply_with(|reply| {
-        reply.sequence = sequence;
-        reply.count = 0;
-        reply.name_count = 0;
-        reply.status = fill_locs(reply, request);
-    });
+    let mut ids: Vec<i32> = found.iter().map(|l| l.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let known: HashMap<i32, (Option<String>, i16)> = ids
+        .into_iter()
+        .filter_map(|id| Some((id, shown(&memory, layout, definitions, id)?)))
+        .collect();
+    let mut names: Vec<String> = Vec::new();
+    let mut slots: HashMap<i32, Option<u16>> = HashMap::new();
+    for loc in &mut found {
+        let (name, height) = known.get(&loc.id).cloned().unwrap_or((None, 0));
+        if loc.kind == loc_kind::GROUND_DECORATION {
+            loc.decoration_height = height;
+        }
+        loc.name = *slots.entry(loc.id).or_insert_with(|| {
+            name.map(|name| {
+                names.push(name);
+                (names.len() - 1) as u16
+            })
+        });
+    }
+    Ok(Locs {
+        plane: view.plane,
+        base_x: view.base_x,
+        base_y: view.base_y,
+        locs: found,
+        names,
+    })
 }
 
 fn slots(memory: &OwnMemory, rules: &Rules, object: u64) -> Vec<u32> {
@@ -484,7 +448,7 @@ fn slots(memory: &OwnMemory, rules: &Rules, object: u64) -> Vec<u32> {
         .clone()
 }
 
-pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<Vec<(u64, Placement)>> {
+pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<Vec<u64>> {
     let memory = OwnMemory;
     let rules = RULES.get()?;
     let view = view(&memory, rules)?;
@@ -493,20 +457,11 @@ pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<Vec<(u64, Pl
     let tile = read_fields(&memory, tile, &mut blocks.tile)?;
     let s = &rules.scene;
     if kind == loc_kind::GAME {
-        let g = &rules.game;
         let object = game_objects(&memory, rules, &tile, &mut blocks.game)
             .into_iter()
             .find(|object| loc_id(rules, object.tag) == id)?
             .object;
-        let field = |offset: u32| memory.i32(object + offset as u64);
-        let at = Placement {
-            x: field(g.x)?,
-            y: field(g.y)?,
-            height: field(g.height)?,
-            orientation: field(g.orientation)?,
-        };
-        let renderable = memory.ptr(object + g.renderable as u64)?;
-        return Some(vec![(renderable, at)]);
+        return Some(vec![memory.ptr(object + rules.game.renderable as u64)?]);
     }
     let object = if kind == loc_kind::ITEM_PILE {
         tile.ptr(rules.item_pile?)?
@@ -524,31 +479,10 @@ pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<Vec<(u64, Pl
         }
         object
     };
-    let d = &rules.decoration;
-    let field = |offset: u32| memory.i32(object + offset as u64);
-    let at = Placement {
-        x: field(d.x)?,
-        y: field(d.y)?,
-        height: field(d.height)?,
-        orientation: 0,
-    };
-    let renderables = slots(&memory, rules, object)
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, offset)| {
-            let renderable = memory.ptr(object + offset as u64)?;
-            let at = if kind == loc_kind::WALL_DECORATION {
-                let shift = i as u32 * 8;
-                Placement {
-                    x: at.x + field(d.x_offset + shift)?,
-                    y: at.y + field(d.y_offset + shift)?,
-                    ..at
-                }
-            } else {
-                at
-            };
-            Some((renderable, at))
-        })
-        .collect();
-    Some(renderables)
+    Some(
+        slots(&memory, rules, object)
+            .into_iter()
+            .filter_map(|offset| memory.ptr(object + offset as u64))
+            .collect(),
+    )
 }

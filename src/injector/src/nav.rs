@@ -6,11 +6,12 @@ use std::{
 
 use crate::{
     Loc,
-    collision::{self, LocDef, LocText, flag, turned, wall_marks},
+    collision::{self, flag, turned, wall_marks},
     pathfinding::{DIRECTIONS, step_cost, step_open},
     projection::{GAME_OBJECT, WALL},
     scene_graph::mix,
 };
+use decode::definitions::{LocDef, LocText};
 
 pub type Point = (i32, i32, i32);
 

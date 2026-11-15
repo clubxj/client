@@ -56,7 +56,9 @@ impl Manifest {
         }
         let manifest: Self =
             serde_json::from_value(value).map_err(|e| format!("{FILE_NAME}: {e}"))?;
-        manifest.validate().map_err(|e| format!("{FILE_NAME}: {e}"))?;
+        manifest
+            .validate()
+            .map_err(|e| format!("{FILE_NAME}: {e}"))?;
         Ok(manifest)
     }
 
@@ -94,7 +96,10 @@ impl Manifest {
                 ));
             }
             if goal.label.is_empty() || goal.label.chars().count() > 64 {
-                return Err(format!("goal \"{}\": a label is 1 to 64 characters", goal.id));
+                return Err(format!(
+                    "goal \"{}\": a label is 1 to 64 characters",
+                    goal.id
+                ));
             }
             if self.goals[..i].iter().any(|g| g.id == goal.id) {
                 return Err(format!("goal \"{}\" is listed twice", goal.id));

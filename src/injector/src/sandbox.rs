@@ -15,7 +15,6 @@ use crate::{
     Input, MouseButton, Overlay, Rgba,
     async_input::{Pace, Worker},
     input_jobs::{self, Job},
-    projection::Via,
     wind_mouse,
 };
 use ipc::packets::{Filter, filter_add, filter_has};
@@ -108,7 +107,7 @@ mod offline {
         fn entry_swaps(u32) -> crate::EntrySwaps;
         fn menu_layout(u32) -> Option<MenuLayout>;
         fn selected_widget(u32) -> Option<crate::SelectedWidget>;
-        fn project(u32, &[crate::projection::Point], crate::projection::Via) -> Vec<[f32; 2]>;
+        fn project(u32, &[crate::projection::Point]) -> Vec<[f32; 2]>;
         fn project_moved(u32, &[crate::projection::Point], [i32; 3]) -> Vec<[f32; 2]>;
         fn game_val_names(u32, u32, &[i32]) -> Vec<Option<String>>;
         fn world_route(u32, crate::nav::Point, crate::nav::Point, &[String])
@@ -1617,18 +1616,14 @@ pub fn run_with_modules(
     s.read("selected_widget", selected_widget)?;
     s.query(
         "project",
-        |pid, (points, via, shift): (Vec<mlua::Table>, Option<String>, Option<mlua::Table>)| {
-            let via = Via::parse(via.as_deref())?;
+        |pid, (points, shift): (Vec<mlua::Table>, Option<mlua::Table>)| {
             let points = points
                 .iter()
                 .map(fine_point)
                 .collect::<mlua::Result<Vec<_>>>()
                 .map_err(|e| e.to_string())?;
             let screen = match shift {
-                None => project(pid, &points, via)?,
-                Some(_) if via == Via::Client => {
-                    return Err("the client's projection can't move the camera".into());
-                }
+                None => project(pid, &points)?,
                 Some(s) => project_moved(
                     pid,
                     &points,

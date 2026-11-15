@@ -276,7 +276,7 @@ pub fn varbits_of(
     target: &Target,
     settings: &Settings,
     varp: u16,
-) -> Result<Vec<(i32, injector::config::VarbitDef, Option<String>)>, String> {
+) -> Result<Vec<(i32, decode::definitions::VarbitDef, Option<String>)>, String> {
     call(target, settings, "varbits-of", &[&varp.to_string()])
 }
 

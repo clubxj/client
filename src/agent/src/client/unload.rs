@@ -42,6 +42,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
     }
 
     println!("[Agent]: Unloading.\r\n");
+    super::drawn::stop();
     unhook_all();
 
     if !wait_for_hook_calls() {
@@ -49,6 +50,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
         return;
     }
 
+    super::definitions::stop();
     super::packets::close();
     super::script_runs::close();
     super::varc_log::close();

@@ -280,7 +280,10 @@ impl Api {
 
     pub fn manifest(&self, script_id: &str) -> Result<ScriptManifest, ApiError> {
         self.get(
-            &format!("/launcher/scripts/{}/manifest", path_id(script_id, "script")?),
+            &format!(
+                "/launcher/scripts/{}/manifest",
+                path_id(script_id, "script")?
+            ),
             &[],
         )
     }

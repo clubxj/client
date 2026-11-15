@@ -176,11 +176,7 @@ fn dispatch(args: &[&str]) -> String {
                 .iter()
                 .map(|&[x, y, height]| injector::projection::Point::new(x, y, height))
                 .collect();
-            Some(injector::project(
-                pid,
-                &points,
-                injector::projection::Via::Auto,
-            ))
+            Some(injector::project(pid, &points))
         }),
         ["mem", pid, address, count] => {
             checked(args, "mem command (pid hex-address count)", || {

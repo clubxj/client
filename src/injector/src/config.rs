@@ -27,25 +27,6 @@ pub struct EnumDef {
     pub entries: Vec<EnumEntry>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VarbitDef {
-    pub varp: u16,
-    pub lsb: u8,
-    pub msb: u8,
-}
-
-impl VarbitDef {
-    pub fn value(&self, varp: i32) -> i32 {
-        let bits = (u32::from(self.msb) + 1).saturating_sub(u32::from(self.lsb));
-        let mask = if bits >= 32 {
-            u32::MAX
-        } else {
-            (1u32 << bits) - 1
-        };
-        ((varp as u32).checked_shr(u32::from(self.lsb)).unwrap_or(0) & mask) as i32
-    }
-}
-
 struct Reader<'a> {
     data: &'a [u8],
     at: usize,
@@ -151,6 +132,7 @@ pub struct ObjDef {
     pub params: BTreeMap<u32, Value>,
     pub stackable: bool,
     pub copy: bool,
+    pub named_after: Option<u16>,
 }
 
 pub fn dose_of(name: &str) -> Option<(&str, u32)> {
@@ -267,20 +249,29 @@ pub fn decode_obj_params(data: &[u8]) -> Option<BTreeMap<u32, Value>> {
 pub fn decode_obj(data: &[u8]) -> Option<ObjDef> {
     let mut r = Reader::new(data);
     let mut def = ObjDef::default();
+    let mut links = [None; 3];
+    let mut templated = [false; 3];
+    let slot = |op: u8| match op {
+        97 | 98 => 0,
+        139 | 140 => 1,
+        _ => 2,
+    };
     loop {
         match r.u8()? {
-            0 => return Some(def),
+            0 => {
+                def.named_after = (0..3).find(|&i| templated[i]).and_then(|i| links[i]);
+                return Some(def);
+            }
             2 => def.name = Some(r.string()?),
             11 => def.stackable = true,
-            98 => {
-                let noted = r.u16()? != 0;
-                def.stackable |= noted;
-                def.copy |= noted;
+            op @ (97 | 139 | 148) => links[slot(op)] = Some(r.u16()?),
+            op @ (98 | 140 | 149) => {
+                let copy = r.u16()? != 0;
+                templated[slot(op)] = copy;
+                def.copy |= copy;
+                def.stackable |= copy && op == 98;
             }
-            140 | 149 => def.copy |= r.u16()? != 0,
-            1 | 4..=8 | 24 | 26 | 75 | 78 | 79 | 90..=95 | 97 | 99 | 110..=112 | 139 | 148 => {
-                r.skip(2)?
-            }
+            1 | 4..=8 | 24 | 26 | 75 | 78 | 79 | 90..=95 | 99 | 110..=112 => r.skip(2)?,
             3 | 9 | 30..=39 => {
                 r.string()?;
             }
@@ -332,24 +323,6 @@ pub fn decode_obj(data: &[u8]) -> Option<ObjDef> {
     }
 }
 
-pub fn decode_varbit(data: &[u8]) -> Option<VarbitDef> {
-    let mut r = Reader::new(data);
-    let mut def = None;
-    loop {
-        match r.u8()? {
-            0 => return def,
-            1 => {
-                def = Some(VarbitDef {
-                    varp: r.u16()?,
-                    lsb: r.u8()?,
-                    msb: r.u8()?,
-                })
-            }
-            _ => return None,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,46 +334,6 @@ mod tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
             .collect()
-    }
-
-    #[test]
-    fn decodes_the_spellbook_varbit() {
-        let def = decode_varbit(&hex("0101b7000100")).unwrap();
-        assert_eq!(
-            def,
-            VarbitDef {
-                varp: 439,
-                lsb: 0,
-                msb: 1
-            }
-        );
-        assert_eq!(def.value(0b1110), 2);
-    }
-
-    #[test]
-    fn varbit_masks_high_bits() {
-        let def = VarbitDef {
-            varp: 0,
-            lsb: 4,
-            msb: 31,
-        };
-        assert_eq!(def.value(-16), 0x0fff_ffff);
-    }
-
-    #[test]
-    fn malformed_varbits_read_without_overflow() {
-        let reversed = VarbitDef {
-            varp: 0,
-            lsb: 9,
-            msb: 2,
-        };
-        assert_eq!(reversed.value(-1), 0);
-        let past_the_word = VarbitDef {
-            varp: 0,
-            lsb: 40,
-            msb: 255,
-        };
-        assert_eq!(past_the_word.value(-1), 0);
     }
 
     #[test]

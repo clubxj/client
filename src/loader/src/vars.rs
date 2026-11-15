@@ -3,7 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use injector::{VarcPage, config::VarbitDef};
+use decode::definitions::VarbitDef;
+use injector::VarcPage;
 
 use crate::{
     log_view::{Filtered, Log, Poller, View},

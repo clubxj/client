@@ -32,6 +32,10 @@ pub mod part {
     pub const PROJECTILES: u64 = 1 << 17;
     pub const SPOT_ANIMS: u64 = 1 << 18;
     pub const PATH: u64 = 1 << 19;
+    pub const MENU: u64 = 1 << 20;
+    pub const MENU_CLICK: u64 = 1 << 21;
+    pub const MENU_OPEN: u64 = 1 << 22;
+    pub const SELECTION: u64 = 1 << 23;
 }
 
 pub mod varp {
@@ -342,6 +346,33 @@ pub struct SpotAnimLayout {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MenuStateLayout {
+    pub object: u32,
+    pub entry_vtable: u32,
+    pub entry_size: u32,
+    pub target: u32,
+    pub option: u32,
+    pub ids: u32,
+    pub priority: u32,
+    pub kind: u32,
+    pub cancel: u32,
+    pub minimenu_vtable: u32,
+    pub click_entry: u32,
+    pub click_x: u32,
+    pub click_counter: u32,
+    pub open: u32,
+    pub selection: u32,
+    pub selection_verb: u32,
+    pub selection_name: u32,
+    pub selection_id: u32,
+    pub selection_child: u32,
+    pub selection_item: u32,
+    pub selection_flags: u32,
+    pub selection_selected: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PathLayout {
     pub x: u32,
     pub y: u32,
@@ -387,6 +418,7 @@ pub struct Layout {
     pub projectiles: ProjectileLayout,
     pub spot_anims: SpotAnimLayout,
     pub path: PathLayout,
+    pub menu: MenuStateLayout,
 }
 
 impl Layout {
@@ -443,52 +475,6 @@ pub struct TotalXpStatus {
     pub status: i32,
 }
 
-pub mod item_name_status {
-    pub const OK: i32 = 1;
-    pub const NOT_FOUND: i32 = -1;
-    pub const OTHER_THREAD: i32 = -2;
-    pub const TOO_MANY: i32 = -3;
-}
-
-pub const ITEM_NAME_BATCH: usize = 64;
-pub const ITEM_NAME_SIZE: usize = 64;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ItemNameRequest {
-    pub count: u32,
-    pub reserved: u32,
-    pub ids: [i32; ITEM_NAME_BATCH],
-}
-
-impl Default for ItemNameRequest {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            reserved: 0,
-            ids: [0; ITEM_NAME_BATCH],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GameValRequest {
-    pub kind: u32,
-    pub count: u32,
-    pub ids: [i32; ITEM_NAME_BATCH],
-}
-
-impl Default for GameValRequest {
-    fn default() -> Self {
-        Self {
-            kind: 0,
-            count: 0,
-            ids: [0; ITEM_NAME_BATCH],
-        }
-    }
-}
-
 pub mod game_val {
     pub const OBJ: u32 = 0;
     pub const NPC: u32 = 1;
@@ -506,112 +492,8 @@ pub mod game_val {
     pub const VARC: u32 = 15;
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NamesReply {
-    pub sequence: u32,
-    pub status: i32,
-    pub count: u32,
-    pub reserved: u32,
-    pub names: [[u8; ITEM_NAME_SIZE]; ITEM_NAME_BATCH],
-}
-
-impl Default for NamesReply {
-    fn default() -> Self {
-        Self {
-            sequence: 0,
-            status: 0,
-            count: 0,
-            reserved: 0,
-            names: [[0; ITEM_NAME_SIZE]; ITEM_NAME_BATCH],
-        }
-    }
-}
-
-impl NamesReply {
-    pub fn name(&self, index: usize) -> Option<&[u8]> {
-        let name = self
-            .names
-            .get(index)
-            .filter(|_| index < self.count as usize)?;
-        Some(text(name))
-    }
-
-    pub fn set_name(&mut self, index: usize, name: &[u8]) {
-        let slot = &mut self.names[index];
-        let len = name.len().min(ITEM_NAME_SIZE);
-        slot.fill(0);
-        slot[..len].copy_from_slice(&name[..len]);
-    }
-}
-
-pub mod project_status {
-    pub const OK: i32 = 1;
-    pub const NOT_FOUND: i32 = -1;
-    pub const OTHER_THREAD: i32 = -2;
-    pub const TOO_MANY: i32 = -3;
-    pub const NOT_IN_GAME: i32 = -4;
-}
-
-pub const PROJECT_BATCH: usize = 64;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectRequest {
-    pub count: u32,
-    pub reserved: u32,
-    pub points: [[i32; 3]; PROJECT_BATCH],
-}
-
-impl Default for ProjectRequest {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            reserved: 0,
-            points: [[0; 3]; PROJECT_BATCH],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProjectReply {
-    pub sequence: u32,
-    pub status: i32,
-    pub count: u32,
-    pub reserved: u32,
-    pub points: [[f32; 2]; PROJECT_BATCH],
-}
-
-impl Default for ProjectReply {
-    fn default() -> Self {
-        Self {
-            sequence: 0,
-            status: 0,
-            count: 0,
-            reserved: 0,
-            points: [[0.0; 2]; PROJECT_BATCH],
-        }
-    }
-}
-
-pub mod menu_status {
-    pub const OK: i32 = 1;
-    pub const NOT_FOUND: i32 = -1;
-    pub const OTHER_THREAD: i32 = -2;
-}
-
-pub const MENU_ENTRIES: usize = 500;
 pub const MENU_OPTION_SIZE: usize = 40;
 pub const MENU_TARGET_SIZE: usize = 256;
-pub const MENU_SUBMENUS: usize = 4;
-pub const MENU_SUBMENU_ENTRIES: usize = 64;
-
-pub mod menu_open {
-    pub const CLOSED: u32 = 0;
-    pub const OPEN: u32 = 1;
-    pub const UNKNOWN: u32 = 2;
-}
 
 pub mod menu_kind {
     pub const NONE: u8 = 0;
@@ -652,107 +534,18 @@ impl Default for MenuEntryInfo {
     }
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MenuReply {
-    pub sequence: u32,
-    pub status: i32,
-    pub count: u32,
-    pub open: u32,
-    pub entries: [MenuEntryInfo; MENU_ENTRIES],
-    pub clicked: MenuEntryInfo,
-    pub click_x: i32,
-    pub click_y: i32,
-    pub click_age: i32,
-    pub has_click: u32,
-    pub selection: MenuEntryInfo,
-    pub has_selection: u32,
-    pub selected: u32,
-    pub geometry: MenuGeometry,
-    pub has_geometry: u32,
-    pub submenu_count: u32,
-    pub submenus: [MenuSubmenu; MENU_SUBMENUS],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MenuSubmenu {
-    pub row: u32,
-    pub count: u32,
-    pub geometry: MenuGeometry,
-    pub entries: [MenuEntryInfo; MENU_SUBMENU_ENTRIES],
-}
-
-impl Default for MenuSubmenu {
-    fn default() -> Self {
-        Self {
-            row: 0,
-            count: 0,
-            geometry: MenuGeometry::default(),
-            entries: [MenuEntryInfo::default(); MENU_SUBMENU_ENTRIES],
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MenuGeometry {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
-    pub rows_x: i32,
-    pub rows_y: i32,
-    pub rows_width: i32,
-    pub rows_height: i32,
-    pub header_height: i32,
-    pub row_height: i32,
-    pub scroll: i32,
-    pub margin: i32,
-}
-
-impl Default for MenuReply {
-    fn default() -> Self {
-        Self {
-            sequence: 0,
-            status: 0,
-            count: 0,
-            open: 0,
-            entries: [MenuEntryInfo::default(); MENU_ENTRIES],
-            clicked: MenuEntryInfo::default(),
-            click_x: 0,
-            click_y: 0,
-            click_age: 0,
-            has_click: 0,
-            selection: MenuEntryInfo::default(),
-            has_selection: 0,
-            selected: 0,
-            geometry: MenuGeometry::default(),
-            has_geometry: 0,
-            submenu_count: 0,
-            submenus: [MenuSubmenu::default(); MENU_SUBMENUS],
-        }
-    }
-}
-
 pub mod model_status {
     pub const OK: i32 = 1;
     pub const NOT_FOUND: i32 = -1;
-    pub const OTHER_THREAD: i32 = -2;
     pub const NOT_IN_GAME: i32 = -4;
     pub const NO_NPC: i32 = -5;
     pub const NO_MODEL: i32 = -6;
-    pub const BAD_ANIMATION: i32 = -7;
 }
-
-pub const MODEL_HULL: usize = 128;
-pub const MODEL_FACES: usize = 8192;
 
 pub mod model_target {
     pub const NPC: u32 = 0;
     pub const LOC: u32 = 1;
     pub const PLAYER: u32 = 2;
-    pub const NPC_TYPE: u32 = 3;
 }
 
 #[repr(C)]
@@ -764,50 +557,6 @@ pub struct ModelRequest {
     pub loc_x: i32,
     pub loc_y: i32,
     pub loc_id: i32,
-    pub type_id: i32,
-    pub animation: i32,
-    pub frame: i32,
-    pub fine_x: i32,
-    pub fine_y: i32,
-    pub orientation: i32,
-}
-
-pub mod loc_status {
-    pub const OK: i32 = 1;
-    pub const NOT_FOUND: i32 = -1;
-    pub const OTHER_THREAD: i32 = -2;
-    pub const NOT_IN_GAME: i32 = -4;
-}
-
-pub const MAX_LOCS: usize = 8192;
-pub const MAX_LOC_NAMES: usize = 1024;
-pub const LOC_NAME_SIZE: usize = 32;
-pub const LOC_CLICKABLE: u8 = 1;
-pub const LOC_PLANE_SHIFT: u8 = 1;
-pub const LOC_PLANE_MASK: u8 = 3;
-pub const NO_NAME: u16 = 0xffff;
-
-pub mod locs_request {
-    pub const PLAYER_PLANE: i32 = -1;
-    pub const ALL_PLANES: i32 = 4;
-    pub const CLICKABLE_ONLY: i32 = 0x100;
-    pub const PLANES: i32 = 0xff;
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct LocInfo {
-    pub id: i32,
-    pub x: u8,
-    pub y: u8,
-    pub size_x: u8,
-    pub size_y: u8,
-    pub kind: u8,
-    pub shape: u8,
-    pub rotation: u8,
-    pub flags: u8,
-    pub name: u16,
-    pub decoration_height: i16,
 }
 
 pub mod worker_kind {
@@ -824,6 +573,9 @@ pub mod worker_kind {
     pub const WORLD_SELECT: u32 = 11;
     pub const PROJECTILES: u32 = 12;
     pub const SPOT_ANIMS: u32 = 13;
+    pub const MENU: u32 = 14;
+    pub const MODEL: u32 = 15;
+    pub const LOCS: u32 = 16;
 }
 
 pub mod worker_status {
@@ -849,57 +601,6 @@ pub struct WorkerReply {
     pub length: u32,
     pub reserved: u32,
     pub data: [u8; WORKER_DATA_SIZE],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LocsReply {
-    pub sequence: u32,
-    pub status: i32,
-    pub count: u32,
-    pub name_count: u32,
-    pub plane: i32,
-    pub base_x: i32,
-    pub base_y: i32,
-    pub reserved: u32,
-    pub locs: [LocInfo; MAX_LOCS],
-    pub names: [[u8; LOC_NAME_SIZE]; MAX_LOC_NAMES],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ModelReply {
-    pub sequence: u32,
-    pub status: i32,
-    pub bounding_box: u32,
-    pub orientation: i32,
-    pub vertex_count: u32,
-    pub corner_count: u32,
-    pub hull_count: u32,
-    pub face_count: u32,
-    pub frame_count: u32,
-    pub corners: [[f32; 2]; 8],
-    pub hull: [[f32; 2]; MODEL_HULL],
-    pub faces: [[[f32; 2]; 3]; MODEL_FACES],
-}
-
-impl Default for ModelReply {
-    fn default() -> Self {
-        Self {
-            sequence: 0,
-            status: 0,
-            bounding_box: 0,
-            orientation: 0,
-            vertex_count: 0,
-            corner_count: 0,
-            hull_count: 0,
-            face_count: 0,
-            frame_count: 0,
-            corners: [[0.0; 2]; 8],
-            hull: [[0.0; 2]; MODEL_HULL],
-            faces: [[[0.0; 2]; 3]; MODEL_FACES],
-        }
-    }
 }
 
 pub const ACT_OPTIONS: usize = 4;
@@ -997,13 +698,6 @@ impl Default for ActState {
     }
 }
 
-pub mod cache_kind {
-    pub const FILES: u32 = 0;
-    pub const ARCHIVES: u32 = 1;
-    pub const ARCHIVE_FILES: u32 = 2;
-    pub const ITEM_ICONS: u32 = 3;
-}
-
 pub const ITEM_ICON_WIDTH: u32 = 36;
 pub const ITEM_ICON_HEIGHT: u32 = 32;
 pub const ITEM_ICON_SHOW_COUNT: i32 = 1 << 24;
@@ -1014,8 +708,6 @@ pub mod cache_status {
     pub const NOT_FOUND: i32 = -1;
     pub const OTHER_THREAD: i32 = -2;
     pub const TOO_MANY: i32 = -3;
-    pub const NO_INDEX: i32 = -5;
-    pub const NO_ARCHIVE: i32 = -6;
 }
 
 pub const CACHE_FILE_MISSING: i32 = -1;
@@ -1027,20 +719,16 @@ pub const CACHE_DATA_SIZE: usize = 4 << 20;
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheRequest {
-    pub kind: u32,
-    pub index: u32,
-    pub archive: i32,
     pub count: u32,
+    pub reserved: u32,
     pub files: [[i32; 2]; CACHE_BATCH],
 }
 
 impl Default for CacheRequest {
     fn default() -> Self {
         Self {
-            kind: 0,
-            index: 0,
-            archive: 0,
             count: 0,
+            reserved: 0,
             files: [[0; 2]; CACHE_BATCH],
         }
     }
@@ -1060,7 +748,6 @@ pub struct CacheReply {
     pub status: i32,
     pub count: u32,
     pub used: u32,
-    pub fingerprint: u64,
     pub files: [CacheFile; CACHE_BATCH],
     pub data: [u8; CACHE_DATA_SIZE],
 }
@@ -1086,40 +773,6 @@ pub struct LayoutMemory {
     pub xp_status_sequence: u32,
     pub reserved4: u32,
     pub total_xp_status: TotalXpStatus,
-    pub item_request_sequence: u32,
-    pub reserved5: u32,
-    pub item_name_request: ItemNameRequest,
-    pub item_status_sequence: u32,
-    pub reserved6: u32,
-    pub item_name_status: NamesReply,
-    pub game_val_request_sequence: u32,
-    pub reserved7: u32,
-    pub game_val_request: GameValRequest,
-    pub game_val_status_sequence: u32,
-    pub reserved8: u32,
-    pub game_val_status: NamesReply,
-    pub project_request_sequence: u32,
-    pub reserved9: u32,
-    pub project_request: ProjectRequest,
-    pub project_reply_sequence: u32,
-    pub reserved10: u32,
-    pub project_reply: ProjectReply,
-    pub menu_request_sequence: u32,
-    pub reserved11: u32,
-    pub menu_reply_sequence: u32,
-    pub reserved12: u32,
-    pub menu_reply: MenuReply,
-    pub model_request_sequence: u32,
-    pub reserved13: u32,
-    pub model_request: ModelRequest,
-    pub model_reply_sequence: u32,
-    pub reserved14: u32,
-    pub model_reply: ModelReply,
-    pub locs_request_sequence: u32,
-    pub locs_request: i32,
-    pub locs_reply_sequence: u32,
-    pub reserved16: u32,
-    pub locs_reply: LocsReply,
     pub cache_request_sequence: u32,
     pub reserved17: u32,
     pub cache_request: CacheRequest,
@@ -1238,58 +891,12 @@ impl<'a> Shared<'a> {
     seqlocked!(status_sequence, name_status: NameStatus; reply write_name_status, read_name_status);
     seqlocked!(xp_request_sequence, total_xp_request: TotalXpRequest; request write_total_xp_request, read_total_xp_request(1));
     seqlocked!(xp_status_sequence, total_xp_status: TotalXpStatus; reply write_total_xp_status, read_total_xp_status);
-    seqlocked!(item_request_sequence, item_name_request: ItemNameRequest; request write_item_name_request, read_item_name_request(1));
-    seqlocked!(item_status_sequence, item_name_status: NamesReply; reply write_item_name_status, read_item_name_status);
-    seqlocked!(game_val_request_sequence, game_val_request: GameValRequest; request write_game_val_request, read_game_val_request(1));
-    seqlocked!(game_val_status_sequence, game_val_status: NamesReply; reply write_game_val_status, read_game_val_status);
-    seqlocked!(project_request_sequence, project_request: ProjectRequest; request write_project_request, read_project_request(1));
-    seqlocked!(project_reply_sequence, project_reply: ProjectReply; reply write_project_reply, read_project_reply);
-    seqlocked!(menu_reply_sequence, menu_reply: MenuReply; fill write_menu_reply_with);
-    seqlocked!(menu_reply_sequence, menu_reply: MenuReply; read read_menu_reply);
-    seqlocked!(model_request_sequence, model_request: ModelRequest; request write_model_request, read_model_request(1));
-    seqlocked!(model_reply_sequence, model_reply: ModelReply; fill write_model_reply_with);
-    seqlocked!(model_reply_sequence, model_reply: ModelReply; read read_model_reply);
-    seqlocked!(locs_request_sequence, locs_request: i32; request write_locs_request, read_locs_request(1));
-    seqlocked!(locs_reply_sequence, locs_reply: LocsReply; fill write_locs_reply_with);
     seqlocked!(cache_request_sequence, cache_request: CacheRequest; request write_cache_request, read_cache_request(1));
     seqlocked!(cache_reply_sequence, cache_reply: CacheReply; fill write_cache_reply_with);
     seqlocked!(worker_request_sequence, worker_request: WorkerRequest; request write_worker_request, read_worker_request(100));
     seqlocked!(worker_reply_sequence, worker_reply: WorkerReply; fill write_worker_reply_with);
     seqlocked!(act_request_sequence, act_request: ActRequest; request write_act_request, read_act_request(1));
     seqlocked!(act_state_sequence, act_state: ActState; reply write_act_state, read_act_state);
-
-    pub fn write_menu_request(self) -> u32 {
-        let this = self.this();
-        unsafe {
-            seqlock_write(
-                addr_of_mut!((*this).menu_request_sequence),
-                addr_of_mut!((*this).reserved11),
-                &0,
-            )
-        }
-    }
-
-    pub fn read_menu_request(self) -> Option<u32> {
-        let this = self.this();
-        unsafe {
-            seqlock_read(
-                addr_of!((*this).menu_request_sequence),
-                addr_of!((*this).reserved11),
-                1,
-            )
-            .map(|(s, _)| s)
-        }
-    }
-
-    pub fn read_locs_reply_into(self, out: &mut LocsReply, attempts: usize) -> bool {
-        let this = self.this();
-        unsafe {
-            seqlock_read_with(addr_of!((*this).locs_reply_sequence), attempts, || {
-                core::ptr::copy_nonoverlapping(addr_of!((*this).locs_reply), out, 1)
-            })
-            .is_some()
-        }
-    }
 
     pub fn worker_reply_answers(self) -> Option<u32> {
         let this = self.this();
@@ -1464,37 +1071,20 @@ mod tests {
         assert_eq!(size_of::<ProjectileLayout>(), 24 * 4);
         assert_eq!(size_of::<SpotAnimLayout>(), 8 * 4);
         assert_eq!(size_of::<PathLayout>(), 4 * 4);
+        assert_eq!(size_of::<MenuStateLayout>(), 22 * 4);
         assert_eq!(
             offset_of!(LayoutMemory, request_sequence),
-            8 + 96 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16
+            8 + 96 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 88
         );
         let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 20;
         assert_eq!(size_of::<MenuEntryInfo>(), entry);
-        assert_eq!(size_of::<MenuGeometry>(), 12 * 4);
-        let submenu = 8 + 48 + MENU_SUBMENU_ENTRIES * entry;
-        assert_eq!(size_of::<MenuSubmenu>(), submenu);
-        assert_eq!(
-            size_of::<MenuReply>(),
-            16 + MENU_ENTRIES * entry + entry + 16 + entry + 8 + 52 + 4 + MENU_SUBMENUS * submenu
-        );
-        assert_eq!(size_of::<ItemNameRequest>(), 8 + 64 * 4);
-        assert_eq!(size_of::<NamesReply>(), 16 + 64 * 64);
-        assert_eq!(size_of::<CacheRequest>(), 16 + CACHE_BATCH * 8);
+        assert_eq!(size_of::<CacheRequest>(), 8 + CACHE_BATCH * 8);
         assert_eq!(
             size_of::<CacheReply>(),
-            24 + CACHE_BATCH * 8 + CACHE_DATA_SIZE
+            16 + CACHE_BATCH * 8 + CACHE_DATA_SIZE
         );
-        assert_eq!(size_of::<LocInfo>(), 16);
         assert_eq!(size_of::<WorkerRequest>(), 24);
         assert_eq!(size_of::<WorkerReply>(), 16 + WORKER_DATA_SIZE);
-        assert_eq!(
-            size_of::<LocsReply>(),
-            32 + MAX_LOCS * 16 + MAX_LOC_NAMES * LOC_NAME_SIZE
-        );
-        assert_eq!(
-            size_of::<ModelReply>(),
-            36 + 8 * 8 + MODEL_HULL * 8 + MODEL_FACES * 24
-        );
         assert_eq!(
             size_of::<ActRequest>(),
             8 + size_of::<ModelRequest>()
@@ -1566,36 +1156,6 @@ mod tests {
                 shared.read_name_request(),
                 Some((0, NameRequest::default()))
             );
-        }
-    }
-
-    #[test]
-    fn item_name_requests_and_status_round_trip() {
-        let mut memory = memory();
-        let ptr = memory.as_mut_ptr();
-        unsafe {
-            let shared = Shared::create(NonNull::new(ptr).unwrap());
-            let mut request = ItemNameRequest {
-                count: 2,
-                ..ItemNameRequest::default()
-            };
-            request.ids[..2].copy_from_slice(&[1925, 13241]);
-            assert_eq!(shared.write_item_name_request(&request), 2);
-            assert_eq!(shared.read_item_name_request(), Some((2, request)));
-
-            let mut status = NamesReply {
-                sequence: 2,
-                status: item_name_status::OK,
-                count: 2,
-                ..NamesReply::default()
-            };
-            status.set_name(0, b"Bucket");
-            status.set_name(1, &[b'a'; 70]);
-            shared.write_item_name_status(&status);
-            let read = shared.read_item_name_status(1).unwrap();
-            assert_eq!(read.name(0), Some(&b"Bucket"[..]));
-            assert_eq!(read.name(1).unwrap().len(), ITEM_NAME_SIZE);
-            assert_eq!(read.name(2), None);
         }
     }
 

@@ -169,7 +169,7 @@ pub fn varbits_of(
     target: &Target,
     _settings: &Settings,
     varp: u16,
-) -> Result<Vec<(i32, injector::config::VarbitDef, Option<String>)>, String> {
+) -> Result<Vec<(i32, decode::definitions::VarbitDef, Option<String>)>, String> {
     injector::varbits_of(target.client.pid, varp)
 }
 

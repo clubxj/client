@@ -281,8 +281,8 @@ fn a_quote_without_a_lib_still_quotes_and_says_why() {
         ..Server::healthy()
     }
     .start();
-    let quoted = session::quote(&api(&fake), Some(&cache("quote-no-lib")), SCRIPT_ID)
-        .expect("quote");
+    let quoted =
+        session::quote(&api(&fake), Some(&cache("quote-no-lib")), SCRIPT_ID).expect("quote");
     assert!(
         quoted.lib.unwrap_err().contains("script library"),
         "the run is refused with the lib's reason"
@@ -784,8 +784,8 @@ fn a_restart_of_a_script_no_longer_listed_finds_nothing() {
     let fake = Server::healthy().start();
     let api = api(&fake);
 
-    let found = restart_quote(&api, Some(&cache("unlisted")), "s1", "not-listed", false)
-        .expect("quote");
+    let found =
+        restart_quote(&api, Some(&cache("unlisted")), "s1", "not-listed", false).expect("quote");
     assert_eq!(found, None);
 }
 
@@ -822,7 +822,10 @@ fn a_quote_comes_with_the_balance_of_now() {
     let root = cache("quote");
     let quoted = session::quote(&api(&fake), Some(&root), SCRIPT_ID).expect("quote");
     assert_eq!(quoted.me.microcredits, 50_000);
-    assert_eq!(start_block(&script(), &quoted.quote, quoted.me.microcredits), None);
+    assert_eq!(
+        start_block(&script(), &quoted.quote, quoted.me.microcredits),
+        None
+    );
     assert_eq!(quoted.lib.expect("lib").version, LIB_VERSION);
     assert_eq!(
         fs::read_to_string(root.join("lib/.version")).unwrap(),

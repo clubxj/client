@@ -29,7 +29,7 @@ Facts about the client's internals that the code does not state, and the steps f
   - Helpers: `dump.py` dumps `i32` fields for diffing, and `watch.py` prints `i32` changes with timestamps. `snapmenu.py` and `probe_region.py` hardcode addresses from one build.
   - Under Wine, a diff that skips stack regions (`0x7ffffe...`) misses objects on the main thread's stack, such as the menu.
 - **gdb probing**:
-  - Run `gdb -batch -x script -p <linux pid>` under `timeout -s INT`.
+  - Run `gdb -batch -x script -p <linux pid>` under `timeout -s TERM`. On SIGTERM gdb detaches from an attached process. `-batch` can ignore SIGINT while the inferior runs, so end a probe from inside its breakpoint commands: count hits and run `delete`, `detach`, `quit` at the limit.
   - Use `hbreak`, which leaves the code unpatched. Set `handle SIGUSR1 nostop noprint pass` because Wine uses that signal, and put `commands; silent; printf ...; continue; end` on each breakpoint.
   - Finish with `delete; detach; quit`. Never kill gdb while breakpoints are set.
   - Never use `hbreak ... if` on a hot function: gdb stops on every hit to check the condition, and the client froze. Test the condition inside `commands` instead.
@@ -43,7 +43,7 @@ Facts about the client's internals that the code does not state, and the steps f
 
 - The menu object lives on the main thread's stack. The selected spell (Java's `widgetSelected` group) is a sub-object of it, found by `find_selection` through the native deselect and select functions.
 - Rows are 22.5 px high with a 16 px header. The Java client's 19/15 is wrong for the native client.
-- The client doesn't store the menu's geometry. It lays the menu out every frame and keeps the result on the stack. The agent calls the layout routine itself (`find_menu_layout`) on the window-procedure thread: `fn(view, out: *mut [i32; 26], path: &std::vector<u64>)`. An empty path means the menu, and row indices mean a submenu.
+- The client doesn't store the menu's geometry. It lays the menu out every frame and keeps the result on the stack. The agent calls the layout routine itself (`find_menu_layout`) in the swap hook while the menu is open: `fn(view, out: *mut [i32; 26], path: &std::vector<u64>)`. An empty path means the menu, and row indices mean a submenu.
   - You can recognise the routine because it refuses paths of 5 or more submenus and calls itself for the parent.
   - The view is the minimenu's list view (`minimenu+0x158`, also vtable slot 3).
   - Inputs:
@@ -234,27 +234,37 @@ Facts about the client's internals that the code does not state, and the steps f
 - An opcode the decoder doesn't know fails the whole definition silently, and the object then has no collision or options. Missing 97 and 98 once hid 842 of 63,320 definitions, doors among them.
 - The client doesn't fill the scene's outer rows, which read as open ground. The planner takes those tiles from the cache. Planning on them made false routes and back-and-forth walking.
 
-## Definitions and models (`offsets/types.rs`, `client/model.rs`)
+## Definitions in memory
 
-- Every definition lookup calls one cache reader with the config group in `r8d`. A lookup takes `(out: *mut [u64;2], id: edx)` and returns a {control, object} pair that `release` frees.
-- Groups: idk 3, inv 5, enum 8, NPC 9, obj 10, param 11, seq 12, spotanim 13, varbit 14, hitsplat 32, healthbar 33 (id in `rdx`), struct 34, db row 38, db table 39.
-  - Locs (6), varps (16) and varcs (19) take the id in `ecx` and return a pointer into the cache.
-  - A bad id gives a default definition, so the agent refuses ids outside `0..0x10000`.
-- `NpcType::getModel(npc, out, seq, frame, seq2, frame2, overrides)`:
-  - It is the call right after the NPC actor's get-model loads `[actor+npc_definition]` into `rcx`, and it calls itself for an NPC's other forms.
-  - `seq` is the animation object or null. `seq2` is null with `frame2` -1, and `overrides` is null.
-  - Posing copies the cached model, so the cached one is never changed.
-- Animation frames:
-  - The skeletal check is the leaf `mov eax,[rcx+4]; shr eax,31; xor al,1; ret`.
-  - When it says no, the callers read the frame count (`+0x48`) and the frame array (`+0x50`).
-  - The client doesn't bounds-check, so the agent checks `0 <= frame < count` with a non-null array.
-  - Skeletal animations (`[seq+0x38]`/`[seq+0x3c]`) aren't supported.
-- Found but unused:
-  - the model loader `(out, source = client+0x2570, id)`
-  - `ModelData` lighting (vtable `+0x70`)
-  - generic animate `(out, 0x48-byte params)`
-  - the spot animation and loc model builders
-  - set-sequence `(client, actor, seq, delay)`, which works on any actor until the server overrides it
+- Every definition lookup calls one cache reader with the config group in `r8d`. A lookup takes `(out: *mut [u64;2], id: edx)` and returns a {control, object} pair that `release` frees. Locs (6), varps (16) and varcs (19) take the id in `ecx` and return a pointer into the cache. A bad id gives a default definition.
+- Found but unused (definitions now come from the disk cache): `NpcType::getModel(npc, out, seq, frame, seq2, frame2, overrides)`, which calls itself for an NPC's other forms; the skeletal check, the leaf `mov eax,[rcx+4]; shr eax,31; xor al,1; ret`, and the sequence frame count (`+0x48`) and array (`+0x50`); the model loader `(out, source = client+0x2570, id)`; `ModelData` lighting (vtable `+0x70`); generic animate `(out, 0x48-byte params)`; the spot animation and loc model builders; set-sequence `(client, actor, seq, delay)`, which works on any actor until the server overrides it.
+
+## Render loop (`offsets/render.rs`, `client/drawn.rs`; `0x14065d340` in `client-2026-11-05`)
+
+- One scene loop calls a renderer virtual, `draw(renderer, renderable, orientation, xmm3 + 3 floats, x, y, z, tag, cycle, ...)`, for every renderable it draws, about 1500 times a frame. Almost all calls are static locs. NPCs, players and animated locs are a handful.
+  - x, y and z are relative to the camera, and the floats are the camera's yaw and pitch sines and cosines.
+  - The tag is the 64-bit argument at `entry rsp+0x58`, and the client cycle is at `+0x60`. For locs, `(tag >> 20) & 0xffff` is the loc id.
+- Order inside:
+  1. Build the model through the renderable's vtable slot 0 with the cycle, then cache its box for the orientation (`0x14064a3b0`).
+  2. Cull it against the view, using the projection settings at `[renderer+0x630c60]` and the model's radius.
+  3. Mouse picking: a ray against the model's box, then per-triangle tests. A hit adds the tag to the under-mouse list (`0x14065aa80`).
+  4. Classify the render pass: `pass(renderer, renderable, model, tag)`, recognised by returning 4 for tag -2 and 5 for tag -3. It is the one call that sees the renderable and the posed model together, and the draw makes it only for models that survived culling.
+  5. Subtract the animation height (renderable vtable `+0x50`) from the height, submit to the GPU through renderer vtable `+0x48`, then release the draw's use of the model.
+- Posed models (NPCs, players, animated locs) have the transient flag `model+0x21c` set, which the draw tests right after its GPU submit. They are all posed into one reused scratch model, so its vertices belong to whichever renderable was posed last. Cached models (static locs) are pushed onto the vector at `renderer+0x643d98` the first time they are drawn, with `model+0x218` set to that frame's id.
+- Models come from `make_shared`: the control block is always `model - 0x20`, with the use count at `+8` and the weak count at `+0xc`.
+- The model's vertices stay in model space; the rotated boxes are cached per orientation at `model+0x238`.
+- `find_render` finds `pass` by its returns, then `draw` as the caller of `pass` whose entry stores `r8d` (the orientation) at `[rsp+0x18]`, then the transient flag as the first byte compare after a register call in `draw`. A second caller, `0x14065daf0` (a `(renderer, renderable, r8, r9d)` draw), wasn't hit while standing among NPCs and locs and isn't hooked; it is probably for projectiles or spot animations.
+
+## Definitions on disk (`decode/src/js5.rs`, `decode/src/definitions.rs`, `client/definitions.rs`)
+
+- The client keeps the classic disk cache in `%LOCALAPPDATA%\Jagex\Old School Runescape\data`: `main_file_cache.dat2` (520-byte sectors) and one `main_file_cache.idx<N>` per index, held open while it runs. Configs are index 2: locs are group 6 and varbits group 14, both bzip2 containers split into one file per id. The reference table (index 255, group 2) is protocol 7.
+- Loc opcode 96 is the decoration height (one unsigned byte, `def+0x134` in memory).
+- Game vals are index 24: one group per `ipc::state::game_val` kind, one file per id, holding the name.
+- Models are index 7 (group = model id), animation frames index 0 (group = frame id >> 16, file = frame id & 0xffff) and framemaps index 1; NPCs are config group 9 and sequences group 12. Model files come in four formats, picked by the last two bytes (`FF FD`, `FF FE`, `FF FF`, otherwise the original).
+- A face the client never draws (lit `faceColors3 == -2`): untextured unless its render type is 0, 1 or 3, textured unless it is 0 or 1; a transparency of -1 makes the type 2 and -2 makes it 3 (`ModelData.ev` in the Java client).
+- An NPC with one model uses it as it is; several are merged, which drops unused vertices and duplicate coordinates and pulls texture-triangle vertices into the label groups, so it moves animation origins.
+- Objs are config group 10. Opcodes 97/98, 139/140 and 148/149 are the link and template of noted, bought and placeholder copies; a copy with a template takes its linked obj's name.
+- The client's in-memory definition caches (locs, varbits) are LRU hash tables in `.data`, found but unused: a lookup hit reorders the LRU list and a miss decodes and may evict, so only the game thread may call it. A node holds the id at `+0`, the `{control, definition}` pair at `+8` and the next node of its bucket at `+0x40`; a loc definition holds its id at `+8`. The multiloc transform reads the varbit at `def+0x150`, the varp at `def+0x154` and the ids at `def+0x148` (count at `def+0x140`).
 
 ## NPC head icons (`offsets/values.rs` `find_npc_head_icons`)
 

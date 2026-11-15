@@ -1,30 +1,13 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
+use decode::camera::{Camera, NEAR_PLANE, Window, truncate};
 use ipc::{
     read::{self, Memory},
     state::{Layout, part},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Via {
-    #[default]
-    Auto,
-    Local,
-    Client,
-}
-
-impl Via {
-    pub fn parse(name: Option<&str>) -> Result<Self, String> {
-        match name {
-            None | Some("auto") => Ok(Self::Auto),
-            Some("local") => Ok(Self::Local),
-            Some("client") => Ok(Self::Client),
-            Some(other) => Err(format!(
-                "unknown projection {other:?} (auto, local or client)"
-            )),
-        }
-    }
-}
 
 pub const WALL: u8 = 0;
 pub const WALL_DECORATION: u8 = 1;
@@ -38,6 +21,7 @@ const TILE: i32 = 1 << TILE_SHIFT;
 const PLANES: i32 = crate::collision::PLANES as i32;
 const BRIDGE: u8 = 2;
 const TILE_ENTRY_SIZE: usize = 16;
+const DECORATION_RETRY: Duration = Duration::from_millis(600);
 const TILE_ENTRY_OBJECT: usize = 8;
 const VERTEX_SIZE: usize = 12;
 const MAX_TRIANGLES: usize = 4096;
@@ -47,172 +31,11 @@ const PAINT_TRIANGLES: [[usize; 3]; 2] = [[1, 2, 3], [0, 1, 3]];
 type Vertex = [i32; 3];
 type Triangle = [Vertex; 3];
 
-fn truncate(value: f32) -> i32 {
-    if value.is_nan() || value >= 2_147_483_648.0 || value < -2_147_483_648.0 {
-        i32::MIN
-    } else {
-        value as i32
-    }
-}
-
 fn i32s<const N: usize>(memory: &impl Memory, address: u64) -> Option<[i32; N]> {
     let mut bytes = [[0u8; 4]; N];
     memory
         .read(address, bytes.as_flattened_mut())
         .then(|| bytes.map(i32::from_le_bytes))
-}
-
-const WINDOW_SIZE: usize = 512;
-
-struct Window<'a, M: Memory> {
-    memory: &'a M,
-    base: u64,
-    low: u64,
-    high: u64,
-    bytes: [u8; WINDOW_SIZE],
-    filled: bool,
-}
-
-impl<'a, M: Memory> Window<'a, M> {
-    fn new(memory: &'a M, base: u64, fields: &[(u64, u64)]) -> Self {
-        let low = fields.iter().map(|f| f.0).min().unwrap_or(0);
-        let high = fields.iter().map(|f| f.0 + f.1).max().unwrap_or(0);
-        let mut window = Self {
-            memory,
-            base,
-            low,
-            high,
-            bytes: [0; WINDOW_SIZE],
-            filled: false,
-        };
-        if high > low && ((high - low) as usize) <= WINDOW_SIZE {
-            window.filled = memory.read(base + low, &mut window.bytes[..(high - low) as usize]);
-        }
-        window
-    }
-
-    fn get<const N: usize, const K: usize>(&self, offset: u64) -> Option<[[u8; N]; K]> {
-        let mut bytes = [[0; N]; K];
-        let flat = bytes.as_flattened_mut();
-        let end = offset + flat.len() as u64;
-        let read = if self.filled && offset >= self.low && end <= self.high {
-            let at = (offset - self.low) as usize;
-            flat.copy_from_slice(&self.bytes[at..at + flat.len()]);
-            true
-        } else {
-            self.memory.read(self.base + offset, flat)
-        };
-        read.then_some(bytes)
-    }
-
-    fn i32(&self, offset: u64) -> Option<i32> {
-        self.i32s::<1>(offset).map(|[v]| v)
-    }
-
-    fn f32(&self, offset: u64) -> Option<f32> {
-        self.get::<4, 1>(offset).map(|[v]| f32::from_le_bytes(v))
-    }
-
-    fn ptr(&self, offset: u64) -> Option<u64> {
-        self.get::<8, 1>(offset)
-            .map(|[v]| u64::from_le_bytes(v))
-            .filter(|&p| p != 0)
-    }
-
-    fn i32s<const N: usize>(&self, offset: u64) -> Option<[i32; N]> {
-        self.get::<4, N>(offset)
-            .map(|values| values.map(i32::from_le_bytes))
-    }
-}
-
-struct Camera {
-    position: [i32; 3],
-    trig: [f32; 4],
-    zoom: i32,
-    center: [i32; 2],
-    offset: [i32; 2],
-    scale: f32,
-    ratio: [f32; 2],
-}
-
-impl Camera {
-    fn read(memory: &impl Memory, layout: &Layout, client: u64, trig: [f32; 4]) -> Option<Self> {
-        let p = &layout.projection;
-        let canvas = memory.ptr(client + layout.interfaces.canvas as u64)?;
-        let view = memory.ptr(canvas + p.view_holder as u64 + p.view as u64)?;
-        let camera = Window::new(
-            memory,
-            client,
-            &[(layout.camera.position as u64, 12), (p.zoom as u64, 4)],
-        );
-        let view_fields = Window::new(
-            memory,
-            view,
-            &[
-                (p.view_center as u64, 8),
-                (p.view_offset_x as u64, 4),
-                (p.view_offset_y as u64, 4),
-            ],
-        );
-        let canvas_fields = Window::new(
-            memory,
-            canvas,
-            &[
-                (p.canvas_size as u64, 8),
-                (p.ui_size as u64, 8),
-                (layout.interfaces.ui_scale as u64, 4),
-            ],
-        );
-        let canvas_size = canvas_fields.i32s::<2>(p.canvas_size as u64)?;
-        let ui = canvas_fields.i32s::<2>(p.ui_size as u64)?;
-        Some(Self {
-            position: camera.i32s(layout.camera.position as u64)?,
-            trig,
-            zoom: camera.i32(p.zoom as u64)?,
-            center: view_fields.i32s(p.view_center as u64)?,
-            offset: [
-                view_fields.i32(p.view_offset_x as u64)?,
-                view_fields.i32(p.view_offset_y as u64)?,
-            ],
-            scale: canvas_fields.f32(layout.interfaces.ui_scale as u64)?,
-            ratio: [
-                ui[0] as f32 / canvas_size[0] as f32,
-                ui[1] as f32 / canvas_size[1] as f32,
-            ],
-        })
-    }
-
-    fn project(&self, x: i32, y: i32, height: i32) -> ([f32; 2], f32) {
-        let [sin_pitch, cos_pitch, sin_yaw, cos_yaw] = self.trig;
-        let dx = x.wrapping_sub(self.position[0]) as f32;
-        let dz = height.wrapping_sub(self.position[1]) as f32;
-        let dy = y.wrapping_sub(self.position[2]) as f32;
-        let depth = cos_yaw * dy - sin_yaw * dx;
-        let across = cos_yaw * dx + sin_yaw * dy;
-        let up = cos_pitch * dz - sin_pitch * depth;
-        let distance = sin_pitch * dz + cos_pitch * depth;
-        let zoom = self.zoom as f32;
-        let sx = truncate(zoom * across / distance)
-            .wrapping_add(self.offset[0])
-            .wrapping_add(self.center[0]);
-        let sy = truncate(zoom * up / distance)
-            .wrapping_add(self.offset[1])
-            .wrapping_add(self.center[1]);
-        (
-            [self.canvas_units(sx, 0), self.canvas_units(sy, 1)],
-            distance,
-        )
-    }
-
-    fn canvas_units(&self, value: i32, axis: usize) -> f32 {
-        let units = self.ratio[axis] * value as f32;
-        truncate(if units < 0.0 {
-            units - 0.5
-        } else {
-            units + 0.5
-        }) as f32
-            * self.scale
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +100,8 @@ pub struct Terrain {
     tiles: Vec<u64>,
     meshes: Vec<Option<Option<Vec<Triangle>>>>,
     decorations: HashMap<(i32, i32, i32), i32>,
+    decorated: bool,
+    decorations_failed: Option<Instant>,
 }
 
 impl Terrain {
@@ -311,6 +136,8 @@ impl Terrain {
             tiles,
             meshes: vec![None; count],
             decorations: HashMap::new(),
+            decorated: false,
+            decorations_failed: None,
         })
     }
 
@@ -331,6 +158,21 @@ impl Terrain {
             .into_iter()
             .filter(|&(_, height)| height != 0)
             .collect();
+        self.decorated = true;
+    }
+
+    fn decorate(&mut self, decorations: impl FnOnce() -> Option<Vec<Decoration>>) {
+        if self.decorated
+            || self
+                .decorations_failed
+                .is_some_and(|at| at.elapsed() < DECORATION_RETRY)
+        {
+            return;
+        }
+        match decorations() {
+            Some(decorations) => self.set_decorations(decorations),
+            None => self.decorations_failed = Some(Instant::now()),
+        }
     }
 
     fn in_scene(&self, x: i32, y: i32) -> bool {
@@ -523,8 +365,6 @@ fn barycentric(px: i32, py: i32, [a, b, c]: &Triangle) -> i32 {
     truncate(bh as f32 * wb + ah as f32 * wa + wc * ch as f32)
 }
 
-const NEAR_PLANE: f32 = 50.0;
-
 pub type Decoration = ((i32, i32, i32), i32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -552,7 +392,7 @@ pub fn ensure_terrain<'a>(
     memory: &impl Memory,
     layout: &Layout,
     terrain: &'a mut Option<Terrain>,
-    decorations: impl FnOnce() -> Vec<Decoration>,
+    decorations: impl FnOnce() -> Option<Vec<Decoration>>,
 ) -> Result<&'a mut Terrain, String> {
     let client = client(memory, layout)?;
     scene_terrain(memory, layout, client, terrain, decorations).map(|(_, _, terrain)| terrain)
@@ -574,23 +414,55 @@ fn scene_terrain<'a>(
     layout: &Layout,
     client: u64,
     terrain: &'a mut Option<Terrain>,
-    decorations: impl FnOnce() -> Vec<Decoration>,
+    decorations: impl FnOnce() -> Option<Vec<Decoration>>,
 ) -> Result<(SceneKey, [f32; 4], &'a mut Terrain), String> {
     let (key, trig) = scene_and_trig(memory, layout, client).ok_or_else(|| unavailable("scene"))?;
-    let current = match terrain.take() {
+    let mut current = match terrain.take() {
         Some(kept) if kept.key == key => kept,
         stale => match Terrain::read(memory, layout, key) {
-            Some(mut fresh) => {
-                fresh.set_decorations(decorations());
-                fresh
-            }
+            Some(fresh) => fresh,
             None => {
                 *terrain = stale;
                 return Err(unavailable("terrain"));
             }
         },
     };
+    current.decorate(decorations);
     Ok((key, trig, terrain.insert(current)))
+}
+
+pub struct Projector {
+    camera: Camera,
+    at: [i32; 3],
+}
+
+impl Projector {
+    pub fn point(&self, [dx, dh, dy]: [i32; 3]) -> Option<[f32; 2]> {
+        let [x, height, y] = self.at;
+        let (screen, distance) = self.camera.project(
+            x.wrapping_add(dx),
+            y.wrapping_add(dy),
+            height.wrapping_add(dh),
+        );
+        (distance >= NEAR_PLANE && screen.iter().all(|v| v.is_finite())).then_some(screen)
+    }
+}
+
+pub fn projector(
+    memory: &impl Memory,
+    layout: &Layout,
+    terrain: &mut Option<Terrain>,
+    [x, y]: [i32; 2],
+    decorations: impl FnOnce() -> Option<Vec<Decoration>>,
+) -> Result<Projector, String> {
+    let client = client(memory, layout)?;
+    let (key, trig, terrain) = scene_terrain(memory, layout, client, terrain, decorations)?;
+    let camera = Camera::read(memory, layout, client, trig).ok_or_else(|| unavailable("camera"))?;
+    let ground = terrain.ground_on(memory, layout, x, y, key.plane, None);
+    Ok(Projector {
+        camera,
+        at: [x, ground, y],
+    })
 }
 
 pub fn project(
@@ -600,7 +472,7 @@ pub fn project(
     points: &[Point],
     shift: Option<[i32; 3]>,
     clip: bool,
-    decorations: impl FnOnce() -> Vec<Decoration>,
+    decorations: impl FnOnce() -> Option<Vec<Decoration>>,
 ) -> Result<Vec<[f32; 2]>, String> {
     let client = client(memory, layout)?;
     let (key, trig, terrain) = scene_terrain(memory, layout, client, terrain, decorations)?;
@@ -858,6 +730,20 @@ mod tests {
     }
 
     #[test]
+    fn decorations_that_failed_are_asked_again_later() {
+        let (mut m, layout) = world();
+        put_tile(&mut m, &layout, 0, 1, 2, TILE);
+        let mut terrain = Terrain::read(&m, &layout, key(&m, &layout)).unwrap();
+        terrain.decorate(|| None);
+        terrain.decorate(|| panic!("asked again before the retry"));
+        assert_eq!(terrain.ground_on(&m, &layout, 128, 256, 0, None), -12);
+        terrain.decorations_failed = terrain.decorations_failed.map(|at| at - DECORATION_RETRY);
+        terrain.decorate(|| Some(vec![((0, 1, 2), 30)]));
+        assert_eq!(terrain.ground_on(&m, &layout, 128, 256, 0, None), -42);
+        terrain.decorate(|| panic!("asked again once decorated"));
+    }
+
+    #[test]
     fn edges_count_as_inside() {
         let t: Triangle = [[0, 0, 0], [128, 0, 0], [0, 0, 128]];
         assert!(inside(0, 0, &t));
@@ -880,7 +766,7 @@ mod tests {
             .map(|[x, y, z]| Point::new(x, y, z));
         let screen = project(&m, &layout, &mut terrain, &points, None, false, || {
             asked += 1;
-            Vec::new()
+            Some(Vec::new())
         })
         .unwrap();
         assert_eq!(screen[0], [404.0, 302.0]);
@@ -897,7 +783,7 @@ mod tests {
         );
         project(&m, &layout, &mut terrain, &points, None, false, || {
             asked += 1;
-            Vec::new()
+            Some(Vec::new())
         })
         .unwrap();
         assert_eq!(
@@ -922,7 +808,7 @@ mod tests {
             &points,
             Some([128, 0, -1]),
             false,
-            Vec::new,
+            || Some(Vec::new()),
         )
         .unwrap();
         let t = terrain.as_mut().unwrap();
@@ -939,7 +825,10 @@ mod tests {
         assert_eq!(shifted[0], camera.project(300, 200, ground - 40).0);
         assert_ne!(
             shifted,
-            project(&m, &layout, &mut terrain, &points, None, false, Vec::new).unwrap()
+            project(&m, &layout, &mut terrain, &points, None, false, || Some(
+                Vec::new()
+            ))
+            .unwrap()
         );
     }
 
@@ -967,7 +856,7 @@ mod tests {
                 &[Point::new(0, 0, 0)],
                 None,
                 false,
-                Vec::new
+                || Some(Vec::new())
             ),
             Err("agent didn't find what local projection reads".to_string())
         );

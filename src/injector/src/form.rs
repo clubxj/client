@@ -888,7 +888,11 @@ mod tests {
         assert_eq!(parse_counters("{}"), None);
         assert_eq!(parse_breaks("{}"), Some(BreakPlan::default()));
         assert_eq!(
-            parse_settings(settings_line(&json!({ "a": 1 })).strip_prefix(SETTINGS_PREFIX).unwrap()),
+            parse_settings(
+                settings_line(&json!({ "a": 1 }))
+                    .strip_prefix(SETTINGS_PREFIX)
+                    .unwrap()
+            ),
             Some(json!({ "a": 1 }))
         );
         assert_eq!(parse_settings("[1]"), None);

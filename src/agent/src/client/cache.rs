@@ -1,25 +1,19 @@
 use ipc::{
-    read::{self, Memory},
+    read::Memory,
     state::{
-        cache_kind, cache_status, CacheReply, CacheRequest, CACHE_BATCH, CACHE_DATA_SIZE,
-        CACHE_FILE_MISSING, CACHE_FILE_NO_ROOM, ITEM_ICON_HEIGHT, ITEM_ICON_ID_MASK,
-        ITEM_ICON_SHOW_COUNT, ITEM_ICON_WIDTH,
+        cache_status, CacheReply, CacheRequest, CACHE_BATCH, CACHE_DATA_SIZE, CACHE_FILE_MISSING,
+        CACHE_FILE_NO_ROOM, ITEM_ICON_HEIGHT, ITEM_ICON_ID_MASK, ITEM_ICON_SHOW_COUNT,
+        ITEM_ICON_WIDTH,
     },
 };
 use std::sync::OnceLock;
 
 use super::{
     detour::function,
-    items::{game_vals, release, Reader, BUFFER_DATA, BUFFER_LENGTH},
-    offsets::{u32_at, CacheTable, GameVals},
-    own::{on_other_thread, OwnMemory, LAYOUT},
+    items::release,
+    own::{on_other_thread, OwnMemory},
     state::mapping,
 };
-
-const INDEX_SEARCH: i64 = 0x200;
-const INDEX_ID: u64 = 0x10;
-const ENTRY_HASHED: usize = 0x18;
-const MAX_ENTRIES: u64 = 1 << 20;
 
 type IconBuilder = unsafe extern "system" fn(
     *mut [u64; 2],
@@ -64,182 +58,21 @@ pub fn on_request() {
         reply.sequence = sequence;
         reply.count = 0;
         reply.used = 0;
-        reply.fingerprint = 0;
         reply.status = fill(reply, &request);
     });
 }
 
 fn fill(reply: &mut CacheReply, request: &CacheRequest) -> i32 {
-    if matches!(request.kind, cache_kind::FILES | cache_kind::ITEM_ICONS)
-        && request.count as usize > CACHE_BATCH
-    {
+    if request.count as usize > CACHE_BATCH {
         return cache_status::TOO_MANY;
     }
     if on_other_thread() {
         return cache_status::OTHER_THREAD;
     }
-    let memory = OwnMemory;
-    if request.kind == cache_kind::ITEM_ICONS {
-        return match ICON_BUILDER.get() {
-            Some(&builder) => unsafe { draw_icons(&memory, builder, request, reply) },
-            None => cache_status::NOT_FOUND,
-        };
+    match ICON_BUILDER.get() {
+        Some(&builder) => unsafe { draw_icons(&OwnMemory, builder, request, reply) },
+        None => cache_status::NOT_FOUND,
     }
-    let Some(&(reader, rule)) = game_vals() else {
-        return cache_status::NOT_FOUND;
-    };
-    let Some(client) = LAYOUT
-        .get()
-        .and_then(|layout| read::client(&memory, layout))
-    else {
-        return cache_status::NOT_FOUND;
-    };
-    let Some(index) = index_handle(&memory, client, &rule, request.index) else {
-        return cache_status::NO_INDEX;
-    };
-    match request.kind {
-        cache_kind::FILES => unsafe { read_files(&memory, reader, index, request, reply) },
-        cache_kind::ARCHIVES => list_archives(&memory, &rule.table, index, reply),
-        cache_kind::ARCHIVE_FILES => {
-            list_files(&memory, &rule.table, index, request.archive, reply)
-        }
-        _ => cache_status::NOT_FOUND,
-    }
-}
-
-fn index_handle(memory: &OwnMemory, client: u64, rule: &GameVals, id: u32) -> Option<u64> {
-    let known = memory.ptr(client + rule.index as u64)?;
-    let vtable = memory.ptr(known)?;
-    (-INDEX_SEARCH..INDEX_SEARCH).step_by(8).find_map(|delta| {
-        let field = (client + rule.index as u64).checked_add_signed(delta)?;
-        let handle = memory.ptr(field)?;
-        (memory.ptr(handle)? == vtable && memory.i32(handle + INDEX_ID)? as u32 == id)
-            .then_some(handle)
-    })
-}
-
-fn fnv(hash: &mut u64, bytes: &[u8]) {
-    for &byte in bytes {
-        *hash ^= byte as u64;
-        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-}
-
-const FNV_START: u64 = 0xcbf2_9ce4_8422_2325;
-
-fn put_id(reply: &mut CacheReply, id: u32) -> bool {
-    let at = reply.used as usize;
-    if at + 4 > CACHE_DATA_SIZE {
-        return false;
-    }
-    reply.data[at..at + 4].copy_from_slice(&id.to_le_bytes());
-    reply.used += 4;
-    reply.count += 1;
-    true
-}
-
-fn archive_table(memory: &OwnMemory, table: &CacheTable, index: u64) -> Option<Vec<u8>> {
-    let count = memory
-        .u64(index + table.archive_count as u64)
-        .filter(|&c| c <= MAX_ENTRIES)?;
-    let base = memory.u64(index + table.archives as u64)?;
-    let mut entries = vec![0u8; count as usize * table.archive_stride as usize];
-    (count == 0 || memory.read(base, &mut entries)).then_some(entries)
-}
-
-fn archive_missing(entry: &[u8], table: &CacheTable) -> bool {
-    u32_at(entry, table.archive_missing as usize) == Some(u32::MAX)
-}
-
-fn hash_entry(hash: &mut u64, entry: &[u8]) {
-    fnv(hash, &entry[..ENTRY_HASHED.min(entry.len())]);
-}
-
-fn list_archives(
-    memory: &OwnMemory,
-    table: &CacheTable,
-    index: u64,
-    reply: &mut CacheReply,
-) -> i32 {
-    let Some(entries) = archive_table(memory, table, index) else {
-        return cache_status::NOT_FOUND;
-    };
-    let mut hash = FNV_START;
-    for (id, entry) in entries
-        .chunks_exact(table.archive_stride as usize)
-        .enumerate()
-    {
-        if archive_missing(entry, table) {
-            continue;
-        }
-        fnv(&mut hash, &(id as u32).to_le_bytes());
-        hash_entry(&mut hash, entry);
-        if !put_id(reply, id as u32) {
-            return cache_status::TOO_MANY;
-        }
-    }
-    reply.fingerprint = hash;
-    cache_status::OK
-}
-
-fn list_files(
-    memory: &OwnMemory,
-    table: &CacheTable,
-    index: u64,
-    archive: i32,
-    reply: &mut CacheReply,
-) -> i32 {
-    let Some(count) = memory.u64(index + table.archive_count as u64) else {
-        return cache_status::NOT_FOUND;
-    };
-    if archive < 0 || archive as u64 >= count {
-        return cache_status::NO_ARCHIVE;
-    }
-    let Some(base) = memory.ptr(index + table.archives as u64) else {
-        return cache_status::NOT_FOUND;
-    };
-    let mut entry = vec![0u8; table.archive_stride as usize];
-    if !memory.read(
-        base + archive as u64 * table.archive_stride as u64,
-        &mut entry,
-    ) {
-        return cache_status::NOT_FOUND;
-    }
-    if archive_missing(&entry, table) {
-        return cache_status::NO_ARCHIVE;
-    }
-    let mut hash = FNV_START;
-    hash_entry(&mut hash, &entry);
-    reply.fingerprint = hash;
-    let entry_u64 = |at: u32| {
-        Some(u64::from_le_bytes(
-            entry.get(at as usize..at as usize + 8)?.try_into().ok()?,
-        ))
-    };
-    let (Some(file_count), Some(files)) = (entry_u64(table.file_count), entry_u64(table.files))
-    else {
-        return cache_status::NOT_FOUND;
-    };
-    if file_count > MAX_ENTRIES {
-        return cache_status::NOT_FOUND;
-    }
-    let mut slots = vec![0u8; file_count as usize * table.file_stride as usize];
-    if file_count > 0 && !memory.read(files, &mut slots) {
-        return cache_status::NOT_FOUND;
-    }
-    let at = table.file_missing as usize;
-    for (id, slot) in slots.chunks_exact(table.file_stride as usize).enumerate() {
-        if slot
-            .get(at..at + 8)
-            .is_some_and(|b| b.iter().all(|&b| b == 0xff))
-        {
-            continue;
-        }
-        if !put_id(reply, id as u32) {
-            return cache_status::TOO_MANY;
-        }
-    }
-    cache_status::OK
 }
 
 enum Copied {
@@ -272,40 +105,6 @@ fn copy_each(
         }
     }
     cache_status::OK
-}
-
-unsafe fn read_files(
-    memory: &OwnMemory,
-    reader: Reader,
-    index: u64,
-    request: &CacheRequest,
-    reply: &mut CacheReply,
-) -> i32 {
-    copy_each(reply, request, |[archive, file], room| {
-        let mut out = [0u64; 2];
-        reader(index, &mut out, archive, file, 0);
-        let [control, buffer] = out;
-        let contents = (buffer != 0)
-            .then(|| {
-                memory
-                    .u64(buffer + BUFFER_LENGTH)
-                    .zip(memory.ptr(buffer + BUFFER_DATA))
-            })
-            .flatten();
-        let copied = match contents {
-            Some((length, data)) if length as usize <= room.len() => {
-                if length == 0 || memory.read(data, &mut room[..length as usize]) {
-                    Copied::Bytes(length as usize)
-                } else {
-                    Copied::Missing
-                }
-            }
-            Some(_) => Copied::NoRoom,
-            None => Copied::Missing,
-        };
-        release(control);
-        copied
-    })
 }
 
 unsafe fn draw_icons(

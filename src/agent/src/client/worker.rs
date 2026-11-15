@@ -1,4 +1,4 @@
-use ipc::state::worker_status;
+use ipc::state::{worker_kind, worker_status};
 use windows::Win32::{Foundation::HANDLE, System::Threading::SetEvent};
 
 use super::{
@@ -20,6 +20,39 @@ pub fn on_work(done: HANDLE) {
         reply.length = 0;
         reply.status = match LAYOUT.get() {
             None => worker_status::NOT_FOUND,
+            Some(_) if request.kind == worker_kind::MENU => {
+                match super::menu::captured()
+                    .map(|menu| decode::worker::put(&menu, &mut reply.data))
+                {
+                    Some(Ok(length)) => {
+                        reply.length = length as u32;
+                        worker_status::OK
+                    }
+                    Some(Err(status)) => status,
+                    None => worker_status::NOT_FOUND,
+                }
+            }
+            Some(_) if request.kind == worker_kind::LOCS => {
+                match decode::worker::put(&super::scene::locs(request.args[0]), &mut reply.data) {
+                    Ok(length) => {
+                        reply.length = length as u32;
+                        worker_status::OK
+                    }
+                    Err(status) => status,
+                }
+            }
+            Some(_) if request.kind == worker_kind::MODEL => {
+                match super::model::served(request.args)
+                    .map(|model| decode::worker::put(&model, &mut reply.data))
+                {
+                    Some(Ok(length)) => {
+                        reply.length = length as u32;
+                        worker_status::OK
+                    }
+                    Some(Err(status)) => status,
+                    None => worker_status::NOT_FOUND,
+                }
+            }
             Some(layout) => match decode::worker::serve(
                 &OwnMemory,
                 layout,
