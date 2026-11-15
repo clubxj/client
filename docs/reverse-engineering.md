@@ -104,16 +104,17 @@ Facts about the client's internals that the code does not state, and the steps f
 - The constructor is reached through a `make_shared` thunk from the spot-animation packet handler, either directly or through an allocating wrapper. Each site then appends to the list (`lea rcx,[view+list]` or `add rcx,list`), which gives the list offset.
 - Fields on 2026-10-28:
 
-  | Field | Offset |
-  | --- | --- |
-  | start cycle | `+0x260` |
-  | level | `+0x264` |
-  | x, y, z | `+0x268`, `+0x26c`, `+0x270` |
-  | id | `+0x274` |
-  | view | `+0x278` |
-  | animation | `+0x280` |
+  | Field       | Offset                       |
+  | ----------- | ---------------------------- |
+  | start cycle | `+0x260`                     |
+  | level       | `+0x264`                     |
+  | x, y, z     | `+0x268`, `+0x26c`, `+0x270` |
+  | id          | `+0x274`                     |
+  | view        | `+0x278`                     |
+  | animation   | `+0x280`                     |
 
   z is the ground height minus the height sent, so negative is up.
+
 - Live trigger: Telekinetic Grab on a ground item places id 144 on the item's tile. Teleports and similar spells set the actor's spot animation instead.
 - The agent reads the main view, plus the player's view when the player is on a boat. The overlay draws only the main view.
 
@@ -257,7 +258,7 @@ Facts about the client's internals that the code does not state, and the steps f
 
 ## Definitions on disk (`decode/src/js5.rs`, `decode/src/definitions.rs`, `client/definitions.rs`)
 
-- The client keeps the classic disk cache in `%LOCALAPPDATA%\Jagex\Old School Runescape\data`: `main_file_cache.dat2` (520-byte sectors) and one `main_file_cache.idx<N>` per index, held open while it runs. Configs are index 2: locs are group 6 and varbits group 14, both bzip2 containers split into one file per id. The reference table (index 255, group 2) is protocol 7.
+- The client keeps the classic disk cache in the following files: `main_file_cache.dat2` (520-byte sectors) and one `main_file_cache.idx<N>` per index, held open while it runs. Configs are index 2: locs are group 6 and varbits group 14, both bzip2 containers split into one file per id. The reference table (index 255, group 2) is protocol 7.
 - Loc opcode 96 is the decoration height (one unsigned byte, `def+0x134` in memory).
 - Game vals are index 24: one group per `ipc::state::game_val` kind, one file per id, holding the name.
 - Models are index 7 (group = model id), animation frames index 0 (group = frame id >> 16, file = frame id & 0xffff) and framemaps index 1; NPCs are config group 9 and sequences group 12. Model files come in four formats, picked by the last two bytes (`FF FD`, `FF FE`, `FF FF`, otherwise the original).
