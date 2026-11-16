@@ -11,6 +11,7 @@ mod item_icon;
 mod item_setter;
 mod items;
 mod local_projection;
+mod login_provider;
 mod menu;
 mod minimap;
 mod model;
@@ -34,6 +35,7 @@ pub use ground_items::{find_ground_items, find_item_pile};
 pub use item_icon::find_item_icon;
 pub use item_setter::find_item_setter;
 pub use local_projection::find_local_projection;
+pub use login_provider::find_login_provider;
 pub use menu::{
     find_menu, find_menu_click, find_menu_layout, find_menu_open, find_selection, MenuLayout,
 };

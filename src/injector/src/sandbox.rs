@@ -2427,7 +2427,12 @@ mod tests {
              login.y = 100\n\
              b = TitleScreen.button(login, 'play_now')\n\
              print(b.y1, b.y2)\n\
-             print(next(TitleScreen.buttons({ screen = 1000, panel_x = 0, box_x = 0, center_x = 0, y = 0 })))",
+             print(next(TitleScreen.buttons({ screen = 1000, panel_x = 0, box_x = 0, center_x = 0, y = 0 })))\n\
+             login = { screen = TitleScreen.WELCOME, panel_x = 327, box_x = 529, center_x = 709, y = 171 }\n\
+             print(TitleScreen.button(login, 'existing_user') ~= nil, TitleScreen.button(login, 'sign_in_with_steam'))\n\
+             login.steam = true\n\
+             b = TitleScreen.button(login, 'sign_in_with_steam')\n\
+             print(TitleScreen.button(login, 'existing_user'), b.x1, b.y1, b.x2, b.y2)",
         );
         assert_eq!(
             lines,
@@ -2436,7 +2441,9 @@ mod tests {
                 "nil\tplay now",
                 "591\t209\t809\t277",
                 "138\t206",
-                "nil"
+                "nil",
+                "true\tnil",
+                "nil\t567\t229\t852\t270"
             ]
         );
         assert!(result.is_ok(), "{result:?}");

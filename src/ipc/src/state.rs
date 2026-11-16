@@ -36,6 +36,7 @@ pub mod part {
     pub const MENU_CLICK: u64 = 1 << 21;
     pub const MENU_OPEN: u64 = 1 << 22;
     pub const SELECTION: u64 = 1 << 23;
+    pub const LOGIN_PROVIDER: u64 = 1 << 24;
 }
 
 pub mod varp {
@@ -127,6 +128,9 @@ pub struct LoginLayout {
     pub box_x: u32,
     pub center_x: u32,
     pub y: u32,
+    pub provider_holder: u32,
+    pub provider: u32,
+    pub steam_provider_vtable: u32,
 }
 
 #[repr(C)]
@@ -1061,11 +1065,11 @@ mod tests {
         assert_eq!(offset_of!(LayoutMemory, layout), 8);
         assert_eq!(size_of::<PlayerLayout>(), 6 * 4);
         assert_eq!(size_of::<SkillsLayout>(), 4 * 4);
-        assert_eq!(size_of::<LoginLayout>(), 5 * 4);
+        assert_eq!(size_of::<LoginLayout>(), 8 * 4);
         assert_eq!(size_of::<InterfaceLayout>(), 8 + 22 * 4);
         assert_eq!(size_of::<WorldLayout>(), 128);
         assert_eq!(size_of::<WorldSelectLayout>(), 14 * 4);
-        assert_eq!(offset_of!(Layout, interfaces), 16 + 16 + 24 + 16 + 20 + 4);
+        assert_eq!(offset_of!(Layout, interfaces), 16 + 16 + 24 + 16 + 32);
         assert_eq!(size_of::<NameRequest>(), 8 + 48);
         assert_eq!(size_of::<NameStatus>(), 8 + 24);
         assert_eq!(size_of::<TotalXpRequest>(), 16);
@@ -1082,7 +1086,7 @@ mod tests {
         assert_eq!(size_of::<MenuStateLayout>(), 22 * 4);
         assert_eq!(
             offset_of!(LayoutMemory, request_sequence),
-            8 + 96 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 88
+            8 + 104 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 88
         );
         let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 28;
         assert_eq!(size_of::<MenuEntryInfo>(), entry);

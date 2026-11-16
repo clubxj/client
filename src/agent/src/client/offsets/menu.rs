@@ -807,7 +807,7 @@ fn find_margin(pe: &Pe, base: u64, check: u32, field: u32) -> Result<i32, ScanEr
     one(found)
 }
 
-fn method_at(pe: &Pe, base: u64, at: usize) -> Option<u64> {
+pub(super) fn method_at(pe: &Pe, base: u64, at: usize) -> Option<u64> {
     u64_at(pe.image, at)?.checked_sub(base)
 }
 

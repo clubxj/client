@@ -73,6 +73,7 @@ pub struct Login {
     pub center_x: i32,
     pub y: i32,
     pub scale: f32,
+    pub steam: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

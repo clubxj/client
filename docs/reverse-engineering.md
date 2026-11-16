@@ -39,6 +39,14 @@ Facts about the client's internals that the code does not state, and the steps f
 
 - The client drops posted `WM_KEYDOWN`s while `GetFocus` isn't its own window. Mouse input still works. The agent's `GetFocus` import hook answers with the render view, which fixes this. Swallowing `WM_KILLFOCUS` or posting `WM_SETFOCUS` does not help. Where the client makes the check wasn't traced.
 
+## Login provider (`offsets/login_provider.rs`)
+
+- The welcome screen (login screen 0) asks a sign-in provider which button to draw. With no provider, or one whose checks are all false, it draws New User and Existing User. Otherwise it draws one wide button: Game Center (vtable `+0x70`), Google (`+0x78`) or Steam (`+0x80`), at `y + 58`, 20 px higher than the usual buttons. Game Center and Google also get a "Sign in with Email / Username" link; Steam doesn't.
+- Chain: client vtable slot 8 lazily makes a `shared_ptr` at `client+0x68` and returns its address, so the holder object is `[client+0x70]`. Holder slot `+0x78` is the leaf getter `mov rax,[rcx+0x18]`, the provider. The holder's factory (slot 7) builds the Steam provider only when its Steam object (`holder+0x50`) has its initialized byte set: that byte is the result of `SteamAPI_Init`, which the client calls through a delay import after `SteamAPI_RestartAppIfNecessary`. Otherwise it builds a default provider whose checks are all false.
+- The kind checks are per-class constants (shared `return true` and `return false` stubs), so the kind is the provider's class. The agent compares its vtable with the Steam provider's.
+- Launching the client with Steam's environment variables (`SteamEnv`, `SteamClientLaunch`, `SteamAppId`, all 35 of them) doesn't change the screen; only a working Steam API does. The client never reads those variables itself.
+- Anchors: the label is a global short string filled from the literal "Sign in with Steam" by a static initializer. Older builds (2026-10) copy it inline, reading its length byte first, so the rule anchors on the first reference into the string and takes the last provider method call before it as the Steam check.
+
 ## Menu (`offsets/menu.rs`)
 
 - The menu object lives on the main thread's stack. The selected spell (Java's `widgetSelected` group) is a sub-object of it, found by `find_selection` through the native deselect and select functions.

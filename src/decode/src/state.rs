@@ -158,7 +158,17 @@ fn root_interface_in(
     memory.i32(client + layout.interfaces.root as u64)
 }
 
-fn login(memory: &impl Memory, layout: &Layout, scale: f32) -> Option<Login> {
+fn steam_provider(memory: &impl Memory, layout: &Layout, client: u64) -> Option<bool> {
+    let l = &layout.login;
+    let holder = memory.ptr(client + l.provider_holder as u64)?;
+    let provider = memory.u64(holder + l.provider as u64)?;
+    if provider == 0 {
+        return Some(false);
+    }
+    Some(memory.u64(provider)? == layout.module_base + l.steam_provider_vtable as u64)
+}
+
+fn login(memory: &impl Memory, layout: &Layout, client: u64, scale: f32) -> Option<Login> {
     let l = &layout.login;
     let global = |rva: u32| memory.i32(layout.module_base + rva as u64);
     Some(Login {
@@ -168,6 +178,10 @@ fn login(memory: &impl Memory, layout: &Layout, scale: f32) -> Option<Login> {
         center_x: global(l.center_x)?,
         y: global(l.y)?,
         scale,
+        steam: layout
+            .has(part::LOGIN_PROVIDER)
+            .then(|| steam_provider(memory, layout, client))
+            .flatten(),
     })
 }
 
@@ -265,7 +279,7 @@ pub fn game_state(memory: &impl Memory, layout: &Layout) -> GameState {
             .then(|| memory.i32(client + layout.tick_count as u64))
             .flatten(),
         login: (on_login_screen && layout.has(part::LOGIN))
-            .then(|| login(memory, layout, scale.unwrap_or(1.0)))
+            .then(|| login(memory, layout, client, scale.unwrap_or(1.0)))
             .flatten(),
         root_interface: root,
         ui_scale: scale,
@@ -323,6 +337,7 @@ mod tests {
                 | part::SKILLS
                 | part::VARPS
                 | part::LOGIN
+                | part::LOGIN_PROVIDER
                 | part::INTERFACES
                 | part::WORLD
                 | part::CAMERA
@@ -354,6 +369,9 @@ mod tests {
                 box_x: 0x154fc64,
                 center_x: 0xe98bdc,
                 y: 0xcfb094,
+                provider_holder: 0x70,
+                provider: 0x18,
+                steam_provider_vtable: 0xb92f18,
             },
             interfaces: InterfaceLayout {
                 canvas: 0x90,
@@ -561,6 +579,27 @@ mod tests {
     }
 
     #[test]
+    fn tells_whether_the_login_screen_signs_in_with_steam() {
+        const HOLDER: u64 = 0x60_0000;
+        const PROVIDER: u64 = 0x61_0000;
+        let l = layout();
+        let mut m = logged_in();
+        m.put_i32(CLIENT + l.game_state as u64, states::LOGIN_SCREEN);
+        m.put_u64(CLIENT + 0x70, HOLDER);
+        let steam = |m: &Fake| game_state(m, &l).login.and_then(|login| login.steam);
+
+        m.put_u64(HOLDER + 0x18, PROVIDER);
+        m.put_u64(PROVIDER, BASE + 0xb92f18);
+        assert_eq!(steam(&m), Some(true));
+
+        m.put_u64(PROVIDER, BASE + 0xb92e00);
+        assert_eq!(steam(&m), Some(false));
+
+        m.put_u64(HOLDER + 0x18, 0);
+        assert_eq!(steam(&m), Some(false));
+    }
+
+    #[test]
     fn hides_stale_values_on_the_login_screen() {
         let l = layout();
         let mut m = logged_in();
@@ -586,7 +625,8 @@ mod tests {
                 box_x: 520,
                 center_x: 700,
                 y: 171,
-                scale: 1.0
+                scale: 1.0,
+                steam: None
             })
         );
         assert_eq!(

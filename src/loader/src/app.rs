@@ -4263,8 +4263,17 @@ impl LoaderApp {
             },
             (Read::Login, ..) => match state.login {
                 Some(l) => format!(
-                    "Login screen {}: panel x {}, box x {}, center x {}, y {}.",
-                    l.screen, l.panel_x, l.box_x, l.center_x, l.y
+                    "Login screen {}: panel x {}, box x {}, center x {}, y {}, Steam sign-in {}.",
+                    l.screen,
+                    l.panel_x,
+                    l.box_x,
+                    l.center_x,
+                    l.y,
+                    match l.steam {
+                        Some(true) => "yes",
+                        Some(false) => "no",
+                        None => "unknown",
+                    }
                 ),
                 None => "No login layout (not on the login screen, or the offsets weren't found)."
                     .into(),
