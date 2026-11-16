@@ -10,7 +10,9 @@ pub struct Menu {
     pub ids: u32,
     pub priority: u32,
     pub kind: u32,
+    pub category: u32,
     pub cancel: u32,
+    pub rank: u32,
 }
 
 const EXAMINE_PRIORITY: u64 = 0x7fff_fffe;
@@ -18,7 +20,22 @@ const DEFAULT_PRIORITY: u64 = 0x7fff_ffff;
 const WALK_KIND_COMPARE: u64 = 7;
 const INLINE_STRING: u32 = 0x28;
 
-fn ranker(pe: &Pe) -> Result<(u32, u32, u32), ScanError> {
+struct Ranker {
+    function: u32,
+    cancel: u32,
+    priority: u32,
+    kind: u32,
+    category: u32,
+}
+
+fn byte_load(i: &Instruction) -> Option<u32> {
+    (i.mnemonic() == Mnemonic::Movzx
+        && i.op1_kind() == OpKind::Memory
+        && i.memory_size() == iced_x86::MemorySize::UInt8)
+        .then(|| i.memory_displacement64() as u32)
+}
+
+fn ranker(pe: &Pe) -> Result<Ranker, ScanError> {
     let mut found = Vec::new();
     for &(begin, end) in &pe.functions {
         let head = function_head(pe, begin, end, 24);
@@ -42,21 +59,198 @@ fn ranker(pe: &Pe) -> Result<(u32, u32, u32), ScanError> {
         let (Some(cancel), Some(priority)) = (cancel, priority) else {
             continue;
         };
-        let kind = before_padding(decode_at(pe, begin, 200))
-            .iter()
-            .find_map(|i| {
-                (i.mnemonic() == Mnemonic::Cmp
-                    && i.op0_kind() == OpKind::Memory
-                    && i.memory_size() == iced_x86::MemorySize::UInt8
-                    && i.op1_kind() == OpKind::Immediate8
-                    && i.immediate(1) == WALK_KIND_COMPARE)
-                    .then(|| i.memory_displacement64() as u32)
-            });
-        if let Some(kind) = kind {
-            found.push((cancel, priority, kind));
+        let body = before_padding(decode_at(pe, begin, 200));
+        let kind = body.iter().find_map(|i| {
+            (i.mnemonic() == Mnemonic::Cmp
+                && i.op0_kind() == OpKind::Memory
+                && i.memory_size() == iced_x86::MemorySize::UInt8
+                && i.op1_kind() == OpKind::Immediate8
+                && i.immediate(1) == WALK_KIND_COMPARE)
+                .then(|| i.memory_displacement64() as u32)
+        });
+        let category = body.iter().find_map(byte_load);
+        if let (Some(kind), Some(category)) = (kind, category) {
+            found.push((begin, cancel, priority, kind, category));
         }
     }
-    one(found)
+    let (function, cancel, priority, kind, category) = one(found)?;
+    Ok(Ranker {
+        function,
+        cancel,
+        priority,
+        kind,
+        category,
+    })
+}
+
+fn rip_lea_sites(pe: &Pe, target: u32) -> Vec<u32> {
+    pe.image
+        .windows(7)
+        .enumerate()
+        .filter(|(at, w)| {
+            matches!(w[0], 0x48 | 0x4c)
+                && w[1] == 0x8d
+                && w[2] & 0xc7 == 0x05
+                && (*at as i64 + 7 + i64::from(i32::from_le_bytes([w[3], w[4], w[5], w[6]])))
+                    == i64::from(target)
+        })
+        .map(|(at, _)| at as u32)
+        .collect()
+}
+
+fn later_key_comparator(pe: &Pe, function: u32) -> Option<u32> {
+    let instrs = decode_at(pe, function, 4);
+    let [load, cmp, set, ret] = instrs.as_slice() else {
+        return None;
+    };
+    let field = load_from(load, Register::R8)?;
+    (load.memory_size() == iced_x86::MemorySize::UInt64
+        && cmp.mnemonic() == Mnemonic::Cmp
+        && cmp.op0_kind() == OpKind::Memory
+        && cmp.memory_base() == Register::RDX
+        && cmp.memory_displacement64() as u32 == field
+        && cmp.memory_size() == iced_x86::MemorySize::UInt64
+        && cmp.op1_kind() == OpKind::Register
+        && cmp.op1_register() == load.op0_register()
+        && set.mnemonic() == Mnemonic::Setg
+        && is_ret(ret))
+    .then_some(field)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MenuSettings {
+    pub player_attack: u32,
+    pub npc_attack: u32,
+    pub follower: u32,
+    pub team: u32,
+    pub flag: u32,
+    pub npc_level: u32,
+    pub npc_follower: u32,
+    pub player_level: u32,
+    pub player_team: u32,
+}
+
+const NPC_KIND: u64 = 2;
+const PLAYER_KIND: u64 = 6;
+
+fn kind_compare(instrs: &[Instruction], kind: u32) -> Option<u64> {
+    instrs.iter().find_map(|i| {
+        (i.mnemonic() == Mnemonic::Cmp
+            && i.op0_kind() == OpKind::Memory
+            && i.memory_base() == Register::RDX
+            && i.memory_displacement64() as u32 == kind
+            && i.memory_size() == iced_x86::MemorySize::UInt8
+            && i.op1_kind() == OpKind::Immediate8)
+            .then(|| i.immediate(1))
+    })
+}
+
+fn byte_read(instrs: &[Instruction], base: Register) -> Option<u32> {
+    instrs
+        .iter()
+        .find(|i| i.memory_base() == base && byte_load(i).is_some())
+        .and_then(byte_load)
+}
+
+fn byte_zero_compare(instrs: &[Instruction], base: Register) -> Option<u32> {
+    instrs.iter().find_map(|i| {
+        (i.mnemonic() == Mnemonic::Cmp
+            && i.op0_kind() == OpKind::Memory
+            && i.memory_base() == base
+            && i.memory_size() == iced_x86::MemorySize::UInt8
+            && i.op1_kind() == OpKind::Immediate8
+            && i.immediate(1) == 0)
+            .then(|| i.memory_displacement64() as u32)
+    })
+}
+
+fn dword_register_compare(instrs: &[Instruction], base: Register) -> Option<u32> {
+    instrs.iter().find_map(|i| {
+        (i.mnemonic() == Mnemonic::Cmp
+            && i.op0_kind() == OpKind::Memory
+            && i.memory_base() == base
+            && i.memory_size() == iced_x86::MemorySize::UInt32
+            && i.op1_kind() == OpKind::Register)
+            .then(|| i.memory_displacement64() as u32)
+    })
+}
+
+fn player_getter_field(pe: &Pe, getter: u32) -> Option<u32> {
+    let instrs = decode_at(pe, getter, 6);
+    calls(&instrs).next()?;
+    instrs.iter().find_map(|i| {
+        (load_from(i, Register::RAX).is_some() && i.memory_size() == iced_x86::MemorySize::UInt32)
+            .then(|| i.memory_displacement64() as u32)
+    })
+}
+
+fn getter_fields(pe: &Pe, instrs: &[Instruction]) -> Vec<u32> {
+    calls(instrs)
+        .filter_map(|(_, target)| player_getter_field(pe, target))
+        .collect()
+}
+
+pub fn find_menu_settings(pe: &Pe, menu: &Menu) -> Result<MenuSettings, ScanError> {
+    let rank = before_padding(decode_at(pe, menu.rank, 200));
+    let (mut follower, mut npc, mut player) = (Vec::new(), Vec::new(), Vec::new());
+    for (_, target) in calls(&rank) {
+        let body = whole_function(pe, target, 0x300);
+        match kind_compare(&body, menu.kind) {
+            Some(NPC_KIND) => {
+                if let Some(setting) = byte_read(&body, Register::RCX) {
+                    if let (Some(flag), Some(level), [player_level]) = (
+                        byte_read(&body, Register::RDX),
+                        dword_register_compare(&body, Register::RCX),
+                        getter_fields(pe, &body).as_slice(),
+                    ) {
+                        npc.push((setting, flag, level, *player_level));
+                    }
+                } else if let (Some(setting), Some(flag)) = (
+                    byte_zero_compare(&body, Register::RCX),
+                    byte_read(&body, Register::RAX),
+                ) {
+                    follower.push((setting, flag));
+                }
+            }
+            Some(PLAYER_KIND) => {
+                if let (Some(setting), Some(team), Some(flag), [player_team, player_level]) = (
+                    byte_read(&body, Register::RCX),
+                    byte_read(&body, Register::RDX),
+                    byte_read(&body, Register::RBX),
+                    getter_fields(pe, &body).as_slice(),
+                ) {
+                    player.push((setting, team, flag, *player_team, *player_level));
+                }
+            }
+            _ => {}
+        }
+    }
+    let (follower, npc_follower) = one(follower)?;
+    let (npc_attack, npc_flag, npc_level, level) = one(npc)?;
+    let (player_attack, team, flag, player_team, player_level) = one(player)?;
+    if npc_flag != flag || level != player_level {
+        return Err(ScanError::NotFound);
+    }
+    Ok(MenuSettings {
+        player_attack,
+        npc_attack,
+        follower,
+        team,
+        flag,
+        npc_level,
+        npc_follower,
+        player_level,
+        player_team,
+    })
+}
+
+pub fn find_menu_order(pe: &Pe, menu: &Menu) -> Result<u32, ScanError> {
+    let (begin, end) = one(functions_containing(pe, rip_lea_sites(pe, menu.rank)))?;
+    one(function_instrs(pe, begin, end)
+        .iter()
+        .filter_map(rip_lea)
+        .filter_map(|target| later_key_comparator(pe, target))
+        .collect())
 }
 
 struct EntryLayout {
@@ -899,7 +1093,8 @@ pub fn find_menu_layout(pe: &Pe, click: &MenuClick) -> Result<MenuLayout, ScanEr
 }
 
 pub fn find_menu(pe: &Pe) -> Result<Menu, ScanError> {
-    let (cancel, priority, kind) = ranker(pe)?;
+    let ranker = ranker(pe)?;
+    let priority = ranker.priority;
     let entry = entry_constructor(pe, priority)?;
     let (entry_size, inner) = entry_size(pe, entry.function)?;
     if entry_size == 0 {
@@ -918,7 +1113,9 @@ pub fn find_menu(pe: &Pe) -> Result<Menu, ScanError> {
         option: entry.option,
         ids: entry.ids,
         priority,
-        kind,
-        cancel,
+        kind: ranker.kind,
+        category: ranker.category,
+        cancel: ranker.cancel,
+        rank: ranker.function,
     })
 }

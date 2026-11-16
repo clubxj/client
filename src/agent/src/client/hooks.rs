@@ -47,7 +47,7 @@ use super::offsets::{
     find_decoration_layout, find_destination, find_game_object_layout, find_game_state,
     find_ground_items, find_instance_flag, find_interfaces, find_item_containers, find_item_icon,
     find_item_pile, find_item_setter, find_loc_configs, find_local_player, find_local_projection,
-    find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout,
+    find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout, find_menu_order, find_menu_settings,
     find_menu_open, find_minimap, find_model_faces, find_model_vertices, find_npc_head_icons,
     find_npc_model, find_packet_layouts, find_packets, find_projectiles, find_projection,
     find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
@@ -798,7 +798,24 @@ unsafe fn find_offsets() {
         layout.menu.ids = rule.ids;
         layout.menu.priority = rule.priority;
         layout.menu.kind = rule.kind;
+        layout.menu.category = rule.category;
         layout.menu.cancel = rule.cancel;
+        if let Some(key) = found("Menu order", find_menu_order(pe, &rule)) {
+            layout.found |= part::MENU_ORDER;
+            layout.menu.order_key = key;
+        }
+        if let Some(settings) = found("Menu settings", find_menu_settings(pe, &rule)) {
+            layout.found |= part::MENU_SETTINGS;
+            layout.menu.player_attack = settings.player_attack;
+            layout.menu.npc_attack = settings.npc_attack;
+            layout.menu.follower = settings.follower;
+            layout.menu.team = settings.team;
+            layout.menu.flag = settings.flag;
+            layout.menu.npc_level = settings.npc_level;
+            layout.menu.npc_follower = settings.npc_follower;
+            layout.menu.player_level = settings.player_level;
+            layout.menu.player_team = settings.player_team;
+        }
         if let Some(click) = found("Menu click", find_menu_click(pe, &rule)) {
             layout.found |= part::MENU_CLICK;
             layout.menu.minimenu_vtable = click.minimenu_vtable;

@@ -37,6 +37,7 @@ pub struct Settings {
     pub transports: injector::transports::Settings,
     pub include_system_info: bool,
     pub log_lines: usize,
+    pub script_debugging: bool,
 }
 
 impl Default for Settings {
@@ -53,6 +54,7 @@ impl Default for Settings {
             transports: Default::default(),
             include_system_info: true,
             log_lines: *LOG_LINES.start(),
+            script_debugging: false,
         }
     }
 }

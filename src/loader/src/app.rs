@@ -689,7 +689,7 @@ enum ClientAction {
     Console,
 }
 
-const DEV_TOGGLES: [&str; 23] = [
+const DEV_TOGGLES: [&str; 24] = [
     "Players",
     "NPCs",
     "Ground Items",
@@ -708,6 +708,7 @@ const DEV_TOGGLES: [&str; 23] = [
     "Loading Lines",
     "Line Of Sight",
     "Valid Movement",
+    "Player Path",
     "Movement Flags",
     "Interacting",
     "Sound Effects",
@@ -758,6 +759,7 @@ const DEV_LAYERS: [Option<&str>; DEV_TOGGLES.len()] = [
     Some("loading-lines"),
     Some("line-of-sight"),
     Some("valid-movement"),
+    Some("player-path"),
     Some("movement-flags"),
     Some("interacting"),
     None,
@@ -6666,7 +6668,12 @@ impl LoaderApp {
         });
         ui.separator();
         crate::theme::tab_content(ui, |ui| match self.dev_tab {
-            DevTab::Tools => self.dev_tools_ui(ui),
+            DevTab::Tools => {
+                egui::ScrollArea::vertical()
+                    .id_salt("dev_tools")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.dev_tools_ui(ui));
+            }
             DevTab::Inspectors => self.inspectors_ui(ui),
         });
     }
@@ -6736,6 +6743,23 @@ impl LoaderApp {
                     });
                 }
             });
+        }
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(12.0);
+        ui.heading("Scripts");
+        ui.add_space(4.0);
+        if ui
+            .checkbox(&mut self.settings.script_debugging, "Script debugging")
+            .on_hover_text("Scripts and the lib draw what they plan, such as the route of each walk click.")
+            .changed()
+        {
+            let on = self.settings.script_debugging;
+            for run in self.runs.iter_mut().filter(|r| r.is_running()) {
+                if let Err(error) = run.send(|s| s.push_debugging(on)) {
+                    run.error(error);
+                }
+            }
         }
     }
 

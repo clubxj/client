@@ -37,7 +37,8 @@ pub use item_setter::find_item_setter;
 pub use local_projection::find_local_projection;
 pub use login_provider::find_login_provider;
 pub use menu::{
-    find_menu, find_menu_click, find_menu_layout, find_menu_open, find_selection, MenuLayout,
+    find_menu, find_menu_click, find_menu_layout, find_menu_open, find_menu_order,
+    find_menu_settings, find_selection, MenuLayout,
 };
 pub use minimap::{find_destination, find_minimap};
 pub use model::{
@@ -1765,10 +1766,12 @@ mod tests {
                 menu.ids,
                 menu.priority,
                 menu.kind,
+                menu.category,
                 menu.cancel
             ),
-            (0x150, 0x50, 0xb8, 0x128, 0x134, 0x146, 0x14d)
+            (0x150, 0x50, 0xb8, 0x128, 0x134, 0x146, 0x147, 0x14d)
         );
+        assert_eq!(find_menu_order(&pe, &menu), Ok(0x120));
         let click = find_menu_click(&pe, &menu).expect("menu click not found");
         println!("{click:x?}");
         assert_eq!(
@@ -2045,6 +2048,37 @@ mod tests {
     }
 
     #[test]
+    fn finds_menu_order_in_archived_builds() {
+        for_each_archived_build(|build, pe| {
+            let menu = found("menu", build, find_menu(pe));
+            let key = found("menu order", build, find_menu_order(pe, &menu));
+            assert_eq!(
+                (menu.category, key),
+                (menu.kind + 1, menu.ids - 8),
+                "{}",
+                build.display()
+            );
+            let settings = found("menu settings", build, find_menu_settings(pe, &menu));
+            assert_eq!(
+                settings,
+                menu::MenuSettings {
+                    player_attack: 0x278,
+                    npc_attack: 0x279,
+                    follower: 0x27a,
+                    team: 0x148,
+                    flag: 0x149,
+                    npc_level: 0x11c,
+                    npc_follower: 0x15b,
+                    player_level: 0x780,
+                    player_team: 0x790,
+                },
+                "{}",
+                build.display()
+            );
+        });
+    }
+
+    #[test]
     fn finds_instance_flag_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             found("instance flag", build, find_instance_flag(pe));
@@ -2171,6 +2205,7 @@ mod tests {
             found("component fields", build, find_component_fields(pe));
             let projection = found("projection", build, find_projection(pe, player.client));
             let menu = found("menu", build, find_menu(pe));
+            found("menu order", build, find_menu_order(pe, &menu));
             let click = found("menu click", build, find_menu_click(pe, &menu));
             found("menu layout", build, find_menu_layout(pe, &click));
             found("selection", build, find_selection(pe, &menu));

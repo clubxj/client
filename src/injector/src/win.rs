@@ -3861,7 +3861,7 @@ const UP_TEXT_HEIGHT: f32 = 20.0;
 const TEXT_MARGIN: i32 = 10;
 const TEXT_PADDING: i32 = 4;
 const TEXT_BACKGROUND: Rgba = rgba(64, 64, 64, 150);
-const LAYERS: [&str; 22] = [
+const LAYERS: [&str; 23] = [
     "players",
     "world-entities",
     "interacting",
@@ -3880,6 +3880,7 @@ const LAYERS: [&str; 22] = [
     "loading-lines",
     "line-of-sight",
     "valid-movement",
+    "player-path",
     "location",
     "camera",
     "movement-flags",
@@ -3907,6 +3908,10 @@ const MAP_SQUARE_COLOR: Rgba = rgba(0, 255, 0, 255);
 const LOCAL_VALID_MOVEMENT_COLOR: Rgba = rgba(141, 220, 26, 255);
 const LINE_OF_SIGHT_COLOR: Rgba = rgba(204, 42, 219, 255);
 const HOVER_COLOR: Rgba = rgba(0, 200, 83, 255);
+const PLAYER_PATH_COLOR: Rgba = rgba(255, 214, 0, 255);
+const PLAYER_PATH_JUMPED_COLOR: Rgba = rgba(255, 214, 0, 70);
+const PLAYER_PATH_END_COLOR: Rgba = rgba(0, 230, 118, 255);
+const PLAYER_PATH_SHORT_COLOR: Rgba = rgba(255, 23, 68, 255);
 const GRID_COLOR: Rgba = rgba(255, 255, 255, 90);
 
 static LABEL_FONT: Mutex<Option<Arc<crate::font::Font>>> = Mutex::new(None);
@@ -4574,6 +4579,42 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     && crate::pathfinding::can_step(&world, plane, here.x, here.y, dx, dy)
                 {
                     plan.path(&tile_corners(tile), LOCAL_VALID_MOVEMENT_COLOR, true, false);
+                }
+            }
+        }
+    }
+
+    if on("player-path") {
+        let here = here()?;
+        let (origin_x, origin_y) = scene_origin(&here);
+        if let Some((tile, _)) = hovered_tile(pid, scene_tile(&here))? {
+            let to = [origin_x + tile[0], origin_y + tile[1]];
+            if let Ok(route) = scene_route(pid, [here.x, here.y], to, None) {
+                let running = varp_value(pid, ipc::state::varp::RUN)?.is_some_and(|v| v == 1);
+                let last = route.tiles.len().saturating_sub(1);
+                let jumped = |i: usize| i < last && running && i % 2 == 1;
+                let mut tiles: Vec<(usize, i32, i32)> = route
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .map(|(i, &(x, y))| (i, x, y))
+                    .collect();
+                tiles.sort_by_key(|&(i, _, _)| !jumped(i));
+                for (i, x, y) in tiles {
+                    let color = if jumped(i) {
+                        PLAYER_PATH_JUMPED_COLOR
+                    } else if i < last {
+                        PLAYER_PATH_COLOR
+                    } else if route.reached {
+                        PLAYER_PATH_END_COLOR
+                    } else {
+                        PLAYER_PATH_SHORT_COLOR
+                    };
+                    let tile = [x - origin_x, y - origin_y];
+                    if in_scene(tile) {
+                        plan.path(&tile_corners(tile), color, true, false);
+                    }
                 }
             }
         }

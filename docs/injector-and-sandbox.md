@@ -60,10 +60,10 @@ Library and CLI for everything outside the client: find clients, inject the agen
 
 Usage: `injector run [--script <path> [--lib <dir>]] [pid]`. Lines are `\u{1e}`-prefixed (constants in `form.rs`, `http.rs`, `prices.rs`, `antiban.rs`, `transports.rs`); stdout entries end with `form::ENTRY_END` (`\0`).
 
-- Header lines before the script, any order: `PINS` (enables PIN and lamp lookups), `HTTP` (enables the HTTP handler; otherwise "HTTP requests aren't available"), `ANTIBAN`, `PRICES <url>`, `TRANSPORT_SETTINGS`, `TRANSPORTS`, `SETTINGS <json>` (the values `settings()` returns), `RESUME <break plan>` (the previous queue entry's last `BREAKS` plan, read once by `antiban_resume()`).
+- Header lines before the script, any order: `PINS` (enables PIN and lamp lookups), `HTTP` (enables the HTTP handler; otherwise "HTTP requests aren't available"), `ANTIBAN`, `PRICES <url>`, `TRANSPORT_SETTINGS`, `DEBUG <0|1>`, `TRANSPORTS`, `SETTINGS <json>` (the values `settings()` returns), `RESUME <break plan>` (the previous queue entry's last `BREAKS` plan, read once by `antiban_resume()`).
 - Settings are fixed before the script starts: there is no form request. Without a `SETTINGS` line, `run` uses the defaults of `manifest.json` beside `--script` (an empty table without one); an invalid manifest stops the run before the script starts.
 - Then optional `MODULES <len>` + JSON `{path: source}` block (the decrypted store files, served from memory relative to the script dir), then `SCRIPT <len>` + source. Without `SCRIPT`, all of stdin is the source and nothing after it is read (hand runs).
-- After the script, a stdin thread applies `ANTIBAN`/`PRICES`/`TRANSPORT_SETTINGS`, `SKIP`, `UPDATE` (live settings changes, `form_update()`), `FINISH` (the queue wants the script to wrap up: `finish_requested()` turns true and stays true); any other line is the reply to the pending request (`ask`).
+- After the script, a stdin thread applies `ANTIBAN`/`PRICES`/`TRANSPORT_SETTINGS`/`DEBUG` (the dev tab's Script debugging, read by `script_debugging()`), `SKIP`, `UPDATE` (live settings changes, `form_update()`), `FINISH` (the queue wants the script to wrap up: `finish_requested()` turns true and stays true); any other line is the reply to the pending request (`ask`).
 - `report_exit("done" | "blocked", reason?)` writes an `EXIT` line before the script returns. The loader treats a clean exit without one as done, and an error or a kill as failed.
 
 ## `require`

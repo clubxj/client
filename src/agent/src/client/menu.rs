@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use decode::menu::{sorted, Entry, Geometry, MenuObject, Opened, Submenu, MAX_ENTRIES};
+use decode::menu::{Entry, Geometry, MenuObject, Opened, Submenu, MAX_ENTRIES};
 use ipc::{read::Memory, state::MenuEntryInfo};
 
 use super::{
@@ -174,17 +174,19 @@ fn read_submenus(memory: &OwnMemory, menu: MenuObject, minimenu: u64) -> Vec<Sub
 
 fn opened(memory: &OwnMemory) -> Option<Opened> {
     let menu = current(memory)?;
-    let raw = menu.raw_entries(memory)?;
+    let state = LAYOUT.get()?;
     let rows = LAYOUT_RULE.get().zip(menu.minimenu(memory));
     let Some((layout, minimenu)) = rows else {
         return Some(Opened {
-            entries: entries(&sorted(raw)),
+            entries: entries(&menu.sorted_entries(memory, state)?),
             geometry: None,
             submenus: Vec::new(),
         });
     };
-    let rows = read_rows(memory, menu, minimenu + layout.rows as u64, MAX_ENTRIES)
-        .unwrap_or_else(|| sorted(raw));
+    let rows = match read_rows(memory, menu, minimenu + layout.rows as u64, MAX_ENTRIES) {
+        Some(rows) => rows,
+        None => menu.sorted_entries(memory, state)?,
+    };
     let geometry = read_geometry(menu, minimenu, &[]);
     Some(Opened {
         entries: entries(&rows),
@@ -227,9 +229,9 @@ pub fn snapshot() -> Option<Snapshot> {
     }
     let memory = OwnMemory;
     let menu = current(&memory)?;
-    if menu.open(&memory, LAYOUT.get()?) == Some(true) {
+    let layout = LAYOUT.get()?;
+    if menu.open(&memory, layout) == Some(true) {
         return Some(Snapshot::Open);
     }
-    menu.raw_entries(&memory)
-        .map(|raw| Snapshot::Closed(sorted(raw)))
+    menu.sorted_entries(&memory, layout).map(Snapshot::Closed)
 }

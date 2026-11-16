@@ -20,6 +20,7 @@ pub struct MenuObject {
     pub module_base: u64,
     pub entry_vtable: u64,
     pub rules: MenuStateLayout,
+    pub ordered: bool,
 }
 
 impl MenuObject {
@@ -33,6 +34,7 @@ impl MenuObject {
             module_base: layout.module_base,
             entry_vtable: layout.module_base + layout.menu.entry_vtable as u64,
             rules: layout.menu,
+            ordered: layout.has(part::MENU_ORDER),
         })
     }
 
@@ -95,15 +97,99 @@ impl MenuObject {
         info.x = memory.i32(ids + TILE_X)?;
         info.y = memory.i32(ids + TILE_Y)?;
         info.priority = memory.i32(e + r.priority as u64)?;
-        let mut bytes = [0u8; 2];
-        memory.read(e + r.kind as u64, &mut bytes);
-        info.kind = bytes[0];
-        info.category = bytes[1];
+        info.kind = byte(memory, e + r.kind as u64).unwrap_or(0);
+        info.category = byte(memory, e + r.category as u64).unwrap_or(0);
         info.cancel = byte(memory, e + r.cancel as u64).unwrap_or(0);
         Some(info)
     }
 
-    pub fn raw_entries(&self, memory: &impl Memory) -> Option<Vec<MenuEntryInfo>> {
+    pub fn sorted_entries(
+        &self,
+        memory: &impl Memory,
+        layout: &Layout,
+    ) -> Option<Vec<MenuEntryInfo>> {
+        let settings = self.settings(memory, layout);
+        let entries = self.raw_entries(memory, layout, settings.is_some())?;
+        Some(sorted(entries, settings.as_ref()))
+    }
+
+    fn settings(&self, memory: &impl Memory, layout: &Layout) -> Option<Settings> {
+        if !layout.has(part::MENU_SETTINGS) {
+            return None;
+        }
+        let r = &self.rules;
+        let minimenu = self.minimenu(memory)?;
+        let client = ipc::read::client(memory, layout)?;
+        let (_, me) = ipc::read::local_player(memory, layout)?;
+        Some(Settings {
+            player_attack: byte(memory, minimenu + r.player_attack as u64)?,
+            npc_attack: byte(memory, minimenu + r.npc_attack as u64)?,
+            follower: byte(memory, minimenu + r.follower as u64)?,
+            local_index: memory.i32(client + layout.player.player_index as u64)?,
+            local_level: memory.i32(me + r.player_level as u64)?,
+            local_team: memory.i32(me + r.player_team as u64)?,
+        })
+    }
+
+    fn player_level(&self, memory: &impl Memory, layout: &Layout, index: i32) -> Option<i32> {
+        let (view, _) = ipc::read::local_player(memory, layout)?;
+        let player = ipc::read::table_get(memory, view + layout.player.players as u64, index)?;
+        memory.i32(player + self.rules.player_level as u64)
+    }
+
+    fn npc_type(&self, memory: &impl Memory, layout: &Layout, index: i32) -> Option<(i32, bool)> {
+        let w = &layout.world;
+        let npc = crate::world::actor_at(memory, w, w.npc_table, index)?;
+        let definition = memory.ptr(npc + w.npc_definition as u64)?;
+        Some((
+            memory.i32(definition + self.rules.npc_level as u64)?,
+            byte(memory, definition + self.rules.npc_follower as u64)? != 0,
+        ))
+    }
+
+    fn extra(
+        &self,
+        memory: &impl Memory,
+        layout: &Layout,
+        e: u64,
+        info: &MenuEntryInfo,
+        settings: bool,
+    ) -> Option<Extra> {
+        let r = &self.rules;
+        let key = if self.ordered {
+            memory.u64(e + r.order_key as u64)? as i64
+        } else {
+            0
+        };
+        if !settings {
+            return Some(Extra {
+                key,
+                ..Extra::default()
+            });
+        }
+        let (level, follower) = match info.kind {
+            menu_kind::PLAYER => (self.player_level(memory, layout, info.index), false),
+            menu_kind::NPC => match self.npc_type(memory, layout, info.index) {
+                Some((level, follower)) => (Some(level), follower),
+                None => (None, false),
+            },
+            _ => (None, false),
+        };
+        Some(Extra {
+            key,
+            team: byte(memory, e + r.team as u64)?,
+            flag: byte(memory, e + r.flag as u64)?,
+            level,
+            follower,
+        })
+    }
+
+    fn raw_entries(
+        &self,
+        memory: &impl Memory,
+        layout: &Layout,
+        settings: bool,
+    ) -> Option<Vec<(MenuEntryInfo, Extra)>> {
         let size = self.rules.entry_size as u64;
         let vector = self.entries_offset(memory)?;
         let (begin, end) = (
@@ -114,7 +200,12 @@ impl MenuObject {
             return None;
         }
         (0..(end - begin) / size)
-            .map(|k| self.entry(memory, begin + k * size))
+            .map(|k| {
+                let e = begin + k * size;
+                let info = self.entry(memory, e)?;
+                let extra = self.extra(memory, layout, e, &info, settings)?;
+                Some((info, extra))
+            })
             .collect()
     }
 
@@ -177,33 +268,108 @@ fn string(memory: &impl Memory, address: u64, out: &mut [u8]) {
     }
 }
 
-fn rank(entry: &MenuEntryInfo) -> u8 {
-    if entry.cancel != 0 {
-        3
-    } else if entry.priority == EXAMINE_PRIORITY {
-        2
-    } else if entry.kind == menu_kind::TILE {
-        1
-    } else {
-        0
+const PLAYER_INDEX_LIMIT: u32 = 0x7ff;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Extra {
+    key: i64,
+    team: u8,
+    flag: u8,
+    level: Option<i32>,
+    follower: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Settings {
+    player_attack: u8,
+    npc_attack: u8,
+    follower: u8,
+    local_index: i32,
+    local_level: i32,
+    local_team: i32,
+}
+
+fn attack_choice(setting: u8, extra: &Extra, settings: &Settings) -> u8 {
+    match setting {
+        0 if extra.level.unwrap_or(0) <= settings.local_level => 2,
+        0 | 1 => 1,
+        2 => 2,
+        4 if extra.flag != 0 => 1,
+        4 => 2,
+        _ => 0,
     }
 }
 
-pub fn sorted(entries: Vec<MenuEntryInfo>) -> Vec<MenuEntryInfo> {
+fn player_attack(entry: &MenuEntryInfo, extra: &Extra, settings: &Settings) -> u8 {
+    if entry.kind != menu_kind::PLAYER
+        || settings.player_attack == 3
+        || entry.index as u32 > PLAYER_INDEX_LIMIT
+    {
+        0
+    } else if extra.team != 0 && settings.local_team != 0 {
+        if i32::from(extra.team) != settings.local_team {
+            2
+        } else {
+            1
+        }
+    } else {
+        attack_choice(settings.player_attack, extra, settings)
+    }
+}
+
+fn npc_attack(entry: &MenuEntryInfo, extra: &Extra, settings: &Settings) -> u8 {
+    if entry.kind != menu_kind::NPC {
+        0
+    } else {
+        attack_choice(settings.npc_attack, extra, settings)
+    }
+}
+
+fn rank(entry: &MenuEntryInfo, extra: &Extra, settings: Option<&Settings>) -> i8 {
+    if entry.cancel != 0 {
+        return -4;
+    }
+    if entry.priority == EXAMINE_PRIORITY {
+        return -3;
+    }
+    if settings.is_some_and(|s| s.follower != 0 && entry.kind == menu_kind::NPC && extra.follower) {
+        return -2;
+    }
+    if entry.kind == menu_kind::WIDGET && entry.category <= 1 {
+        return 1;
+    }
+    let deprioritised = |choice: fn(&MenuEntryInfo, &Extra, &Settings) -> u8| {
+        if settings.is_some_and(|s| choice(entry, extra, s) == 1) {
+            -2
+        } else {
+            0
+        }
+    };
+    match entry.category {
+        1 => -1,
+        2 => -2,
+        3 => deprioritised(player_attack),
+        4 => deprioritised(npc_attack),
+        _ => 0,
+    }
+}
+
+fn sorted(entries: Vec<(MenuEntryInfo, Extra)>, settings: Option<&Settings>) -> Vec<MenuEntryInfo> {
+    let own = |e: &MenuEntryInfo| {
+        settings.is_some_and(|s| e.kind == menu_kind::PLAYER && e.index == s.local_index)
+    };
     let mut entries: Vec<_> = entries.into_iter().enumerate().collect();
-    entries.sort_by(|(ia, a), (ib, b)| {
-        rank(a)
-            .cmp(&rank(b))
-            .then_with(|| {
-                if rank(a) == 0 {
-                    a.priority.cmp(&b.priority)
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
-            .then_with(|| ib.cmp(ia))
+    entries.sort_by(|(ia, (a, xa)), (ib, (b, xb))| {
+        rank(b, xb, settings)
+            .cmp(&rank(a, xa, settings))
+            .then(own(b).cmp(&own(a)))
+            .then(a.action.cmp(&b.action))
+            .then(xb.key.cmp(&xa.key))
+            .then(a.index.cmp(&b.index))
+            .then(a.priority.cmp(&b.priority))
+            .then(ib.cmp(ia))
     });
-    entries.into_iter().map(|(_, e)| e).collect()
+    entries.into_iter().map(|(_, (e, _))| e).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,9 +462,9 @@ pub fn menu(memory: &impl Memory, layout: &Layout) -> Menu {
     };
     let open = menu.open(memory, layout);
     let entries = (open == Some(false))
-        .then(|| menu.raw_entries(memory))
+        .then(|| menu.sorted_entries(memory, layout))
         .flatten()
-        .map(|raw| sorted(raw).iter().map(Entry::from).collect());
+        .map(|entries| entries.iter().map(Entry::from).collect());
     Menu {
         open,
         entries,
@@ -346,6 +512,7 @@ mod tests {
             ids: 0x40,
             priority: 0x60,
             kind: 0x64,
+            category: 0x65,
             cancel: 0x66,
             open: 0x400,
             ..MenuStateLayout::default()
@@ -406,6 +573,179 @@ mod tests {
         let take = &read.entries.unwrap()[0];
         assert_eq!((take.x, take.y), (3188, 3429));
     }
+
+    #[test]
+    fn a_closed_menu_follows_the_clients_order() {
+        let mut memory = menu(&[
+            ("Cancel", 0, 0, 1),
+            ("Walk here", menu_kind::TILE, 0x7fff_ffff, 0),
+            ("Follow", 6, 3, 0),
+            ("Trade with", 6, 4, 0),
+            ("Follow", 6, 3, 0),
+            ("Trade with", 6, 4, 0),
+            ("Examine", 4, EXAMINE_PRIORITY, 0),
+            ("Use", menu_kind::WIDGET, 0, 0),
+        ]);
+        let mut layout = layout();
+        layout.found |= part::MENU_ORDER;
+        layout.menu.order_key = 0x70;
+        for (i, (index, category)) in [
+            (0, 0),
+            (0, 0),
+            (9, 1),
+            (9, 1),
+            (4, 1),
+            (4, 1),
+            (0, 0),
+            (0, 0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let e = ENTRIES + SIZE * i as u64;
+            memory.put_i32(e + 0x44, index);
+            memory.put(e + 0x65, &[category]);
+            memory.put_u64(e + 0x70, 0);
+        }
+        let read = super::menu(&memory, &layout);
+        let rows: Vec<(String, i32)> = read
+            .entries
+            .unwrap()
+            .iter()
+            .map(|e| (String::from_utf8_lossy(&e.option).into_owned(), e.index))
+            .collect();
+        let expected = [
+            ("Use", 0),
+            ("Walk here", 0),
+            ("Follow", 4),
+            ("Trade with", 4),
+            ("Follow", 9),
+            ("Trade with", 9),
+            ("Examine", 0),
+            ("Cancel", 0),
+        ];
+        assert_eq!(rows, expected.map(|(o, i)| (o.to_string(), i)).to_vec());
+    }
+
+    fn entry(option: &str, kind: u8, category: u8, index: i32, priority: i32) -> MenuEntryInfo {
+        let mut e = MenuEntryInfo {
+            kind,
+            category,
+            index,
+            priority,
+            ..MenuEntryInfo::default()
+        };
+        e.option[..option.len()].copy_from_slice(option.as_bytes());
+        e
+    }
+
+    fn level(level: i32) -> Extra {
+        Extra {
+            level: Some(level),
+            ..Extra::default()
+        }
+    }
+
+    fn settings(player_attack: u8, npc_attack: u8, local_team: i32) -> Settings {
+        Settings {
+            player_attack,
+            npc_attack,
+            follower: 1,
+            local_index: 7,
+            local_level: 50,
+            local_team,
+        }
+    }
+
+    #[test]
+    fn attack_options_follow_the_attack_option_settings() {
+        let by_level = settings(1, 0, 0);
+        let s = Some(&by_level);
+        let npc = entry("Attack", menu_kind::NPC, 4, 30, 1);
+        assert_eq!(rank(&npc, &level(100), s), -2);
+        assert_eq!(rank(&npc, &level(50), s), 0);
+        let player = entry("Attack", menu_kind::PLAYER, 3, 9, 1);
+        assert_eq!(rank(&player, &level(3), s), -2);
+        let left = settings(2, 1, 0);
+        assert_eq!(rank(&player, &level(126), Some(&left)), 0);
+        assert_eq!(rank(&npc, &level(1), Some(&left)), -2);
+        let flagged = Extra {
+            flag: 1,
+            ..level(1)
+        };
+        let unreachable = settings(4, 4, 0);
+        assert_eq!(rank(&npc, &flagged, Some(&unreachable)), -2);
+        assert_eq!(rank(&npc, &level(1), Some(&unreachable)), 0);
+        assert_eq!(rank(&npc, &level(100), None), 0);
+    }
+
+    #[test]
+    fn a_team_mate_is_right_click_and_an_enemy_left_click() {
+        let s = settings(0, 0, 5);
+        let player = entry("Attack", menu_kind::PLAYER, 3, 2, 1);
+        let team = |team: u8| Extra {
+            team,
+            level: Some(126),
+            ..Extra::default()
+        };
+        assert_eq!(rank(&player, &team(5), Some(&s)), -2);
+        assert_eq!(rank(&player, &team(6), Some(&s)), 0);
+    }
+
+    #[test]
+    fn followers_and_player_options_rank_below_walk_here() {
+        let s = settings(0, 0, 0);
+        let pet = Extra {
+            follower: true,
+            ..Extra::default()
+        };
+        let walk = entry("Walk here", menu_kind::TILE, 0, -1, WALK);
+        assert_eq!(rank(&walk, &Extra::default(), Some(&s)), 0);
+        assert_eq!(
+            rank(&entry("Pick-up", menu_kind::NPC, 0, 40, 1), &pet, Some(&s)),
+            -2
+        );
+        assert_eq!(
+            rank(
+                &entry("Follow", menu_kind::PLAYER, 1, 9, 3),
+                &Extra::default(),
+                Some(&s)
+            ),
+            -1
+        );
+        assert_eq!(
+            rank(
+                &entry("Use", menu_kind::WIDGET, 0, 0, 0),
+                &Extra::default(),
+                Some(&s)
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn your_own_player_comes_first_among_equals() {
+        let s = settings(0, 0, 0);
+        let read: Vec<i32> = sorted(
+            vec![
+                (
+                    entry("Follow", menu_kind::PLAYER, 1, 9, 3),
+                    Extra::default(),
+                ),
+                (
+                    entry("Follow", menu_kind::PLAYER, 1, 7, 3),
+                    Extra::default(),
+                ),
+            ],
+            Some(&s),
+        )
+        .iter()
+        .map(|e| e.index)
+        .collect();
+        assert_eq!(read, [7, 9]);
+    }
+
+    const WALK: i32 = 0x7fff_ffff;
 
     #[test]
     fn an_entry_that_isnt_one_drops_the_list() {

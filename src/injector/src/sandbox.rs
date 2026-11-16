@@ -1024,6 +1024,8 @@ const LIB_MODULES: &[(&str, &str, &str)] = &[
     lib_module!("projection", "main/projection/projection.luau"),
     lib_module!("camera", "main/camera.luau"),
     lib_module!("walker", "main/walker.luau"),
+    lib_module!("debug_draw", "main/debug_draw.luau"),
+    lib_module!("pinball", "main/pinball.luau"),
     lib_module!("safespot", "main/safespot.luau"),
     lib_module!("combat_safespot", "main/combat_safespot.luau"),
     lib_module!("players", "main/entities/players.luau"),
@@ -1574,6 +1576,7 @@ pub fn run_with_modules(
     s.read("sub_interfaces", sub_interfaces)?;
     s.value("settings", crate::form::settings)?;
     s.value("finish_requested", crate::form::finish_requested)?;
+    s.value("script_debugging", crate::form::script_debugging)?;
     s.value("antiban_resume", crate::form::take_resume)?;
     s.value("form_update", crate::form::take_update)?;
     s.value("antiban_config", crate::antiban::current_value)?;

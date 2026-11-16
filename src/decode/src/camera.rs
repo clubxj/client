@@ -244,7 +244,11 @@ mod tests {
     fn a_turn_matches_the_camera_orbiting_to_that_yaw() {
         let turned = orbiting(0.4).turned(FOCAL, 1.3);
         let there = orbiting(1.7);
-        for [x, y, h] in [[6400, 6400, GROUND], [6900, 6100, GROUND - 150], [5800, 7000, GROUND]] {
+        for [x, y, h] in [
+            [6400, 6400, GROUND],
+            [6900, 6100, GROUND - 150],
+            [5800, 7000, GROUND],
+        ] {
             assert!(near(turned.project(x, y, h).0, there.project(x, y, h).0));
         }
     }

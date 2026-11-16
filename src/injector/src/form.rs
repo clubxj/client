@@ -12,6 +12,7 @@ pub const EXIT_PREFIX: &str = "\u{1e}EXIT ";
 pub const RESUME_PREFIX: &str = "\u{1e}RESUME ";
 pub const UPDATE_PREFIX: &str = "\u{1e}UPDATE ";
 pub const STATS_PREFIX: &str = "\u{1e}STATS ";
+pub const DEBUG_PREFIX: &str = "\u{1e}DEBUG ";
 
 pub const BREAKS_PREFIX: &str = "\u{1e}BREAKS ";
 
@@ -141,6 +142,27 @@ pub fn parse_settings(payload: &str) -> Option<Value> {
 }
 
 static FINISH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static DEBUGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn debug_line(on: bool) -> String {
+    format!("{DEBUG_PREFIX}{}", u8::from(on))
+}
+
+pub fn parse_debug(payload: &str) -> Option<bool> {
+    match payload.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+pub fn set_debugging(on: bool) {
+    DEBUGGING.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn script_debugging() -> bool {
+    DEBUGGING.load(std::sync::atomic::Ordering::SeqCst)
+}
 
 pub fn request_finish() {
     FINISH.store(true, std::sync::atomic::Ordering::SeqCst);

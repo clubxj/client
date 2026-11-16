@@ -523,6 +523,10 @@ fn apply_setting(line: &str) -> bool {
         if let Some(settings) = transports::parse_settings(payload) {
             transports::set_settings(settings);
         }
+    } else if let Some(payload) = line.strip_prefix(form::DEBUG_PREFIX) {
+        if let Some(on) = form::parse_debug(payload) {
+            form::set_debugging(on);
+        }
     } else {
         return false;
     }

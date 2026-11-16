@@ -243,12 +243,13 @@ impl Script {
         let stdout = child.stdout.take().expect("piped");
         let mut stderr_pipe = child.stderr.take().expect("piped");
         let pins = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
             injector::form::PINS_PREFIX,
             injector::http::CAPABILITY_PREFIX,
             injector::prices::line(&host.prices_url),
             injector::antiban::line(&settings.antiban),
             injector::transports::settings_line(&settings.transports),
+            injector::form::debug_line(settings.script_debugging),
             crate::transports::line()
         ) + &launch.header();
         let header = format!("{}{}\n", injector::form::SCRIPT_PREFIX, source.len());
@@ -380,6 +381,10 @@ impl Script {
             &injector::transports::settings_line(settings),
             "transports update",
         )
+    }
+
+    pub fn push_debugging(&self, on: bool) -> Result<(), String> {
+        self.reply(&injector::form::debug_line(on), "script debugging")
     }
 
     pub fn skip_next(&self, kind: &str, index: u32) -> Result<(), String> {

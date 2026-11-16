@@ -14,7 +14,7 @@ use ipc::{Header, Incompatible};
 pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
-pub const HOST_API: u32 = 25;
+pub const HOST_API: u32 = 26;
 pub const HOST_API_MIN: u32 = 22;
 
 pub mod antiban;

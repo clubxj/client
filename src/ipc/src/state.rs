@@ -37,6 +37,8 @@ pub mod part {
     pub const MENU_OPEN: u64 = 1 << 22;
     pub const SELECTION: u64 = 1 << 23;
     pub const LOGIN_PROVIDER: u64 = 1 << 24;
+    pub const MENU_ORDER: u64 = 1 << 25;
+    pub const MENU_SETTINGS: u64 = 1 << 26;
 }
 
 pub mod varp {
@@ -359,7 +361,18 @@ pub struct MenuStateLayout {
     pub ids: u32,
     pub priority: u32,
     pub kind: u32,
+    pub category: u32,
     pub cancel: u32,
+    pub order_key: u32,
+    pub player_attack: u32,
+    pub npc_attack: u32,
+    pub follower: u32,
+    pub team: u32,
+    pub flag: u32,
+    pub npc_level: u32,
+    pub npc_follower: u32,
+    pub player_level: u32,
+    pub player_team: u32,
     pub minimenu_vtable: u32,
     pub click_entry: u32,
     pub click_x: u32,
@@ -503,6 +516,7 @@ pub mod menu_kind {
     pub const NONE: u8 = 0;
     pub const TILE: u8 = 1;
     pub const NPC: u8 = 2;
+    pub const PLAYER: u8 = 6;
     pub const WIDGET: u8 = 7;
 }
 
@@ -1083,10 +1097,10 @@ mod tests {
         assert_eq!(size_of::<ProjectileLayout>(), 24 * 4);
         assert_eq!(size_of::<SpotAnimLayout>(), 8 * 4);
         assert_eq!(size_of::<PathLayout>(), 4 * 4);
-        assert_eq!(size_of::<MenuStateLayout>(), 22 * 4);
+        assert_eq!(size_of::<MenuStateLayout>(), 33 * 4);
         assert_eq!(
             offset_of!(LayoutMemory, request_sequence),
-            8 + 104 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 88
+            8 + 104 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 132 + 4
         );
         let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 28;
         assert_eq!(size_of::<MenuEntryInfo>(), entry);

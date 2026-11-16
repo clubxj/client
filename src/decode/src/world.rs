@@ -549,7 +549,12 @@ const ACTOR_HITSPLATS: u64 = 0x358;
 const HITSPLAT_SIZE: u64 = 12;
 const HITSPLAT_SLOTS: u64 = 4;
 
-fn actor_at(memory: &impl Memory, layout: &WorldLayout, table: u32, index: i32) -> Option<u64> {
+pub(crate) fn actor_at(
+    memory: &impl Memory,
+    layout: &WorldLayout,
+    table: u32,
+    index: i32,
+) -> Option<u64> {
     let view = world_view(memory, layout, client(memory, layout)?)?;
     table_get(memory, view + table as u64, index)
 }
