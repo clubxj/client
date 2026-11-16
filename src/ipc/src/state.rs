@@ -511,6 +511,8 @@ pub struct MenuEntryInfo {
     pub index: i32,
     pub action: i32,
     pub priority: i32,
+    pub x: i32,
+    pub y: i32,
     pub kind: u8,
     pub category: u8,
     pub cancel: u8,
@@ -526,6 +528,8 @@ impl Default for MenuEntryInfo {
             index: -1,
             action: -1,
             priority: 0,
+            x: -1,
+            y: -1,
             kind: 0,
             category: 0,
             cancel: 0,
@@ -635,6 +639,8 @@ pub struct ActRequest {
     pub entry_kind: i32,
     pub entry_id: i32,
     pub entry_index: i32,
+    pub entry_x: i32,
+    pub entry_y: i32,
     pub option_count: u32,
     pub options: [[u8; MENU_OPTION_SIZE]; ACT_OPTIONS],
     pub near_px: f32,
@@ -655,6 +661,8 @@ impl Default for ActRequest {
             entry_kind: -1,
             entry_id: -1,
             entry_index: -1,
+            entry_x: -1,
+            entry_y: -1,
             option_count: 0,
             options: [[0; MENU_OPTION_SIZE]; ACT_OPTIONS],
             near_px: 0.0,
@@ -1076,7 +1084,7 @@ mod tests {
             offset_of!(LayoutMemory, request_sequence),
             8 + 96 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 88
         );
-        let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 20;
+        let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 28;
         assert_eq!(size_of::<MenuEntryInfo>(), entry);
         assert_eq!(size_of::<CacheRequest>(), 8 + CACHE_BATCH * 8);
         assert_eq!(
@@ -1088,7 +1096,7 @@ mod tests {
         assert_eq!(
             size_of::<ActRequest>(),
             8 + size_of::<ModelRequest>()
-                + 16
+                + 24
                 + ACT_OPTIONS * MENU_OPTION_SIZE
                 + 16
                 + 16

@@ -209,6 +209,8 @@ impl Job {
         (r.entry_kind < 0 || entry.kind as i32 == r.entry_kind)
             && (r.entry_id < 0 || entry.id == r.entry_id)
             && (r.entry_index < 0 || entry.index == r.entry_index)
+            && (r.entry_x < 0 || entry.x == r.entry_x)
+            && (r.entry_y < 0 || entry.y == r.entry_y)
     }
 
     fn offers(&self, entry: &MenuEntryInfo) -> bool {

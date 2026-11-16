@@ -54,6 +54,7 @@ Facts about the client's internals that the code does not state, and the steps f
 - **Stay open**: the menu stays open while the mouse, rounded to interface units, is inside any open level's rect grown by the input handler's margin (`+0x18`, set to 10 in the constructor). The margin is in the caller of the layout routine that grows the rect by a field and its double.
 - **Submenus** (Java's `Menu.au[]`) are rows too.
   - A row is 24 bytes: the source entry list (0x150-byte entries), the index in that list, and a pointer to the submenu's rows vector, or null.
+- **Entry tile**: a loc entry holds the loc's world origin tile at `ids+0x14` (x) and `ids+0x18` (y), so same-id locs on different tiles are told apart there. `index` (`ids+4`) is -1 for locs.
   - The open path is the minimenu's `std::vector<u64>` of parent rows, then its open row (-1 for none).
   - The stay-open check lays out every prefix of that path. The agent does the same.
 

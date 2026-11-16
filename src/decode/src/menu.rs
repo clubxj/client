@@ -8,6 +8,8 @@ use crate::memory::{Memory, byte};
 const SEARCH: u64 = 0x2000;
 pub const MAX_ENTRIES: u64 = 500;
 const EXAMINE_PRIORITY: i32 = 0x7fff_fffe;
+const TILE_X: u64 = 0x14;
+const TILE_Y: u64 = 0x18;
 
 static VECTOR: AtomicU32 = AtomicU32::new(0);
 static MINIMENU: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -90,6 +92,8 @@ impl MenuObject {
         info.id = memory.i32(ids)?;
         info.index = memory.i32(ids + 4)?;
         info.action = memory.i32(ids + 8)?;
+        info.x = memory.i32(ids + TILE_X)?;
+        info.y = memory.i32(ids + TILE_Y)?;
         info.priority = memory.i32(e + r.priority as u64)?;
         let mut bytes = [0u8; 2];
         memory.read(e + r.kind as u64, &mut bytes);
@@ -210,6 +214,8 @@ pub struct Entry {
     pub index: i32,
     pub action: i32,
     pub priority: i32,
+    pub x: i32,
+    pub y: i32,
     pub kind: u8,
     pub submenu: bool,
 }
@@ -223,6 +229,8 @@ impl From<&MenuEntryInfo> for Entry {
             index: e.index,
             action: e.action,
             priority: e.priority,
+            x: e.x,
+            y: e.y,
             kind: e.kind,
             submenu: e.submenu != 0,
         }
@@ -336,9 +344,9 @@ mod tests {
             option: 0x08,
             target: 0x20,
             ids: 0x40,
-            priority: 0x50,
-            kind: 0x54,
-            cancel: 0x56,
+            priority: 0x60,
+            kind: 0x64,
+            cancel: 0x66,
             open: 0x400,
             ..MenuStateLayout::default()
         };
@@ -368,8 +376,10 @@ mod tests {
             memory.put_i32(e + 0x40, i as i32);
             memory.put_i32(e + 0x44, -1);
             memory.put_i32(e + 0x48, -1);
-            memory.put_i32(e + 0x50, priority);
-            memory.put(e + 0x54, &[kind, 0, cancel]);
+            memory.put_i32(e + 0x54, 3188);
+            memory.put_i32(e + 0x58, 3426 + i as i32);
+            memory.put_i32(e + 0x60, priority);
+            memory.put(e + 0x64, &[kind, 0, cancel]);
         }
         memory
     }
@@ -393,6 +403,8 @@ mod tests {
         let read = super::menu(&memory, &layout());
         assert_eq!(read.open, Some(false));
         assert_eq!(options(&read), ["Take", "Walk here", "Examine", "Cancel"]);
+        let take = &read.entries.unwrap()[0];
+        assert_eq!((take.x, take.y), (3188, 3429));
     }
 
     #[test]

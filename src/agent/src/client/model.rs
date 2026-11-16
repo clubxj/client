@@ -154,7 +154,7 @@ fn actor(target: u32, index: i32) -> Result<u64, i32> {
     read::table_get(&memory, view + table as u64, index).ok_or(model_status::NO_NPC)
 }
 
-fn renderables(request: &ModelRequest) -> Result<Vec<u64>, i32> {
+fn renderables(request: &ModelRequest) -> Result<(Vec<u64>, Option<u64>), i32> {
     match request.target {
         model_target::LOC => super::scene::loc_renderables(
             request.loc_kind as u8,
@@ -163,15 +163,16 @@ fn renderables(request: &ModelRequest) -> Result<Vec<u64>, i32> {
             request.loc_id,
         )
         .ok_or(model_status::NO_NPC),
-        target => actor(target, request.index).map(|actor| vec![actor]),
+        target => actor(target, request.index).map(|actor| (vec![actor], None)),
     }
 }
 
 fn drawn_models(frame: &Frame, request: &ModelRequest) -> Result<Models, i32> {
     let camera = frame.camera.ok_or(model_status::NOT_FOUND)?;
-    let drawn: Vec<&Drawn> = renderables(request)?
+    let (renderables, tag) = renderables(request)?;
+    let drawn: Vec<&Drawn> = renderables
         .into_iter()
-        .filter_map(|renderable| frame.find(renderable))
+        .filter_map(|renderable| frame.find(renderable, tag))
         .collect();
     let models: Vec<Projected> = drawn
         .iter()

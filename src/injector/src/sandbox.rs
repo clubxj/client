@@ -764,6 +764,8 @@ fn act_spec(spec: &mlua::Table) -> mlua::Result<crate::Act> {
         entry_kind: field("kind")?,
         entry_id: field("id")?,
         entry_index: field("index")?,
+        entry_x: field("x")?,
+        entry_y: field("y")?,
         option_count: options.len() as u32,
         near_px: act_number(spec, "near", 4.0)?,
         spread: act_number(spec, "spread", 0.45)?,

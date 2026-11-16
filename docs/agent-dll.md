@@ -24,6 +24,7 @@ The client already poses and places every model it draws, so the agent keeps wha
 - Every use the agent adds is released on the game thread: at the swap the building frame is published, the previous one is retired, and a retired frame is released once no worker read holds it.
 - The animation lift (renderable vtable slot `model::animation_slot`) is subtracted from the height, as the draw does before it submits.
 - The camera for the frame is read at the swap (`decode::camera::Camera::current`), so a projection never mixes two frames.
+- Identical static locs (same id and rotation) share one cached model, so one renderable is drawn once per copy. Each draw stores the draw's tag, which encodes the loc's tile, and a loc lookup matches the renderable and the scene object's tag together; otherwise every copy would get the first copy's model.
 - Unload first asks the next frame to release everything (`drawn::stop`); if no frame comes within a second, the uses are leaked rather than released off the game thread.
 
 ## Act (`client/act.rs`)
@@ -32,7 +33,7 @@ Clicking a moving thing from outside the client is always a frame or more late, 
 
 - `ACT_MESSAGE` arms or cancels one job from `act_request`; a new arm replaces the old job.
 - Each frame, in the swap hook on the game thread: project the job's model from the frame just published (`model::faces`), keep a spot on one triangle (barycentric, re-picked only when that triangle shrinks or leaves the visible area), read the menu the frame just built (`menu::snapshot`), then write `act_state` (spot, mouse, status).
-- It presses only when an entry matches the target and the mouse is within `near_px` of the spot plus the spot's speed times `FOLLOW_LAG_MS`: left when the left-click entry is a wanted option, else right if allowed. The press is posted as a move to the mouse position this frame's menu was built for, then the button down, so moves still queued from the injector can't shift it.
+- It presses only when an entry matches the target (kind, id, index and the entry's tile, each optional) and the mouse is within `near_px` of the spot plus the spot's speed times `FOLLOW_LAG_MS`: left when the left-click entry is a wanted option, else right if allowed. The press is posted as a move to the mouse position this frame's menu was built for, then the button down, so moves still queued from the injector can't shift it.
 - The agent only presses; the injector moves the mouse (WindMouse after `act_state.spot`) and releases the button.
 - `GONE` means no model for `GONE_FRAMES`; a model that exists but is covered keeps tracking until the timeout.
 

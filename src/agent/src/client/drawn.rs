@@ -61,6 +61,7 @@ static STOPPED: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Copy)]
 struct Pending {
     renderable: u64,
+    tag: u64,
     orientation: i32,
     at: [i32; 3],
 }
@@ -72,6 +73,7 @@ pub enum Shape {
 
 pub struct Drawn {
     pub renderable: u64,
+    pub tag: u64,
     pub shape: Shape,
     pub orientation: i32,
     pub at: [i32; 3],
@@ -84,8 +86,10 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn find(&self, renderable: u64) -> Option<&Drawn> {
-        self.drawn.iter().find(|d| d.renderable == renderable)
+    pub fn find(&self, renderable: u64, tag: Option<u64>) -> Option<&Drawn> {
+        self.drawn
+            .iter()
+            .find(|d| d.renderable == renderable && tag.is_none_or(|tag| d.tag == tag))
     }
 }
 
@@ -163,6 +167,7 @@ unsafe fn record(renderable: u64, model: u64) {
     let [x, height, y] = pending.at;
     building.push(Drawn {
         renderable,
+        tag: pending.tag,
         shape,
         orientation: pending.orientation,
         at: [x, height - lift(renderable), y],
@@ -192,6 +197,7 @@ unsafe extern "system" fn draw(
     if recording {
         set_pending(Some(Pending {
             renderable,
+            tag,
             orientation,
             at: [x, height, y],
         }));

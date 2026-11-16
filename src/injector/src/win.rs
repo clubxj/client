@@ -2843,6 +2843,8 @@ fn worker_entry(e: &decode::menu::Entry) -> crate::MenuEntry {
         index: e.index,
         action: e.action,
         priority: e.priority,
+        x: e.x,
+        y: e.y,
         kind: e.kind,
         submenu: e.submenu,
     }

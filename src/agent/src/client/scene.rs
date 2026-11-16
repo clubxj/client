@@ -448,7 +448,7 @@ fn slots(memory: &OwnMemory, rules: &Rules, object: u64) -> Vec<u32> {
         .clone()
 }
 
-pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<Vec<u64>> {
+pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<(Vec<u64>, Option<u64>)> {
     let memory = OwnMemory;
     let rules = RULES.get()?;
     let view = view(&memory, rules)?;
@@ -459,30 +459,30 @@ pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<Vec<u64>> {
     if kind == loc_kind::GAME {
         let object = game_objects(&memory, rules, &tile, &mut blocks.game)
             .into_iter()
-            .find(|object| loc_id(rules, object.tag) == id)?
-            .object;
-        return Some(vec![memory.ptr(object + rules.game.renderable as u64)?]);
+            .find(|object| loc_id(rules, object.tag) == id)?;
+        return Some((
+            vec![memory.ptr(object.object + rules.game.renderable as u64)?],
+            Some(object.tag),
+        ));
     }
-    let object = if kind == loc_kind::ITEM_PILE {
-        tile.ptr(rules.item_pile?)?
+    let (object, tag) = if kind == loc_kind::ITEM_PILE {
+        (tile.ptr(rules.item_pile?)?, None)
     } else {
         let (slot, _, _) = single_slots(rules)
             .into_iter()
             .find(|&(_, k, _)| k == kind)?;
         let object = tile.ptr(slot)?;
-        if memory
-            .u64(object + s.tag as u64)
-            .map(|tag| loc_id(rules, tag))
-            != Some(id)
-        {
+        let tag = memory.u64(object + s.tag as u64)?;
+        if loc_id(rules, tag) != id {
             return None;
         }
-        object
+        (object, Some(tag))
     };
-    Some(
+    Some((
         slots(&memory, rules, object)
             .into_iter()
             .filter_map(|offset| memory.ptr(object + offset as u64))
             .collect(),
-    )
+        tag,
+    ))
 }

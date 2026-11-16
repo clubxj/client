@@ -14,7 +14,7 @@ use ipc::{Header, Incompatible};
 pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
-pub const HOST_API: u32 = 22;
+pub const HOST_API: u32 = 23;
 pub const HOST_API_MIN: u32 = 22;
 
 pub mod antiban;
@@ -113,6 +113,8 @@ pub struct MenuEntry {
     pub index: i32,
     pub action: i32,
     pub priority: i32,
+    pub x: i32,
+    pub y: i32,
     pub kind: u8,
     pub submenu: bool,
 }
