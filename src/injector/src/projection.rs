@@ -465,12 +465,37 @@ pub fn projector(
     })
 }
 
+const YAW_UNITS: i32 = 16384;
+
+pub fn yaw_turn(from: i32, to: i32) -> f32 {
+    let units = to.wrapping_sub(from).rem_euclid(YAW_UNITS);
+    let units = if units >= YAW_UNITS / 2 {
+        units - YAW_UNITS
+    } else {
+        units
+    };
+    units as f32 * std::f32::consts::TAU / YAW_UNITS as f32
+}
+
+const ZOOM_DOUBLING: f32 = 256.0;
+
+pub fn zoom_scale(from: i32, to: i32) -> f32 {
+    ((to - from) as f32 / ZOOM_DOUBLING).exp2()
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Viewpoint {
+    pub shift: Option<[i32; 3]>,
+    pub turn: Option<f32>,
+    pub zoom_scale: Option<f32>,
+}
+
 pub fn project(
     memory: &impl Memory,
     layout: &Layout,
     terrain: &mut Option<Terrain>,
     points: &[Point],
-    shift: Option<[i32; 3]>,
+    viewpoint: Viewpoint,
     clip: bool,
     decorations: impl FnOnce() -> Option<Vec<Decoration>>,
 ) -> Result<Vec<[f32; 2]>, String> {
@@ -478,9 +503,21 @@ pub fn project(
     let (key, trig, terrain) = scene_terrain(memory, layout, client, terrain, decorations)?;
     let mut camera =
         Camera::read(memory, layout, client, trig).ok_or_else(|| unavailable("camera"))?;
-    if let Some([dx, dy, plane]) = shift {
+    let focal = if viewpoint.shift.is_some() || viewpoint.turn.is_some() {
         let [fx, _, fy] = i32s::<3>(memory, client + layout.camera.focal as u64)
             .ok_or_else(|| unavailable("camera's focal point"))?;
+        [fx, fy]
+    } else {
+        [0, 0]
+    };
+    if let Some(radians) = viewpoint.turn {
+        camera = camera.turned(focal, radians);
+    }
+    if let Some(scale) = viewpoint.zoom_scale {
+        camera = camera.zoomed(scale);
+    }
+    if let Some([dx, dy, plane]) = viewpoint.shift {
+        let [fx, fy] = focal;
         let from = terrain.ground_on(memory, layout, fx, fy, key.plane, None);
         let to = terrain.ground_on(
             memory,
@@ -764,7 +801,7 @@ mod tests {
         let mut asked = 0;
         let points = [[0, 0, 0], [100, 0, 0], [0, 200, 0], [128, 256, -88]]
             .map(|[x, y, z]| Point::new(x, y, z));
-        let screen = project(&m, &layout, &mut terrain, &points, None, false, || {
+        let screen = project(&m, &layout, &mut terrain, &points, Viewpoint::default(), false, || {
             asked += 1;
             Some(Vec::new())
         })
@@ -781,7 +818,7 @@ mod tests {
                 ((y as f32 / 2.0 + 0.5) as i32 * 2) as f32
             ]
         );
-        project(&m, &layout, &mut terrain, &points, None, false, || {
+        project(&m, &layout, &mut terrain, &points, Viewpoint::default(), false, || {
             asked += 1;
             Some(Vec::new())
         })
@@ -806,7 +843,10 @@ mod tests {
             &layout,
             &mut terrain,
             &points,
-            Some([128, 0, -1]),
+            Viewpoint {
+                shift: Some([128, 0, -1]),
+                ..Viewpoint::default()
+            },
             false,
             || Some(Vec::new()),
         )
@@ -825,7 +865,7 @@ mod tests {
         assert_eq!(shifted[0], camera.project(300, 200, ground - 40).0);
         assert_ne!(
             shifted,
-            project(&m, &layout, &mut terrain, &points, None, false, || Some(
+            project(&m, &layout, &mut terrain, &points, Viewpoint::default(), false, || Some(
                 Vec::new()
             ))
             .unwrap()
@@ -845,6 +885,53 @@ mod tests {
     }
 
     #[test]
+    fn a_yaw_turn_takes_the_short_way_round() {
+        let quarter = std::f32::consts::FRAC_PI_2;
+        assert!((yaw_turn(0, 4096) - quarter).abs() < 1e-6);
+        assert!((yaw_turn(1000, 16000) + 1384.0 * quarter / 4096.0).abs() < 1e-6);
+        assert!((yaw_turn(16000, 1000) - 1384.0 * quarter / 4096.0).abs() < 1e-6);
+        assert_eq!(yaw_turn(5, 5), 0.0);
+    }
+
+    #[test]
+    fn zoom_doubles_the_view_scale_every_256() {
+        assert_eq!(zoom_scale(300, 556), 2.0);
+        assert_eq!(zoom_scale(556, 300), 0.5);
+        assert!((zoom_scale(204, 499) - 2.2227).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_view_turns_and_zooms_the_camera_about_its_focal_point() {
+        let (mut m, mut layout) = world();
+        layout.camera.focal = 0x140;
+        for (i, v) in [64, -5, 64].into_iter().enumerate() {
+            m.put_i32(CLIENT + 0x140 + i as u64 * 4, v);
+        }
+        let mut terrain = None;
+        let points = [Point::new(300, 200, -40)];
+        let viewed = project(
+            &m,
+            &layout,
+            &mut terrain,
+            &points,
+            Viewpoint {
+                turn: Some(0.5),
+                zoom_scale: Some(0.75),
+                ..Viewpoint::default()
+            },
+            false,
+            || Some(Vec::new()),
+        )
+        .unwrap();
+        let ground = terrain
+            .as_mut()
+            .unwrap()
+            .ground_on(&m, &layout, 300, 200, 0, None);
+        let camera = camera(&m, &layout).turned([64, 64], 0.5).zoomed(0.75);
+        assert_eq!(viewed[0], camera.project(300, 200, ground - 40).0);
+    }
+
+    #[test]
     fn needs_the_parts() {
         let (m, mut layout) = world();
         layout.found &= !part::PROJECTION;
@@ -854,7 +941,7 @@ mod tests {
                 &layout,
                 &mut None,
                 &[Point::new(0, 0, 0)],
-                None,
+                Viewpoint::default(),
                 false,
                 || Some(Vec::new())
             ),

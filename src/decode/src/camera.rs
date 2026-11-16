@@ -154,6 +154,23 @@ impl Camera {
         Self::read(memory, layout, client, trig.map(f32::from_le_bytes))
     }
 
+    pub fn turned(mut self, focal: [i32; 2], radians: f32) -> Self {
+        let [_, _, sin_yaw, cos_yaw] = self.trig;
+        let (sin, cos) = radians.sin_cos();
+        let dx = self.position[0].wrapping_sub(focal[0]) as f32;
+        let dy = self.position[2].wrapping_sub(focal[1]) as f32;
+        self.position[0] = focal[0].wrapping_add((dx * cos - dy * sin).round() as i32);
+        self.position[2] = focal[1].wrapping_add((dx * sin + dy * cos).round() as i32);
+        self.trig[2] = sin_yaw * cos + cos_yaw * sin;
+        self.trig[3] = cos_yaw * cos - sin_yaw * sin;
+        self
+    }
+
+    pub fn zoomed(mut self, scale: f32) -> Self {
+        self.zoom = (self.zoom as f32 * scale).round() as i32;
+        self
+    }
+
     pub fn project(&self, x: i32, y: i32, height: i32) -> ([f32; 2], f32) {
         self.project_relative([
             x.wrapping_sub(self.position[0]),
@@ -190,5 +207,61 @@ impl Camera {
             units + 0.5
         }) as f32
             * self.scale
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FOCAL: [i32; 2] = [6400, 6400];
+    const GROUND: i32 = -800;
+
+    fn orbiting(yaw: f32) -> Camera {
+        let pitch = 1.17_f32;
+        let reach = 2250.0;
+        let across = reach * pitch.cos();
+        Camera {
+            position: [
+                FOCAL[0] + (across * yaw.sin()).round() as i32,
+                GROUND - (reach * pitch.sin()).round() as i32,
+                FOCAL[1] - (across * yaw.cos()).round() as i32,
+            ],
+            trig: [pitch.sin(), pitch.cos(), yaw.sin(), yaw.cos()],
+            zoom: 600,
+            center: [400, 300],
+            offset: [4, 2],
+            scale: 1.0,
+            ratio: [1.0, 1.0],
+        }
+    }
+
+    fn near(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() <= 2.0 && (a[1] - b[1]).abs() <= 2.0
+    }
+
+    #[test]
+    fn a_turn_matches_the_camera_orbiting_to_that_yaw() {
+        let turned = orbiting(0.4).turned(FOCAL, 1.3);
+        let there = orbiting(1.7);
+        for [x, y, h] in [[6400, 6400, GROUND], [6900, 6100, GROUND - 150], [5800, 7000, GROUND]] {
+            assert!(near(turned.project(x, y, h).0, there.project(x, y, h).0));
+        }
+    }
+
+    #[test]
+    fn the_focal_point_stays_on_the_centre_line_after_a_turn() {
+        let camera = orbiting(2.9).turned(FOCAL, -2.2);
+        let [x, _] = camera.project(FOCAL[0], FOCAL[1], GROUND).0;
+        assert!((x - 404.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn zoom_scales_around_the_view_centre() {
+        let camera = orbiting(0.8);
+        let [x, y] = camera.project(6900, 6100, GROUND).0;
+        let [zx, zy] = camera.zoomed(0.5).project(6900, 6100, GROUND).0;
+        assert!((zx - (404.0 + (x - 404.0) / 2.0)).abs() <= 1.0);
+        assert!((zy - (302.0 + (y - 302.0) / 2.0)).abs() <= 1.0);
     }
 }

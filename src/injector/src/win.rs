@@ -892,12 +892,12 @@ static TERRAIN: Mutex<Option<(u32, Terrain)>> = Mutex::new(None);
 fn project_locally(
     pid: u32,
     points: &[projection::Point],
-    shift: Option<[i32; 3]>,
+    viewpoint: projection::Viewpoint,
     clip: bool,
 ) -> Result<Vec<[f32; 2]>, String> {
     let (layout, memory) = reader(pid, 0, "")?;
     kept_terrain(pid, |terrain| {
-        projection::project(&memory, &layout, terrain, points, shift, clip, || {
+        projection::project(&memory, &layout, terrain, points, viewpoint, clip, || {
             decorations(pid)
         })
     })
@@ -915,19 +915,20 @@ fn kept_terrain<T>(pid: u32, use_terrain: impl FnOnce(&mut Option<Terrain>) -> T
 }
 
 pub fn project(pid: u32, points: &[projection::Point]) -> Result<Vec<[f32; 2]>, String> {
-    project_locally(pid, points, None, false).map_err(|why| format!("local projection: {why}"))
+    project_from(pid, points, projection::Viewpoint::default())
 }
 
 fn project_clipped(pid: u32, points: &[projection::Point]) -> Result<Vec<[f32; 2]>, String> {
-    project_locally(pid, points, None, true).map_err(|why| format!("local projection: {why}"))
+    project_locally(pid, points, projection::Viewpoint::default(), true)
+        .map_err(|why| format!("local projection: {why}"))
 }
 
-pub fn project_moved(
+pub fn project_from(
     pid: u32,
     points: &[projection::Point],
-    shift: [i32; 3],
+    viewpoint: projection::Viewpoint,
 ) -> Result<Vec<[f32; 2]>, String> {
-    project_locally(pid, points, Some(shift), false)
+    project_locally(pid, points, viewpoint, false)
         .map_err(|why| format!("local projection: {why}"))
 }
 

@@ -30,7 +30,7 @@ use crate::{
     ground_items, in_instance, item_container, item_names, item_params, item_stackable, landmasses,
     loc_model, loc_shown, locs, map_regions, menu, menu_click, menu_layout, menu_open, movement,
     nav_plan, npc_hitsplats, npc_model, npc_sizes, npc_type_model, npcs, player_hitsplats,
-    player_model, player_plane, players, project, project_moved, projectiles, scene_collision,
+    player_model, player_plane, players, project_from, projectiles, scene_collision,
     scene_route, selected_widget, send_input, send_input_with, server_tile, spot_anims,
     sub_interfaces, varbit, varc, varp_value, varps, wait_watchers, widget, widget_children,
     widget_model, world_route, world_select,
@@ -107,8 +107,8 @@ mod offline {
         fn entry_swaps(u32) -> crate::EntrySwaps;
         fn menu_layout(u32) -> Option<MenuLayout>;
         fn selected_widget(u32) -> Option<crate::SelectedWidget>;
-        fn project(u32, &[crate::projection::Point]) -> Vec<[f32; 2]>;
-        fn project_moved(u32, &[crate::projection::Point], [i32; 3]) -> Vec<[f32; 2]>;
+        fn project_from(u32, &[crate::projection::Point], crate::projection::Viewpoint)
+            -> Vec<[f32; 2]>;
         fn game_val_names(u32, u32, &[i32]) -> Vec<Option<String>>;
         fn world_route(u32, crate::nav::Point, crate::nav::Point, &[String])
             -> crate::landmass::Route;
@@ -1618,25 +1618,44 @@ pub fn run_with_modules(
     s.read("selected_widget", selected_widget)?;
     s.query(
         "project",
-        |pid, (points, shift): (Vec<mlua::Table>, Option<mlua::Table>)| {
+        |pid,
+         (points, shift, view): (
+            Vec<mlua::Table>,
+            Option<mlua::Table>,
+            Option<mlua::Table>,
+        )| {
             let points = points
                 .iter()
                 .map(fine_point)
                 .collect::<mlua::Result<Vec<_>>>()
                 .map_err(|e| e.to_string())?;
-            let screen = match shift {
-                None => project(pid, &points)?,
-                Some(s) => project_moved(
-                    pid,
-                    &points,
-                    [
-                        get(&s, "x")?,
-                        get(&s, "y")?,
-                        get::<Option<i32>>(&s, "plane")?.unwrap_or(-1),
-                    ],
-                )?,
-            };
-            Ok(screen_points(screen))
+            let mut viewpoint = crate::projection::Viewpoint::default();
+            if let Some(s) = shift {
+                viewpoint.shift = Some([
+                    get(&s, "x")?,
+                    get(&s, "y")?,
+                    get::<Option<i32>>(&s, "plane")?.unwrap_or(-1),
+                ]);
+            }
+            if let Some(view) = view {
+                let camera = game_state(pid)?
+                    .camera
+                    .ok_or("the camera isn't readable")?;
+                if let Some(yaw) = get::<Option<i32>>(&view, "yaw")? {
+                    viewpoint.turn = Some(crate::projection::yaw_turn(camera.yaw, yaw));
+                }
+                if let Some(zoom) = get::<Option<i32>>(&view, "zoom")? {
+                    if zoom <= 0 {
+                        return Err(format!("view zoom must be positive, got {zoom}"));
+                    }
+                    let current = camera
+                        .zoom
+                        .filter(|&z| z > 0)
+                        .ok_or("the zoom isn't readable")?;
+                    viewpoint.zoom_scale = Some(crate::projection::zoom_scale(current, zoom));
+                }
+            }
+            Ok(screen_points(project_from(pid, &points, viewpoint)?))
         },
     )?;
     s.query("game_val_name", |pid, (kind, id): (u32, i32)| {
