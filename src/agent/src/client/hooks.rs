@@ -44,7 +44,7 @@ use super::offsets::{
     find_actor_lists, find_actor_names, find_actor_path, find_actor_position,
     find_animation_height, find_appearance_decoder, find_camera, find_chat, find_collision_maps,
     find_component_fields, find_component_invalidate, find_component_sprite,
-    find_decoration_layout, find_destination, find_game_object_layout, find_game_state,
+    find_decoration_layout, find_destination, find_frame, find_game_object_layout, find_game_state,
     find_ground_items, find_instance_flag, find_interfaces, find_item_containers, find_item_icon,
     find_item_pile, find_item_setter, find_loc_configs, find_local_player, find_local_projection,
     find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout,
@@ -288,9 +288,10 @@ unsafe fn draw_frame() {
     let window_height = client_rect.bottom - client_rect.top;
     let offset_y_top_down = window_height - offset_y - height;
 
-    let _ = catch_unwind(super::drawn::on_frame);
-    let _ = catch_unwind(|| super::act::on_frame((offset_x, offset_y_top_down)));
-    let _ = catch_unwind(super::menu::capture);
+    super::frame::set_viewport_offset(offset_x, offset_y_top_down);
+    if !super::frame::active() {
+        super::frame::on_frame((offset_x, offset_y_top_down));
+    }
 
     let fits = image_fits(width, height);
     let (mouse, dest, overlay, (cursor, cursor_color, cursor_size)) = {
@@ -387,6 +388,7 @@ pub unsafe fn unhook_all() {
     super::focus::unhook();
     unhook_wndproc();
     unhook_wgl_swap_buffers();
+    super::frame::unhook();
     super::name::unhook_decoder();
     super::total_xp::unhook();
     super::packets::unhook();
@@ -944,6 +946,9 @@ unsafe fn find_offsets() {
         if let (Some(render), Some(slot)) = (found("Render", find_render(pe)), animation_slot) {
             super::drawn::hook(module_base, render, slot);
         }
+    }
+    if let Some(rule) = found("Frame", find_frame(pe)) {
+        super::frame::hook(module_base, image.len() as u64, rule);
     }
     set_found(
         layout.has(part::GAME_STATE | part::TICK_COUNT | part::PLAYER | part::SKILLS | part::VARPS),

@@ -54,7 +54,7 @@ Facts about the client's internals that the code does not state, and the steps f
 - **Order**: the minimenu registers its sort rules in one function (it takes the rank function's address, `find_menu_order`; build 704f1c08: `0x140373210`) into a list at `minimenu+0x1b0`. The rule registered last decides first. From most to least significant: the rank score (higher first), entries about your own player, `action` (`ids+8`) ascending, the 64-bit key at `ids-8` descending, `index` (`ids+4`) ascending, the left-click swap hook (`minimenu+0x290`), `priority` ascending. The client only stores the sorted rows while the menu is open (built by the open routine into `minimenu+0x140`), so a closed menu is sorted by `decode::menu` with the same chain.
 - **Rank** (`ranker`; its callees give `find_menu_settings`): cancel -4, Examine priority -3, an NPC whose type has the follower flag (`+0x15b`) while the follower setting (`minimenu+0x27a`) is on -2, a widget with `category` <= 1 +1, then `category` (`kind+1`): 0 -> 0, 1 -> -1, 2 -> -2, 3 -> -2 when the player attack option (`minimenu+0x278`) puts this player on right click, 4 -> -2 when the NPC attack option (`minimenu+0x279`) does, else 0.
 - **Attack options**: 0 compares combat levels (the NPC type's `+0x11c` or the player's `+0x780` against yours: higher is right click), 1 is always right click, 2 left click, 3 hidden, 4 right click when the entry's flag byte (`kind+3`) is set. For players, when the entry's team byte (`kind+2`) and your team (player `+0x790`) are both set, a team mate is right click and anyone else left click. Players with an index above `0x7ff` are never deprioritised. NPC entries hold the NPC type id in `id`.
-- The client doesn't store the menu's geometry. It lays the menu out every frame and keeps the result on the stack. The agent calls the layout routine itself (`find_menu_layout`) in the swap hook while the menu is open: `fn(view, out: *mut [i32; 26], path: &std::vector<u64>)`. An empty path means the menu, and row indices mean a submenu.
+- The client doesn't store the menu's geometry. It lays the menu out every frame and keeps the result on the stack. The agent calls the layout routine itself (`find_menu_layout`) after the draw step, on the game thread, while the menu is open: `fn(view, out: *mut [i32; 26], path: &std::vector<u64>)`. An empty path means the menu, and row indices mean a submenu.
   - You can recognise the routine because it refuses paths of 5 or more submenus and calls itself for the parent.
   - The view is the minimenu's list view (`minimenu+0x158`, also vtable slot 3).
   - Inputs:
@@ -257,6 +257,19 @@ Facts about the client's internals that the code does not state, and the steps f
 
 - Every definition lookup calls one cache reader with the config group in `r8d`. A lookup takes `(out: *mut [u64;2], id: edx)` and returns a {control, object} pair that `release` frees. Locs (6), varps (16) and varcs (19) take the id in `ecx` and return a pointer into the cache. A bad id gives a default definition.
 - Found but unused (definitions now come from the disk cache): `NpcType::getModel(npc, out, seq, frame, seq2, frame2, overrides)`, which calls itself for an NPC's other forms; the skeletal check, the leaf `mov eax,[rcx+4]; shr eax,31; xor al,1; ret`, and the sequence frame count (`+0x48`) and array (`+0x50`); the model loader `(out, source = client+0x2570, id)`; `ModelData` lighting (vtable `+0x70`); generic animate `(out, 0x48-byte params)`; the spot animation and loc model builders; set-sequence `(client, actor, seq, delay)`, which works on any actor until the server overrides it.
+
+## Frame (`offsets/frame.rs`, `client/frame.rs`; `0x1409211b0` in `client-2026-11-05`)
+
+- The client has four renderer modes (0 to 3). In 0 and 2 the game thread presents its own frames. In 1 and 3 it hands them to a render thread, which calls `SwapBuffers`, so anything the agent does in the swap hook runs off the game thread there.
+- The main loop calls `tick(app, f32)` once per iteration on the game thread (called from `0x14003b73a`). In order, it:
+  1. Runs the update step `app->vtable[0xf0](app, bool)` zero or more times (a fixed-step loop).
+  2. Asks the renderer whether it takes a frame (`0x140a55bb0`). If it does, runs the draw step `app->vtable[0xf8](app, f32)` with the tick's float in `xmm1`. The draw step builds the scene, the interfaces and the menu.
+  3. In modes 0 and 2, presents through `present` (`0x140a5de30`), the one function that calls the `GDI32!SwapBuffers` import. In 1 and 3 the render thread calls `present` instead (from `0x140a55af3`; `0x140a54170` is the third caller).
+- `find_frame`:
+  - Takes the `SwapBuffers` import slot (or `OPENGL32!wglSwapBuffers`), then `present` as the single function that calls it.
+  - Takes `tick` as the single caller of `present` with a virtual-call pair `[reg+d]` then `[reg+d+8]`, where the second passes a float in `xmm1`. The draw slot is `d+8`.
+  - The float check is needed: the render thread's caller also has a `+0x10`/`+0x18` pair, on a member object.
+- The agent detours `tick` only to reach the app object. On the first call it hooks `vtable[draw_slot]`, so the draw step's address is read rather than guessed. The draw step stays on the game thread in every mode, and returns with the frame's menu complete.
 
 ## Render loop (`offsets/render.rs`, `client/drawn.rs`; `0x14065d340` in `client-2026-11-05`)
 
