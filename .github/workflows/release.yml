@@ -14,6 +14,7 @@ env:
     LUAU_VERSION: "0.742"
     LUAU_UBUNTU_SHA256: "152058b98c60ff1f5b5ec9bca0b8eb37793cae161dd3a05608cc3d8738ba1a4d"
     LUAU_WINDOWS_SHA256: "1114966cd8198f407069f07e8b4e6bacf2ded933e4a57d6ddc75617969278c75"
+    MINGW_PACKAGES: "gcc-mingw-w64-x86-64-win32 g++-mingw-w64-x86-64-win32"
 
 jobs:
     build:
@@ -46,9 +47,31 @@ jobs:
                   echo "VOLCREN_VERSION=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_ENV"
                   echo "VOLCREN_BUILD=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
+            - name: Runner OS release
+              if: matrix.name == 'windows'
+              id: os
+              run: echo "release=$(. /etc/os-release && echo "$ID-$VERSION_ID")" >> "$GITHUB_OUTPUT"
+
+            - name: Cache MinGW packages
+              if: matrix.name == 'windows'
+              id: mingw
+              uses: actions/cache@v4
+              with:
+                  path: ~/mingw-debs
+                  key: mingw-${{ steps.os.outputs.release }}-${{ env.MINGW_PACKAGES }}
+
             - name: Install MinGW toolchain
               if: matrix.name == 'windows'
-              run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+              run: |
+                  if [ "${{ steps.mingw.outputs.cache-hit }}" != true ]; then
+                      mkdir -p ~/mingw-debs/partial
+                      sudo apt-get update
+                      sudo apt-get install -y --download-only -o Dir::Cache::archives="$HOME/mingw-debs" $MINGW_PACKAGES
+                      sudo rm -rf ~/mingw-debs/partial ~/mingw-debs/lock
+                      sudo chown -R "$USER" ~/mingw-debs
+                  fi
+                  sudo dpkg -i ~/mingw-debs/*.deb
+                  x86_64-w64-mingw32-g++ --version | head -1
 
             - name: Install Rust
               id: rust
