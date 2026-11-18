@@ -146,7 +146,7 @@ Facts about the client's internals that the code does not state, and the steps f
 - The pose at `+0x4b8` is one of these unless something overrides it, such as a tightrope or a ledge.
 - To find them again: `injector player-words <pid> <index> 400` while wielding a known weapon, then look for the run of eight values.
 
-## Packets (`offsets/packets.rs`, `client/packets.rs`, `offsets/packet_layouts.rs`)
+## Packets (`offsets/packets.rs`, `client/packets.rs`, `offsets/packet_layouts.rs`, `offsets/packet_names.rs`)
 
 - **Network thread, receive**:
   1. Reads one byte through a buffered recv wrapper that every socket reader shares.
@@ -158,7 +158,7 @@ Facts about the client's internals that the code does not state, and the steps f
   - The dispatcher, which has a 151-case jump table, calls `receive(connection, out) -> bool`. It writes the opcode at `out+0` and moves the buffer into `out+8`.
   - That function is the receive hook: one call per packet, plus at least one call per frame when the queue is empty.
   - The dispatcher calls `receive` only after the previous handler returned, so the start of the hook sees the effects of every packet.
-  - Opcode 2 has no payload, arrives once per tick and increments the tick counter. Opcode 40 (6 bytes) is the most frequent. Both are easy to see live.
+  - Game updates reorder the opcodes and the reads inside a packet (the large varp packet went from `u16leadd,i32:2.3.0.1` at 40 to `i32:1.0.3.2,u16be` at 66), so nothing may key on an opcode number or a field position: use the names below.
 - **Buffer object**: `+8` allocated size, `+0x10` data, `+0x18` cursor. No code shape names `BUFFER_SIZE`. The data and cursor offsets come from the opcode writer.
 - **Send**:
   - The packet constructor (`js.ac`, 97 call sites) takes `(packet, type, cipher)`. It stores the plain type at `packet+0` and writes the opcode through the opcode writer (`byte = opcode + next cipher byte`).
@@ -175,7 +175,13 @@ Facts about the client's internals that the code does not state, and the steps f
   - A case's layout is its reads up to the first branch. It is kept only when the widths sum to the size in the table.
   - The size table is found as the one `lea r,[rip+table]` right after a `jae` whose 151 values are all in -2..512, with 10 or more distinct values.
   - Strings, smarts and loops have branches, so they don't classify. 86 of 151 packets get a layout, and none differs from what the Java client reads.
-- **Names and the fallback table**: `tools/packetdefs/gen.py` produces `src/loader/src/packet_defs.tsv` from `standalone/` (`ServerPacket` `jc` sizes plus the reads of the `Client.iy` handlers).
+- **Names** (`find_packet_names`) come from what a case's handler does, matched against offsets other rules find. Each name must match exactly one case or it is left out and the agent logs it.
+  - `TICK`: the empty case that starts with `inc dword [client + tick count]`.
+  - `VARP_SMALL`/`VARP_LARGE`: the 3- or 6-byte case with a `u16` and a 1- or 4-byte field that calls a function loading the varps data pointer (`find_varps`). The `u16` is the id.
+  - `SYNTH_SOUND`: the 5-byte case that calls the sound queue the `playSound` Lua binding jumps to. The queue takes `(edx id, r8 loops, r9 delay)` (the binding defaults loops to 1 and delay to 0), so a register trace from each read to those arguments gives the roles.
+  - `MESSAGE_GAME`: the variable-length case whose first read is the smart reader (`cmp r8b,0x80`, `+0x8000`), then a byte compared with 1, that calls a function reaching the chat history table (`find_chat`) within 3 calls with the smart value in `edx`. The payload is `smart type, u8 has name, [str name], str text`; strings are CP1252 and zero-terminated.
+  - `names_packets_in_archived_builds` pins the opcodes and role order per archived build: the October builds match the Java table, and the November ones were checked live on 2026-11-05.
+- **The fallback table**: `tools/packetdefs/gen.py` produces `src/loader/src/packet_defs.tsv` from `standalone/` (`ServerPacket` `jc` sizes plus the reads of the `Client.iy` handlers).
   - `--exe` checks the native size table against `jc`.
   - `names.tsv` names packets and their fields in wire order. Check the order against the Java handler.
   - After an update, rebuild `standalone/` first. This step is optional because layouts don't depend on it.

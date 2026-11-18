@@ -15,6 +15,7 @@ Shared-memory contract between the agent (writer, in the client) and the injecto
 - Each log exists only when its offset rule matched; readers must handle its absence.
 - Log subscribers: a reader creates an auto-reset wake event, claims a bit in `subscribers`, and blocks. The agent signals matching subscribers per entry and clears bits whose event it can no longer open. Packet subscribers also set a per-opcode `Filter`.
 - Packet header `Movement` is seqlocked with one writer (the receive hook). `layouts` are written once at hook time, then `layouts_ready` is set; read nothing before it.
+- A layout slot may carry a `packets::Name` and an `order`: entry `i` is the field index of the name's role `i` (`Name::roles`). The agent publishes a name only when its role count matches, and `decode_named` turns a payload into role values; `MESSAGE_GAME` has no fixed layout and is decoded from its known shape.
 - Overlay is double-buffered: the injector paints the slot the agent isn't showing, then bumps `overlay_serial`; the agent shows slot `overlay_serial & 1`, so it never shows a half-painted overlay. Each slot's row stride is the viewport size it was painted at, stored in `overlay_sizes[slot]` before the serial bump; the viewport can change between paints, so readers and the injector's copy of the shown slot use that size, never the current one.
 - `frame_serial` is unaligned in the packed `Header`: read it unaligned. Waiters on `AGENT_FRAME_<pid>` re-read `frame_serial` in slices because another waiter may consume the auto-reset wake.
 

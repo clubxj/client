@@ -6,8 +6,8 @@ use std::{
 
 use ipc::{
     packets::{
-        direction, packet_wake_event_name, packets_memory_name, Log, Movement, LOG_SIZE, NO_TICK,
-        PAYLOAD_SIZE,
+        direction, packet_wake_event_name, packets_memory_name, Layout, Log, Movement, Name,
+        LOG_SIZE, NO_TICK, PAYLOAD_SIZE,
     },
     read::{client, Memory},
     state::part,
@@ -17,7 +17,7 @@ use retour::GenericDetour;
 use super::{
     detour,
     log::{wake, SharedLog},
-    offsets::{PacketLayouts, Packets, BUFFER_SIZE},
+    offsets::{NamedPacket, PacketLayouts, Packets, BUFFER_SIZE},
     own::{OwnMemory, LAYOUT},
     unload::HookCall,
 };
@@ -157,18 +157,35 @@ unsafe extern "system" fn sent(
     detour.call(connection, result, packet)
 }
 
-pub unsafe fn hook(module_base: u64, rule: Packets, layouts: Option<&PacketLayouts>) {
+pub unsafe fn hook(
+    module_base: u64,
+    rule: Packets,
+    layouts: Option<&PacketLayouts>,
+    names: &[(Name, NamedPacket)],
+) {
     if RECEIVE.get().is_some()
         || !LOG.open(packets_memory_name, LOG_SIZE, "packet", ipc::packets::init)
     {
         return;
     }
     if let (Some(layouts), Some(log)) = (layouts, LOG.get()) {
-        let published: Vec<_> = layouts
+        let published: Vec<Layout> = layouts
             .sizes
             .iter()
-            .copied()
-            .zip(layouts.layouts.iter().cloned())
+            .zip(&layouts.layouts)
+            .enumerate()
+            .map(|(opcode, (&size, fields))| {
+                let named = names
+                    .iter()
+                    .find(|(_, found)| found.opcode as usize == opcode);
+                Layout {
+                    opcode: opcode as u16,
+                    size,
+                    fields: fields.clone(),
+                    name: named.map(|(name, _)| *name),
+                    order: named.map_or(Vec::new(), |(_, found)| found.order.clone()),
+                }
+            })
             .collect();
         ipc::packets::publish_layouts(log, &published);
     }

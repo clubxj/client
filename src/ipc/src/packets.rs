@@ -79,14 +79,65 @@ pub const LAYOUT_IDS: usize = 256;
 
 pub const LAYOUT_FIELDS: usize = 16;
 
+pub const LAYOUT_ROLES: usize = 4;
+
 const NO_LAYOUT: u8 = 0xff;
+
+const NO_NAME: u8 = 0;
 
 #[repr(C)]
 pub struct LayoutSlot {
     size: i32,
     fields_count: u8,
+    name: u8,
+    order: [u8; LAYOUT_ROLES],
     fields: [[u8; 2]; LAYOUT_FIELDS],
-    reserved: [u8; 3],
+    reserved: [u8; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Name {
+    Tick = 1,
+    VarpSmall = 2,
+    VarpLarge = 3,
+    SynthSound = 4,
+    MessageGame = 5,
+}
+
+impl Name {
+    pub const ALL: [Name; 5] = [
+        Name::Tick,
+        Name::VarpSmall,
+        Name::VarpLarge,
+        Name::SynthSound,
+        Name::MessageGame,
+    ];
+
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Name::Tick => "TICK",
+            Name::VarpSmall => "VARP_SMALL",
+            Name::VarpLarge => "VARP_LARGE",
+            Name::SynthSound => "SYNTH_SOUND",
+            Name::MessageGame => "MESSAGE_GAME",
+        }
+    }
+
+    pub fn roles(self) -> &'static [&'static str] {
+        match self {
+            Name::Tick | Name::MessageGame => &[],
+            Name::VarpSmall | Name::VarpLarge => &["id", "value"],
+            Name::SynthSound => &["id", "loops", "delay"],
+        }
+    }
+
+    pub fn from_spelling(spelling: &str) -> Option<Name> {
+        Name::ALL.into_iter().find(|name| name.spelling() == spelling)
+    }
+
+    fn from_code(code: u8) -> Option<Name> {
+        Name::ALL.into_iter().find(|&name| name as u8 == code)
+    }
 }
 
 pub const LOG_SIZE: usize = core::mem::size_of::<Log>();
@@ -223,13 +274,130 @@ pub struct Layout {
     pub opcode: u16,
     pub size: i32,
     pub fields: Option<Vec<Field>>,
+    pub name: Option<Name>,
+    pub order: Vec<u8>,
 }
 
-pub unsafe fn publish_layouts(log: *const Log, layouts: &[(i32, Option<Vec<Field>>)]) {
-    for (id, (size, fields)) in layouts.iter().enumerate().take(LAYOUT_IDS) {
+impl Layout {
+    pub fn field_names(&self) -> Vec<Option<&'static str>> {
+        let count = self.fields.as_ref().map_or(0, Vec::len);
+        let mut names = alloc::vec![None; count];
+        if let Some(name) = self.name {
+            for (role, &field) in name.roles().iter().zip(&self.order) {
+                if let Some(slot) = names.get_mut(field as usize) {
+                    *slot = Some(*role);
+                }
+            }
+        }
+        names
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value {
+    Int(i64),
+    Text(String),
+}
+
+impl Field {
+    pub fn width(&self) -> usize {
+        self.shifts.len()
+    }
+
+    pub fn read(&self, bytes: &[u8]) -> Option<i64> {
+        let width = self.width();
+        let mut value = 0u32;
+        for (&byte, &shift) in bytes.get(..width)?.iter().zip(&self.shifts) {
+            let byte = if shift == 0 {
+                match self.transform {
+                    Transform::None => byte,
+                    Transform::Add => byte.wrapping_sub(128),
+                    Transform::Neg => byte.wrapping_neg(),
+                    Transform::Sub => 128u8.wrapping_sub(byte),
+                }
+            } else {
+                byte
+            };
+            value |= (byte as u32) << (8 * shift as u32);
+        }
+        Some(if width == 4 {
+            value as i32 as i64
+        } else if self.signed && value >> (width * 8 - 1) & 1 == 1 {
+            value as i64 - (1i64 << (width * 8))
+        } else {
+            value as i64
+        })
+    }
+}
+
+const CP1252_HIGH: [char; 32] = [
+    '\u{20ac}', '\u{81}', '\u{201a}', '\u{192}', '\u{201e}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{2c6}', '\u{2030}', '\u{160}', '\u{2039}', '\u{152}', '\u{8d}', '\u{17d}', '\u{8f}',
+    '\u{90}', '\u{2018}', '\u{2019}', '\u{201c}', '\u{201d}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{2dc}', '\u{2122}', '\u{161}', '\u{203a}', '\u{153}', '\u{9d}', '\u{17e}', '\u{178}',
+];
+
+fn read_smart(bytes: &[u8]) -> Option<(i64, usize)> {
+    match *bytes.first()? {
+        first if first < 128 => Some((first as i64, 1)),
+        first => Some((
+            u16::from_be_bytes([first, *bytes.get(1)?]) as i64 - 0x8000,
+            2,
+        )),
+    }
+}
+
+fn read_text(bytes: &[u8]) -> (String, usize) {
+    let end = bytes.iter().position(|&b| b == 0);
+    let text = bytes[..end.unwrap_or(bytes.len())]
+        .iter()
+        .map(|&b| match b {
+            0x80..=0x9f => CP1252_HIGH[b as usize - 0x80],
+            _ => b as char,
+        })
+        .collect();
+    (text, end.map_or(bytes.len(), |end| end + 1))
+}
+
+fn decode_message_game(payload: &[u8]) -> Option<Vec<(&'static str, Value)>> {
+    let (kind, at) = read_smart(payload)?;
+    let has_name = *payload.get(at)? == 1;
+    let mut rest = &payload[at + 1..];
+    let mut fields = alloc::vec![("type", Value::Int(kind))];
+    if has_name {
+        let (name, used) = read_text(rest);
+        fields.push(("name", Value::Text(name)));
+        rest = &rest[used..];
+    }
+    fields.push(("text", Value::Text(read_text(rest).0)));
+    Some(fields)
+}
+
+pub fn decode_named(layout: &Layout, payload: &[u8]) -> Option<Vec<(&'static str, Value)>> {
+    let name = layout.name?;
+    if name == Name::MessageGame {
+        return decode_message_game(payload);
+    }
+    let fields = layout.fields.as_ref()?;
+    let mut values = Vec::with_capacity(fields.len());
+    let mut at = 0;
+    for field in fields {
+        values.push(field.read(payload.get(at..)?)?);
+        at += field.width();
+    }
+    name.roles()
+        .iter()
+        .zip(&layout.order)
+        .map(|(&role, &field)| Some((role, Value::Int(*values.get(field as usize)?))))
+        .collect()
+}
+
+pub unsafe fn publish_layouts(log: *const Log, layouts: &[Layout]) {
+    for (id, layout) in layouts.iter().enumerate().take(LAYOUT_IDS) {
         let slot = addr_of!((*log).layouts[id]) as *mut LayoutSlot;
-        write_volatile(addr_of_mut!((*slot).size), *size);
-        let codes = fields
+        write_volatile(addr_of_mut!((*slot).size), layout.size);
+        let codes = layout
+            .fields
             .as_ref()
             .and_then(|fields| fields.iter().map(encode_field).collect::<Option<Vec<_>>>())
             .filter(|codes| codes.len() <= LAYOUT_FIELDS);
@@ -243,6 +411,18 @@ pub unsafe fn publish_layouts(log: *const Log, layouts: &[(i32, Option<Vec<Field
             None => NO_LAYOUT,
         };
         write_volatile(addr_of_mut!((*slot).fields_count), count);
+        let named = layout.name.filter(|name| {
+            layout.order.len() == name.roles().len() && layout.order.len() <= LAYOUT_ROLES
+        });
+        let mut order = [0u8; LAYOUT_ROLES];
+        if named.is_some() {
+            order[..layout.order.len()].copy_from_slice(&layout.order);
+        }
+        write_volatile(addr_of_mut!((*slot).order), order);
+        write_volatile(
+            addr_of_mut!((*slot).name),
+            named.map_or(NO_NAME, |name| name as u8),
+        );
     }
     (*log)
         .layouts_ready
@@ -264,10 +444,14 @@ pub unsafe fn read_layouts(log: *const Log) -> Option<Vec<Layout>> {
                             .collect::<Option<Vec<_>>>()
                     })
                     .flatten();
+                let name = Name::from_code(read_volatile(addr_of!((*slot).name)));
+                let order = read_volatile(addr_of!((*slot).order));
                 Layout {
                     opcode: id as u16,
                     size: read_volatile(addr_of!((*slot).size)),
                     fields,
+                    name,
+                    order: name.map_or(Vec::new(), |name| order[..name.roles().len()].to_vec()),
                 }
             })
             .collect(),
@@ -423,14 +607,14 @@ mod tests {
         assert_eq!(core::mem::offset_of!(Log, movement), 24);
         assert_eq!(core::mem::offset_of!(Log, entries), 64);
         assert_eq!(core::mem::offset_of!(Log, filters), 64 + SLOT_COUNT * 128);
-        assert_eq!(core::mem::size_of::<LayoutSlot>(), 40);
+        assert_eq!(core::mem::size_of::<LayoutSlot>(), 44);
         assert_eq!(
             core::mem::offset_of!(Log, layouts),
             64 + SLOT_COUNT * 128 + SUBSCRIBER_SLOTS as usize * FILTER_WORDS * 4
         );
         assert_eq!(
             LOG_SIZE,
-            64 + SLOT_COUNT * 128 + SUBSCRIBER_SLOTS as usize * FILTER_WORDS * 4 + LAYOUT_IDS * 40
+            64 + SLOT_COUNT * 128 + SUBSCRIBER_SLOTS as usize * FILTER_WORDS * 4 + LAYOUT_IDS * 44
         );
         assert_eq!(packet_wake_event_name(32, 5), "AGENT_PACKETS_WAKE_32_5");
     }
@@ -497,11 +681,11 @@ mod tests {
             publish_layouts(
                 memory.0,
                 &[
-                    (0, Some(vec![])),
-                    (-1, None),
-                    (2, Some(vec![u16le.clone()])),
-                    (32, Some(vec![u16le.clone(); LAYOUT_FIELDS])),
-                    (34, Some(vec![u16le.clone(); LAYOUT_FIELDS + 1])),
+                    unnamed(0, 0, Some(vec![])),
+                    unnamed(1, -1, None),
+                    unnamed(2, 2, Some(vec![u16le.clone()])),
+                    unnamed(3, 32, Some(vec![u16le.clone(); LAYOUT_FIELDS])),
+                    unnamed(4, 34, Some(vec![u16le.clone(); LAYOUT_FIELDS + 1])),
                 ],
             );
             let layouts = read_layouts(memory.0).unwrap();
@@ -513,29 +697,169 @@ mod tests {
             assert_eq!(layouts[4].fields, None);
             assert_eq!(
                 layouts[0],
-                Layout {
-                    opcode: 0,
-                    size: 0,
-                    fields: Some(vec![])
-                }
+                unnamed(0, 0, Some(vec![]))
             );
             assert_eq!(
                 layouts[1],
-                Layout {
-                    opcode: 1,
-                    size: -1,
-                    fields: None
-                }
+                unnamed(1, -1, None)
             );
             assert_eq!(
                 layouts[2],
-                Layout {
-                    opcode: 2,
-                    size: 2,
-                    fields: Some(vec![u16le])
-                }
+                unnamed(2, 2, Some(vec![u16le]))
             );
         }
+    }
+
+    fn unnamed(opcode: u16, size: i32, fields: Option<Vec<Field>>) -> Layout {
+        Layout {
+            opcode,
+            size,
+            fields,
+            name: None,
+            order: Vec::new(),
+        }
+    }
+
+    fn int(shifts: &[u8], signed: bool, transform: Transform) -> Field {
+        Field {
+            signed,
+            shifts: shifts.to_vec(),
+            transform,
+        }
+    }
+
+    #[test]
+    fn names_and_role_order_survive_publishing() {
+        let memory = memory();
+        let large = Layout {
+            opcode: 1,
+            size: 6,
+            fields: Some(vec![
+                int(&[1, 0, 3, 2], true, Transform::None),
+                int(&[1, 0], false, Transform::None),
+            ]),
+            name: Some(Name::VarpLarge),
+            order: vec![1, 0],
+        };
+        let wrong_roles = Layout {
+            opcode: 2,
+            order: vec![0],
+            ..large.clone()
+        };
+        let chat = Layout {
+            opcode: 3,
+            size: -1,
+            fields: None,
+            name: Some(Name::MessageGame),
+            order: vec![],
+        };
+        unsafe {
+            publish_layouts(
+                memory.0,
+                &[unnamed(0, 0, Some(vec![])), large.clone(), wrong_roles, chat.clone()],
+            );
+            let layouts = read_layouts(memory.0).unwrap();
+            assert_eq!(layouts[0].name, None);
+            assert_eq!(layouts[1], large);
+            assert_eq!(layouts[2].name, None);
+            assert_eq!(layouts[3], chat);
+        }
+        assert_eq!(large.field_names(), vec![Some("value"), Some("id")]);
+        for name in Name::ALL {
+            assert_eq!(Name::from_spelling(name.spelling()), Some(name));
+            assert_eq!(Name::from_code(name as u8), Some(name));
+        }
+        assert_eq!(Name::from_spelling("tick"), None);
+        assert_eq!(Name::from_code(NO_NAME), None);
+    }
+
+    #[test]
+    fn fixed_packets_decode_into_their_roles() {
+        let large = Layout {
+            opcode: 66,
+            size: 6,
+            fields: Some(vec![
+                int(&[1, 0, 3, 2], true, Transform::None),
+                int(&[1, 0], false, Transform::None),
+            ]),
+            name: Some(Name::VarpLarge),
+            order: vec![1, 0],
+        };
+        assert_eq!(
+            decode_named(&large, &[0x02, 0x01, 0xff, 0xff, 0x0b, 0x75]),
+            Some(vec![("id", Value::Int(2933)), ("value", Value::Int(-65023))])
+        );
+        assert_eq!(decode_named(&large, &[0x02, 0x01, 0xff]), None);
+
+        let small = Layout {
+            opcode: 54,
+            size: 3,
+            fields: Some(vec![
+                int(&[0], true, Transform::Sub),
+                int(&[0, 1], false, Transform::Add),
+            ]),
+            name: Some(Name::VarpSmall),
+            order: vec![1, 0],
+        };
+        assert_eq!(
+            decode_named(&small, &[0x7f, 0x80 + 0x34, 0x12]),
+            Some(vec![("id", Value::Int(0x1234)), ("value", Value::Int(1))])
+        );
+
+        let sound = Layout {
+            opcode: 30,
+            size: 5,
+            fields: Some(vec![
+                int(&[1, 0], false, Transform::None),
+                int(&[0], false, Transform::None),
+                int(&[1, 0], false, Transform::None),
+            ]),
+            name: Some(Name::SynthSound),
+            order: vec![0, 1, 2],
+        };
+        assert_eq!(
+            decode_named(&sound, &[0x13, 0x5f, 1, 0, 30]),
+            Some(vec![
+                ("id", Value::Int(4959)),
+                ("loops", Value::Int(1)),
+                ("delay", Value::Int(30))
+            ])
+        );
+        assert_eq!(decode_named(&unnamed(30, 5, sound.fields.clone()), &[0; 5]), None);
+    }
+
+    #[test]
+    fn game_messages_decode_their_type_name_and_text() {
+        let chat = Layout {
+            opcode: 85,
+            size: -1,
+            fields: None,
+            name: Some(Name::MessageGame),
+            order: vec![],
+        };
+        assert_eq!(
+            decode_named(&chat, b"\x69\x00You lose a Hammer to the fire.\x00"),
+            Some(vec![
+                ("type", Value::Int(105)),
+                ("text", Value::Text("You lose a Hammer to the fire.".into()))
+            ])
+        );
+        assert_eq!(
+            decode_named(&chat, b"\x80\x8c\x01Zezima\x00caf\xe9 \x80\x00"),
+            Some(vec![
+                ("type", Value::Int(140)),
+                ("name", Value::Text("Zezima".into())),
+                ("text", Value::Text("caf\u{e9} \u{20ac}".into()))
+            ])
+        );
+        assert_eq!(
+            decode_named(&chat, b"\x00\x00cut off"),
+            Some(vec![
+                ("type", Value::Int(0)),
+                ("text", Value::Text("cut off".into()))
+            ])
+        );
+        assert_eq!(decode_named(&chat, b"\x69"), None);
     }
 
     #[test]

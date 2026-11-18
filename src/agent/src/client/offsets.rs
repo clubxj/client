@@ -16,6 +16,7 @@ mod menu;
 mod minimap;
 mod model;
 mod packet_layouts;
+mod packet_names;
 mod packets;
 mod projectiles;
 mod projection;
@@ -46,6 +47,7 @@ pub use model::{
     ModelFaces, ModelVertices, NpcModel,
 };
 pub use packet_layouts::{find_packet_layouts, PacketLayouts};
+pub use packet_names::{find_packet_names, NamedPacket, PacketAnchors};
 pub use packets::{find_packets, Packets, BUFFER_SIZE};
 pub use projectiles::find_projectiles;
 pub use projection::find_projection;

@@ -49,7 +49,8 @@ use super::offsets::{
     find_item_pile, find_item_setter, find_loc_configs, find_local_player, find_local_projection,
     find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout,
     find_menu_open, find_menu_order, find_menu_settings, find_minimap, find_model_faces,
-    find_model_vertices, find_npc_head_icons, find_npc_model, find_packet_layouts, find_packets,
+    find_model_vertices, find_npc_head_icons, find_npc_model, find_packet_layouts, find_packet_names,
+    find_packets, NamedPacket, PacketAnchors,
     find_projectiles, find_projection, find_render, find_run_energy, find_scene, find_script_runs,
     find_selection, find_skills, find_spot_anims, find_tick_count, find_varc_setters, find_varcs,
     find_varps, find_world_select, Pe, ScanError, World,
@@ -69,6 +70,7 @@ use ipc::state::{
     LoginLayout, MinimapLayout, PathLayout, PlayerLayout, ProjectileLayout, ProjectionLayout,
     SceneLoaderLayout, SkillsLayout, SpotAnimLayout, WorldLayout, WorldSelectLayout,
 };
+use ipc::packets::Name;
 use ipc::{cursor_style, image_fits, overlay_mode};
 
 const MODIFIER_KEYS: [u8; 3] = [0x10, 0x11, 0x12];
@@ -464,6 +466,36 @@ unsafe fn find_offsets() {
             None
         }
     });
+    let packet_names: Vec<(Name, NamedPacket)> = packets
+        .zip(packet_layouts.as_ref())
+        .map(|(rule, layouts)| {
+            let anchors = PacketAnchors {
+                tick_count,
+                varps,
+                chat_messages: chat.map(|chat| chat.messages),
+            };
+            find_packet_names(pe, &rule, layouts, anchors)
+                .into_iter()
+                .filter_map(|(name, result)| match result {
+                    Ok(named) => {
+                        println!(
+                            "[Agent]: Packet {} is {}.\r\n",
+                            name.spelling(),
+                            named.opcode
+                        );
+                        Some((name, named))
+                    }
+                    Err(error) => {
+                        println!(
+                            "[Agent]: Packet {} not found: {error:?}.\r\n",
+                            name.spelling()
+                        );
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let script_runs = found("Script runs", find_script_runs(pe));
     let varc_setters = found("Varc setters", find_varc_setters(pe));
     let tick = player.zip(tick_count).map(|(p, offset)| (p.client, offset));
@@ -863,7 +895,7 @@ unsafe fn find_offsets() {
         }
     }
     if let Some(rule) = packets {
-        super::packets::hook(module_base, rule, packet_layouts.as_ref());
+        super::packets::hook(module_base, rule, packet_layouts.as_ref(), &packet_names);
     }
     if let Some(rule) = script_runs {
         super::script_runs::hook(module_base, rule, tick);

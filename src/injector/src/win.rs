@@ -3509,14 +3509,23 @@ pub fn packets(pid: u32, since: u64, limit: usize) -> Result<crate::PacketPage, 
     })
 }
 
+pub fn raw_packet_layouts(pid: u32) -> Result<Option<Vec<packet_log::Layout>>, String> {
+    PACKET_LOG.read(pid, |log| unsafe { packet_log::read_layouts(log) })
+}
+
 pub fn packet_layouts(pid: u32) -> Result<Option<Vec<crate::PacketLayout>>, String> {
-    let layouts = PACKET_LOG.read(pid, |log| unsafe { packet_log::read_layouts(log) })?;
-    Ok(layouts.map(|layouts| {
+    Ok(raw_packet_layouts(pid)?.map(|layouts| {
         layouts
             .into_iter()
             .map(|layout| crate::PacketLayout {
                 opcode: layout.opcode,
                 size: layout.size,
+                field_names: layout
+                    .field_names()
+                    .into_iter()
+                    .map(|name| name.map(str::to_string))
+                    .collect(),
+                name: layout.name.map(|name| name.spelling().to_string()),
                 fields: layout
                     .fields
                     .map(|fields| fields.iter().map(|field| field.spelling()).collect()),

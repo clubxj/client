@@ -248,16 +248,26 @@ impl Table {
                     (here == 1 && !only.name.is_empty()).then_some(only)
                 };
                 let named = by_opcode.filter(|d| !d.name.is_empty()).or_else(by_shape);
+                let agent_fields: Option<Vec<String>> =
+                    layout.field_names.iter().cloned().collect();
                 Def {
                     sent: false,
                     opcode: layout.opcode,
                     size: layout.size,
-                    name: named.map(|d| d.name.clone()).unwrap_or_default(),
+                    name: layout
+                        .name
+                        .clone()
+                        .or_else(|| named.map(|d| d.name.clone()))
+                        .unwrap_or_default(),
                     touches: by_opcode
                         .or(named)
                         .map(|d| d.touches.clone())
                         .unwrap_or_default(),
-                    field_names: named.map(|d| d.field_names.clone()).unwrap_or_default(),
+                    field_names: match (&layout.name, agent_fields) {
+                        (Some(_), Some(names)) => names,
+                        (Some(_), None) => Vec::new(),
+                        (None, _) => named.map(|d| d.field_names.clone()).unwrap_or_default(),
+                    },
                     fields: fields.clone(),
                 }
             })
@@ -595,6 +605,8 @@ mod tests {
 
     fn layout(opcode: u16, size: i32, fields: Option<&[&str]>) -> injector::PacketLayout {
         injector::PacketLayout {
+            name: None,
+            field_names: Vec::new(),
             opcode,
             size,
             fields: fields.map(|f| f.iter().map(|s| s.to_string()).collect()),
@@ -610,6 +622,8 @@ mod tests {
                 opcode: d.opcode,
                 size: d.size,
                 fields: None,
+                name: None,
+                field_names: Vec::new(),
             })
             .collect();
         for change in changes {
@@ -617,6 +631,19 @@ mod tests {
             *slot = change.clone();
         }
         all
+    }
+
+    #[test]
+    fn the_agents_names_win_over_the_shipped_table() {
+        let mut moved = layout(55, 0, Some(&[]));
+        moved.name = Some("TICK".into());
+        let mut sound = layout(30, 5, Some(&["u16be", "u8", "u16be"]));
+        sound.name = Some("SYNTH_SOUND".into());
+        sound.field_names = vec![Some("id".into()), Some("loops".into()), Some("delay".into())];
+        let table = Table::from_client(&[layout(2, 3, None), moved, sound]);
+        assert_eq!(table.lookup(false, 55).unwrap().name, "TICK");
+        assert_eq!(table.lookup(false, 30).unwrap().field_names, ["id", "loops", "delay"]);
+        assert_eq!(table.lookup(false, 2).unwrap().name, "");
     }
 
     #[test]

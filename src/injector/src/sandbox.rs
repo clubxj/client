@@ -17,7 +17,9 @@ use crate::{
     input_jobs::{self, Job},
     wind_mouse,
 };
-use ipc::packets::{Filter, filter_add, filter_has};
+use ipc::packets::{
+    Filter, Layout, Name, Value as PacketValue, decode_named, filter_add, filter_has,
+};
 
 #[cfg(windows)]
 use crate::act as act_on;
@@ -30,8 +32,8 @@ use crate::{
     ground_items, in_instance, item_container, item_names, item_params, item_stackable, landmasses,
     loc_model, loc_shown, locs, map_regions, menu, menu_click, menu_layout, menu_open, movement,
     nav_plan, npc_hitsplats, npc_model, npc_sizes, npc_type_model, npcs, player_hitsplats,
-    player_model, player_plane, players, project_from, projectiles, scene_collision,
-    scene_route, selected_widget, send_input, send_input_with, server_tile, spot_anims,
+    player_model, player_plane, players, project_from, projectiles, raw_packet_layouts,
+    scene_collision, scene_route, selected_widget, send_input, send_input_with, server_tile, spot_anims,
     sub_interfaces, varbit, varc, varp_value, varps, wait_watchers, widget, widget_children,
     widget_model, world_route, world_select,
 };
@@ -83,6 +85,10 @@ mod offline {
     ) -> bool {
         std::thread::sleep(timeout);
         false
+    }
+
+    pub fn raw_packet_layouts(_: u32) -> Result<Option<Vec<ipc::packets::Layout>>, String> {
+        Err(NO_WIN32.into())
     }
 
     pub fn connection(_: u32) -> Option<Connection> {
@@ -444,6 +450,7 @@ struct Callbacks {
     packets: Option<PacketWatcher>,
     packet_callbacks: Vec<(u64, Filter, mlua::Function)>,
     waiting: Option<Filter>,
+    layouts: Option<Rc<Vec<Layout>>>,
     last_id: u64,
 }
 
@@ -455,6 +462,16 @@ impl Callbacks {
     fn next_id(&mut self) -> u64 {
         self.last_id += 1;
         self.last_id
+    }
+
+    fn layouts(&mut self, pid: Option<u32>) -> mlua::Result<Rc<Vec<Layout>>> {
+        if let Some(layouts) = &self.layouts {
+            return Ok(layouts.clone());
+        }
+        let found = raw_packet_layouts(need_client(pid)?)
+            .map_err(mlua::Error::RuntimeError)?
+            .ok_or_else(|| mlua::Error::RuntimeError(NO_LAYOUTS.into()))?;
+        Ok(self.layouts.insert(Rc::new(found)).clone())
     }
 
     fn refresh_packets(&mut self, pid: Option<u32>) -> mlua::Result<()> {
@@ -471,9 +488,14 @@ impl Callbacks {
         }
         let packets = match &mut self.packets {
             Some(packets) => packets,
-            None => self
-                .packets
-                .insert(PacketWatcher::new(need_client(pid)?).map_err(mlua::Error::RuntimeError)?),
+            None => {
+                let client = need_client(pid)?;
+                let watcher = PacketWatcher::new(client).map_err(mlua::Error::RuntimeError)?;
+                if self.layouts.is_none() {
+                    self.layouts = raw_packet_layouts(client).ok().flatten().map(Rc::new);
+                }
+                self.packets.insert(watcher)
+            }
         };
         packets.set_filter(filter);
         Ok(())
@@ -545,8 +567,9 @@ fn pump_events(
             .iter()
             .map(|(_, filter, callback)| (*filter, callback.clone()))
             .collect();
+        let layouts = callbacks.borrow().layouts.clone();
         for packet in &packets {
-            let value = packet_to_lua(lua, packet)?;
+            let value = packet_to_lua(lua, packet, layouts.as_deref().map(Vec::as_slice))?;
             for (filter, callback) in &packet_callbacks {
                 if filter_has(filter, packet.direction, packet.opcode) {
                     callback.call::<()>(value.clone())?;
@@ -566,7 +589,11 @@ fn pump_events(
     }
 }
 
-fn packet_to_lua(lua: &Lua, packet: &ipc::packets::Entry) -> mlua::Result<mlua::Value> {
+fn packet_to_lua(
+    lua: &Lua,
+    packet: &ipc::packets::Entry,
+    layouts: Option<&[Layout]>,
+) -> mlua::Result<mlua::Value> {
     let table = lua.create_table()?;
     table.set("sequence", packet.sequence)?;
     table.set("time_ms", packet.time_ms)?;
@@ -574,7 +601,85 @@ fn packet_to_lua(lua: &Lua, packet: &ipc::packets::Entry) -> mlua::Result<mlua::
     table.set("opcode", packet.opcode)?;
     table.set("length", packet.length)?;
     table.set("payload", lua.create_string(&packet.payload)?)?;
+    if packet.direction == ipc::packets::direction::RECEIVED
+        && let Some(layout) = layouts.and_then(|all| all.get(packet.opcode as usize))
+        && let Some(name) = layout.name
+    {
+        table.set("name", name.spelling())?;
+        if let Some(fields) = decode_named(layout, &packet.payload) {
+            let decoded = lua.create_table()?;
+            for (role, value) in fields {
+                match value {
+                    PacketValue::Int(number) => decoded.set(role, number)?,
+                    PacketValue::Text(text) => decoded.set(role, text)?,
+                }
+            }
+            table.set("fields", decoded)?;
+        }
+    }
     Ok(mlua::Value::Table(table))
+}
+
+const NO_LAYOUTS: &str = "the agent hasn't published this client's packet layouts yet";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PacketId {
+    Opcode(u16),
+    Named(Name),
+}
+
+fn known_packet_names() -> String {
+    Name::ALL.map(Name::spelling).join(", ")
+}
+
+fn packet_name(spelling: &str) -> mlua::Result<Name> {
+    Name::from_spelling(spelling).ok_or_else(|| {
+        mlua::Error::RuntimeError(format!(
+            "unknown packet name {spelling:?}; known names: {}",
+            known_packet_names()
+        ))
+    })
+}
+
+impl mlua::FromLua for PacketId {
+    fn from_lua(value: mlua::Value, lua: &Lua) -> mlua::Result<Self> {
+        match value {
+            mlua::Value::String(text) => Ok(PacketId::Named(packet_name(&text.to_str()?)?)),
+            other => Ok(PacketId::Opcode(u16::from_lua(other, lua)?)),
+        }
+    }
+}
+
+fn named_opcode(layouts: &[Layout], name: Name) -> Option<u16> {
+    layouts
+        .iter()
+        .find(|layout| layout.name == Some(name))
+        .map(|layout| layout.opcode)
+}
+
+fn packet_opcodes(
+    function: &str,
+    ids: &[PacketId],
+    sent: Option<bool>,
+    layouts: &mut dyn FnMut() -> mlua::Result<Rc<Vec<Layout>>>,
+) -> mlua::Result<Vec<u16>> {
+    ids.iter()
+        .map(|&id| match id {
+            PacketId::Opcode(opcode) => Ok(opcode),
+            PacketId::Named(name) if sent.unwrap_or(false) => {
+                Err(mlua::Error::RuntimeError(format!(
+                    "{function}: {} is a server packet, it is never sent",
+                    name.spelling()
+                )))
+            }
+            PacketId::Named(name) => named_opcode(&layouts()?, name).ok_or_else(|| {
+                mlua::Error::RuntimeError(format!(
+                    "{function}: packet {} wasn't found in this client; check packet_opcode first",
+                    name.spelling()
+                ))
+            }),
+        })
+        .collect()
 }
 
 fn packet_filter(name: &str, opcodes: &[u16], sent: Option<bool>) -> mlua::Result<Filter> {
@@ -1479,9 +1584,11 @@ pub fn run_with_modules(
     s.set(
         "on_packet",
         lua.create_function(
-            move |_, (opcodes, callback, sent): (Vec<u16>, mlua::Function, Option<bool>)| {
-                let filter = packet_filter("on_packet", &opcodes, sent)?;
+            move |_, (ids, callback, sent): (Vec<PacketId>, mlua::Function, Option<bool>)| {
                 let mut events = registry.borrow_mut();
+                let opcodes =
+                    packet_opcodes("on_packet", &ids, sent, &mut || events.layouts(pid))?;
+                let filter = packet_filter("on_packet", &opcodes, sent)?;
                 let id = events.next_id();
                 events.packet_callbacks.push((id, filter, callback));
                 if let Err(error) = events.refresh_packets(pid) {
@@ -1491,6 +1598,15 @@ pub fn run_with_modules(
                 Ok(id)
             },
         )?,
+    )?;
+    let registry = events.clone();
+    s.set(
+        "packet_opcode",
+        lua.create_function(move |_, spelling: String| {
+            let name = packet_name(&spelling)?;
+            let layouts = registry.borrow_mut().layouts(pid)?;
+            Ok(named_opcode(&layouts, name))
+        })?,
     )?;
     let registry = events.clone();
     s.set(
@@ -1507,10 +1623,12 @@ pub fn run_with_modules(
     s.set(
         "wait_packet",
         lua.create_function(
-            move |lua, (opcodes, ms, sent): (Vec<u16>, u64, Option<bool>)| {
-                let filter = packet_filter("wait_packet", &opcodes, sent)?;
-                let (previous, since) = {
+            move |lua, (ids, ms, sent): (Vec<PacketId>, u64, Option<bool>)| {
+                let (previous, since, filter) = {
                     let mut events = pump.borrow_mut();
+                    let opcodes =
+                        packet_opcodes("wait_packet", &ids, sent, &mut || events.layouts(pid))?;
+                    let filter = packet_filter("wait_packet", &opcodes, sent)?;
                     let previous = events.waiting.replace(filter);
                     if let Err(error) = events.refresh_packets(pid) {
                         events.waiting = previous;
@@ -1519,6 +1637,7 @@ pub fn run_with_modules(
                     (
                         previous,
                         events.packets.as_ref().map_or(0, PacketWatcher::written),
+                        filter,
                     )
                 };
                 let found = pump_events(
@@ -2083,10 +2202,113 @@ mod tests {
             payload: vec![0, 255, 10],
         };
         lua.globals()
-            .set("packet", packet_to_lua(&lua, &entry).unwrap())
+            .set("packet", packet_to_lua(&lua, &entry, None).unwrap())
             .unwrap();
         let seen: String = lua.load("return `{packet.sequence} {packet.time_ms} {packet.sent} {packet.opcode} {packet.length} {#packet.payload} {string.byte(packet.payload, 2)}`").eval().unwrap();
         assert_eq!(seen, "7 1200 true 75 300 3 255");
+    }
+
+    fn sound_layouts() -> Rc<Vec<Layout>> {
+        let u16be = ipc::packets::Field {
+            signed: false,
+            shifts: vec![1, 0],
+            transform: ipc::packets::Transform::None,
+        };
+        let u8 = ipc::packets::Field {
+            signed: false,
+            shifts: vec![0],
+            transform: ipc::packets::Transform::None,
+        };
+        Rc::new(vec![
+            Layout {
+                opcode: 0,
+                size: 0,
+                fields: Some(vec![]),
+                name: Some(Name::Tick),
+                order: vec![],
+            },
+            Layout {
+                opcode: 1,
+                size: 5,
+                fields: Some(vec![u16be.clone(), u8, u16be]),
+                name: Some(Name::SynthSound),
+                order: vec![0, 1, 2],
+            },
+            Layout {
+                opcode: 2,
+                size: 0,
+                fields: Some(vec![]),
+                name: None,
+                order: vec![],
+            },
+        ])
+    }
+
+    #[test]
+    fn named_packets_resolve_to_this_clients_opcodes() {
+        let layouts = sound_layouts();
+        let mut get = || Ok(layouts.clone());
+        let ids = [
+            PacketId::Named(Name::SynthSound),
+            PacketId::Opcode(9),
+            PacketId::Named(Name::Tick),
+        ];
+        assert_eq!(packet_opcodes("t", &ids, None, &mut get).unwrap(), [1, 9, 0]);
+        let missing = packet_opcodes("t", &[PacketId::Named(Name::VarpLarge)], None, &mut get);
+        assert!(missing.unwrap_err().to_string().contains("VARP_LARGE wasn't found"));
+        let sent = packet_opcodes("t", &[PacketId::Named(Name::Tick)], Some(true), &mut get);
+        assert!(sent.unwrap_err().to_string().contains("never sent"));
+        let mut unused = || -> mlua::Result<Rc<Vec<Layout>>> { panic!("layouts read for opcodes") };
+        assert_eq!(
+            packet_opcodes("t", &[PacketId::Opcode(4)], None, &mut unused).unwrap(),
+            [4]
+        );
+        assert_eq!(named_opcode(&layouts, Name::SynthSound), Some(1));
+        assert_eq!(named_opcode(&layouts, Name::MessageGame), None);
+    }
+
+    #[test]
+    fn packet_names_are_checked_and_need_a_client() {
+        let error = |source: &str| run_lines(source).1.unwrap_err().to_string();
+        assert!(error("on_packet({ 'SOUND' }, function() end)").contains("unknown packet name"));
+        assert!(error("print(packet_opcode('TICK'))").contains(NO_CLIENT));
+        assert!(error("wait_packet({ 'TICK' }, 10)").contains(NO_CLIENT));
+    }
+
+    #[test]
+    fn a_named_packet_reaches_luau_with_its_fields() {
+        let lua = Lua::new();
+        let layouts = sound_layouts();
+        let entry = |opcode: u16, direction: u8, payload: Vec<u8>| ipc::packets::Entry {
+            sequence: 1,
+            time_ms: 0,
+            direction,
+            opcode,
+            length: payload.len() as u32,
+            payload,
+        };
+        let received = ipc::packets::direction::RECEIVED;
+        let sound = entry(1, received, vec![0x13, 0x5f, 1, 0, 30]);
+        lua.globals()
+            .set("sound", packet_to_lua(&lua, &sound, Some(&layouts)).unwrap())
+            .unwrap();
+        let cut = entry(1, received, vec![0x13]);
+        lua.globals()
+            .set("cut", packet_to_lua(&lua, &cut, Some(&layouts)).unwrap())
+            .unwrap();
+        let plain = entry(2, received, vec![]);
+        lua.globals()
+            .set("plain", packet_to_lua(&lua, &plain, Some(&layouts)).unwrap())
+            .unwrap();
+        let sent = entry(1, ipc::packets::direction::SENT, vec![0x13, 0x5f, 1, 0, 30]);
+        lua.globals()
+            .set("sent", packet_to_lua(&lua, &sent, Some(&layouts)).unwrap())
+            .unwrap();
+        let seen: String = lua
+            .load("return `{sound.name} {sound.fields.id} {sound.fields.loops} {sound.fields.delay} {cut.name} {cut.fields} {plain.name} {sent.name}`")
+            .eval()
+            .unwrap();
+        assert_eq!(seen, "SYNTH_SOUND 4959 1 30 SYNTH_SOUND nil nil nil");
     }
 
     #[test]

@@ -123,7 +123,7 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 
 - Inspectors poll on `POLL_EVERY` except the inventory inspector, which blocks on an agent event (`WAIT_FOR_CHANGE`) and on Linux uses its own helper lane (`Lane::Events`); after a baseline it applies slot changes to its own copy.
 - Script names are downloaded on demand from RuneLite's `cs2-scripts` zip and kept in memory only (the cache has only hashes).
-- Packet layouts come from the agent (`injector packet-layouts`) and fall back to `packet_defs.tsv`; shipped names apply by opcode only while all packet sizes match. Opcodes change with game updates.
+- Packet layouts come from the agent (`injector packet-layouts`) and fall back to `packet_defs.tsv`. Names the agent found (with their field names) win; shipped names apply by opcode only while all packet sizes match. Opcodes change with game updates.
 - Icons are drawn by the selected client and cached in `icons.bin` (append-only; older format restarted), so layouts show icons with no client loaded.
 
 ## Queue

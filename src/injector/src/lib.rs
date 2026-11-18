@@ -14,7 +14,7 @@ use ipc::{Header, Incompatible};
 pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
-pub const HOST_API: u32 = 26;
+pub const HOST_API: u32 = 27;
 pub const HOST_API_MIN: u32 = 22;
 
 pub mod antiban;
@@ -190,6 +190,8 @@ pub struct PacketLayout {
     pub opcode: u16,
     pub size: i32,
     pub fields: Option<Vec<String>>,
+    pub name: Option<String>,
+    pub field_names: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,7 +336,8 @@ pub use win::{
     item_changes, item_changes_wait, item_container, item_containers, item_families, item_icons,
     item_names, item_params, item_stackable, landmasses, list_clients, load, loc_model, loc_shown,
     locs, map_regions, memory_words, menu, menu_click, menu_layout, menu_open, movement, nav_plan,
-    npc_hitsplats, npc_model, npc_sizes, npc_type_model, npc_words, npcs, packet_layouts, packets,
+    npc_hitsplats, npc_model, npc_sizes, npc_type_model, npc_words, npcs, packet_layouts,
+    packets, raw_packet_layouts,
     player_hitsplats, player_model, player_plane, player_words, players, project, project_from,
     projectiles, scene_collision, scene_route, scene_tiles, scene_tiles_next_frame, screenshot,
     script_runs, selected_widget, server_tile, set_cursor, set_display_name, set_total_xp,
