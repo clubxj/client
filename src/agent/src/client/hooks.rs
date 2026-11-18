@@ -47,12 +47,12 @@ use super::offsets::{
     find_decoration_layout, find_destination, find_game_object_layout, find_game_state,
     find_ground_items, find_instance_flag, find_interfaces, find_item_containers, find_item_icon,
     find_item_pile, find_item_setter, find_loc_configs, find_local_player, find_local_projection,
-    find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout, find_menu_order, find_menu_settings,
-    find_menu_open, find_minimap, find_model_faces, find_model_vertices, find_npc_head_icons,
-    find_npc_model, find_packet_layouts, find_packets, find_projectiles, find_projection,
-    find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
-    find_spot_anims, find_tick_count, find_varc_setters, find_varcs, find_varps, find_world_select,
-    Pe, ScanError, World,
+    find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout,
+    find_menu_open, find_menu_order, find_menu_settings, find_minimap, find_model_faces,
+    find_model_vertices, find_npc_head_icons, find_npc_model, find_packet_layouts, find_packets,
+    find_projectiles, find_projection, find_render, find_run_energy, find_scene, find_script_runs,
+    find_selection, find_skills, find_spot_anims, find_tick_count, find_varc_setters, find_varcs,
+    find_varps, find_world_select, Pe, ScanError, World,
 };
 use super::state::{LayoutMap, LAYOUT_MAP};
 use super::unload::HookCall;
@@ -69,7 +69,7 @@ use ipc::state::{
     LoginLayout, MinimapLayout, PathLayout, PlayerLayout, ProjectileLayout, ProjectionLayout,
     SceneLoaderLayout, SkillsLayout, SpotAnimLayout, WorldLayout, WorldSelectLayout,
 };
-use ipc::{cursor_style, overlay_mode, IMAGE_DATA_SIZE};
+use ipc::{cursor_style, image_fits, overlay_mode};
 
 const MODIFIER_KEYS: [u8; 3] = [0x10, 0x11, 0x12];
 static KEYBOARD_MODIFIERS: Mutex<[bool; 3]> = Mutex::new([false; 3]);
@@ -261,10 +261,6 @@ unsafe fn unhook_wndproc() {
 static ORIGINAL_WGL_SWAPBUFFERS: OnceLock<GenericDetour<unsafe extern "system" fn(HDC) -> BOOL>> =
     OnceLock::new();
 
-fn frame_fits(width: i32, height: i32) -> bool {
-    width > 0 && height > 0 && width as usize * height as usize * 4 <= IMAGE_DATA_SIZE
-}
-
 unsafe extern "system" fn hooked_wgl_swap_buffers(hdc: HDC) -> BOOL {
     let _call = HookCall::enter();
     let _ = catch_unwind(|| draw_frame());
@@ -294,14 +290,20 @@ unsafe fn draw_frame() {
     let _ = catch_unwind(|| super::act::on_frame((offset_x, offset_y_top_down)));
     let _ = catch_unwind(super::menu::capture);
 
-    let fits = frame_fits(width, height);
+    let fits = image_fits(width, height);
     let (mouse, dest, overlay, (cursor, cursor_color, cursor_size)) = {
         let mem_manager = memory_manager();
         mem_manager.set_viewport(offset_x, offset_y, width, height, window_height);
-        let overlay = (fits && mem_manager.overlay_mode() != overlay_mode::OFF).then(|| {
-            let serial = mem_manager.overlay_serial();
-            (mem_manager.overlay_ptr(serial as usize & 1), serial)
-        });
+        let overlay = (mem_manager.overlay_mode() != overlay_mode::OFF)
+            .then(|| {
+                let serial = mem_manager.overlay_serial();
+                let slot = serial as usize & 1;
+                let size = mem_manager.overlay_size(slot);
+                (mem_manager.overlay_ptr(slot), size, serial)
+            })
+            .filter(|&(_, [painted_width, painted_height], _)| {
+                image_fits(painted_width, painted_height)
+            });
         let dest = (fits && mem_manager.capture_enabled()).then(|| mem_manager.image_ptr());
         (
             mem_manager.get_mouse_position(),
@@ -320,8 +322,8 @@ unsafe fn draw_frame() {
             None => release_frame_buffers(),
         }
 
-        if let Some((overlay, serial)) = overlay {
-            draw_overlay(offset_x, offset_y, width, height, overlay, serial);
+        if let Some((overlay, size, serial)) = overlay {
+            draw_overlay(viewport, overlay, size, serial);
         }
 
         if cursor != cursor_style::OFF && mouse.0 > -1 && mouse.1 > -1 {

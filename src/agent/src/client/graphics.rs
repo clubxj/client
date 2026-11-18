@@ -14,8 +14,8 @@ use gl::{
     FRAGMENT_SHADER, LINEAR, MAP_COHERENT_BIT, MAP_PERSISTENT_BIT, MAP_READ_BIT,
     ONE_MINUS_SRC_ALPHA, PIXEL_PACK_BUFFER, PIXEL_PACK_BUFFER_BINDING, POINTS, RGBA8, SRC_ALPHA,
     SYNC_FLUSH_COMMANDS_BIT, SYNC_GPU_COMMANDS_COMPLETE, TEXTURE0, TEXTURE_2D, TEXTURE_MAG_FILTER,
-    TEXTURE_MIN_FILTER, TEXTURE_WRAP_S, TEXTURE_WRAP_T, TRIANGLE_STRIP, UNSIGNED_BYTE,
-    VERTEX_SHADER,
+    TEXTURE_MIN_FILTER, TEXTURE_WRAP_S, TEXTURE_WRAP_T, TRIANGLE_STRIP, UNPACK_ROW_LENGTH,
+    UNSIGNED_BYTE, VERTEX_SHADER,
 };
 
 use windows::{
@@ -23,8 +23,8 @@ use windows::{
     Win32::{
         Graphics::OpenGL::{
             glBindTexture, glBlendFunc, glDeleteTextures, glDisable, glDrawArrays, glEnable,
-            glGenTextures, glGetIntegerv, glIsEnabled, glPointSize, glReadPixels, glTexParameteri,
-            glTexSubImage2D, glViewport, wglGetProcAddress,
+            glGenTextures, glGetIntegerv, glIsEnabled, glPixelStorei, glPointSize, glReadPixels,
+            glTexParameteri, glTexSubImage2D, glViewport, wglGetProcAddress,
         },
         System::LibraryLoader::{GetModuleHandleA, GetProcAddress},
     },
@@ -325,18 +325,21 @@ fn init_gl_texture(width: i32, height: i32) -> GLuint {
 }
 
 pub fn draw_overlay(
-    offset_x: i32,
-    offset_y: i32,
-    width: i32,
-    height: i32,
+    [offset_x, offset_y, width, height]: [i32; 4],
     src: *const u8,
+    [painted_width, painted_height]: [i32; 2],
     serial: u32,
 ) {
+    let (shown_width, shown_height) = (painted_width.min(width), painted_height.min(height));
+    if shown_width <= 0 || shown_height <= 0 {
+        return;
+    }
+
     let program = *OVERLAY_SHADER.get_or_init(|| link_program(OVERLAY_VS, OVERLAY_FS));
     let vao = vao();
 
     let mut overlay = OVERLAY_TEXTURE.lock().unwrap();
-    resize_overlay_texture(&mut overlay, width, height);
+    resize_overlay_texture(&mut overlay, shown_width, shown_height);
     let texture = overlay.texture;
     let upload = overlay.serial != Some(serial);
     overlay.serial = Some(serial);
@@ -344,20 +347,29 @@ pub fn draw_overlay(
 
     let gl = gl();
     unsafe {
-        glViewport(offset_x, offset_y, width, height);
+        glViewport(
+            offset_x,
+            offset_y + height - shown_height,
+            shown_width,
+            shown_height,
+        );
         if upload {
+            let mut prev_row_length = 0;
+            glGetIntegerv(UNPACK_ROW_LENGTH, &mut prev_row_length);
+            glPixelStorei(UNPACK_ROW_LENGTH, painted_width);
             glBindTexture(TEXTURE_2D, texture);
             glTexSubImage2D(
                 TEXTURE_2D,
                 0,
                 0,
                 0,
-                width,
-                height,
+                shown_width,
+                shown_height,
                 BGRA,
                 UNSIGNED_BYTE,
                 src as *const c_void,
             );
+            glPixelStorei(UNPACK_ROW_LENGTH, prev_row_length);
         }
 
         (gl.use_program)(program);
@@ -379,6 +391,7 @@ pub fn draw_overlay(
         if !blend_was_enabled {
             glDisable(BLEND);
         }
+        glViewport(offset_x, offset_y, width, height);
     }
 }
 

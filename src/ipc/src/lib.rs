@@ -13,13 +13,17 @@ pub mod script_runs;
 pub mod state;
 pub mod varc_log;
 
-pub const PROTOCOL_VERSION: u8 = 64;
+pub const PROTOCOL_VERSION: u8 = 65;
 
 pub fn shared_memory_name(pid: u32) -> String {
     format!("AGENT_DATA_{pid}")
 }
 
 pub const IMAGE_DATA_SIZE: usize = 33177602;
+
+pub const fn image_fits(width: i32, height: i32) -> bool {
+    width > 0 && height > 0 && width as usize * height as usize * 4 <= IMAGE_DATA_SIZE
+}
 
 pub const OVERLAY_SLOTS: usize = 2;
 
@@ -132,6 +136,7 @@ pub struct Header {
     pub cursor_color: [u8; 3],
     pub cursor_size: u8,
     pub frame_serial: u32,
+    pub overlay_sizes: [[i32; 2]; OVERLAY_SLOTS],
 }
 
 pub const HEADER_SIZE: usize = core::mem::size_of::<Header>();
@@ -192,7 +197,8 @@ mod tests {
         assert_eq!(core::mem::offset_of!(Header, cursor_style), 52);
         assert_eq!(core::mem::offset_of!(Header, cursor_size), 56);
         assert_eq!(core::mem::offset_of!(Header, frame_serial), 57);
-        assert_eq!(HEADER_SIZE, PREAMBLE_SIZE + 28 + 3 + 4 + 8 + 4 + 1 + 4);
+        assert_eq!(core::mem::offset_of!(Header, overlay_sizes), 61);
+        assert_eq!(HEADER_SIZE, PREAMBLE_SIZE + 28 + 3 + 4 + 8 + 4 + 1 + 4 + 16);
     }
 
     #[test]

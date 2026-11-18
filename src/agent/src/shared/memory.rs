@@ -5,7 +5,7 @@ use ipc::{
 };
 use std::{
     ffi::CString,
-    ptr::{addr_of, addr_of_mut, null_mut, read_volatile, write_bytes},
+    ptr::{addr_of, addr_of_mut, null_mut, read_unaligned, read_volatile, write_bytes},
     sync::{Mutex, MutexGuard, OnceLock},
 };
 use windows::{
@@ -124,6 +124,7 @@ impl MemoryManager {
             cursor_color,
             cursor_size,
             frame_serial: 0,
+            overlay_sizes: [[0; 2]; OVERLAY_SLOTS],
         };
 
         let event_name = wide(&frame_event_name(pid));
@@ -199,6 +200,11 @@ impl MemoryManager {
 
     pub unsafe fn overlay_mode(&self) -> u8 {
         (*self.ptr).header.overlay_mode
+    }
+
+    pub unsafe fn overlay_size(&self, slot: usize) -> [i32; 2] {
+        let sizes = addr_of!((*self.ptr).header.overlay_sizes).cast::<[i32; 2]>();
+        read_unaligned(sizes.add(slot % OVERLAY_SLOTS))
     }
 
     pub unsafe fn overlay_serial(&self) -> u32 {

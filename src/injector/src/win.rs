@@ -61,7 +61,7 @@ use windows_sys::{
 
 use ipc::{
     HEADER_SIZE, Header, IMAGE_DATA_SIZE, INITIAL_CURSOR_SIZE, Incompatible, frame_event_name,
-    initial_cursor_name,
+    image_fits, initial_cursor_name,
     item_log::{self, item_log_memory_name, item_wake_event_name},
     overlay_mode, overlay_offset,
     packets::{self as packet_log, LOG_SIZE, Log, direction, packets_memory_name},
@@ -4929,10 +4929,10 @@ fn with_overlay(
 ) -> Result<(), String> {
     let connection = current_connection(pid)?;
     let (width, height) = (connection.width, connection.height);
-    let bytes = width.max(0) as usize * height.max(0) as usize * 4;
-    if width <= 0 || height <= 0 || bytes > IMAGE_DATA_SIZE {
+    if !image_fits(width, height) {
         return Err(format!("Client {pid} hasn't rendered a frame yet"));
     }
+    let bytes = width as usize * height as usize * 4;
 
     let unmapped = |e| format!("Cannot map agent's shared memory in client {pid}: {e}");
     let session = session(pid).ok();
@@ -4956,21 +4956,59 @@ fn with_overlay(
             return Ok(());
         }
 
+        let sizes_at = base.add(mem::offset_of!(Header, overlay_sizes)) as *mut [i32; 2];
         let serial = serial_at.read_unaligned();
-        let shown = base.add(overlay_offset(serial as usize & 1));
-        let back = base.add(overlay_offset((serial as usize & 1) ^ 1));
+        let shown_slot = serial as usize & 1;
+        let back_slot = shown_slot ^ 1;
+        let shown = base.add(overlay_offset(shown_slot));
+        let back = base.add(overlay_offset(back_slot));
         if keep {
-            copy_nonoverlapping(shown, back, bytes);
+            keep_overlay(
+                shown,
+                sizes_at.add(shown_slot).read_unaligned(),
+                back,
+                width,
+                height,
+            );
         } else {
             write_bytes(back, 0, bytes);
         }
         paint(back, width, height);
+        sizes_at.add(back_slot).write_unaligned([width, height]);
         fence(Ordering::Release);
         hash_at.write_unaligned(hash.unwrap_or(0));
         serial_at.write_unaligned(serial.wrapping_add(1));
         *mode_at = mode;
     }
     Ok(())
+}
+
+unsafe fn keep_overlay(
+    shown: *const u8,
+    [shown_width, shown_height]: [i32; 2],
+    back: *mut u8,
+    width: i32,
+    height: i32,
+) {
+    let bytes = width as usize * height as usize * 4;
+    if [shown_width, shown_height] == [width, height] {
+        unsafe { copy_nonoverlapping(shown, back, bytes) };
+        return;
+    }
+    unsafe { write_bytes(back, 0, bytes) };
+    if !image_fits(shown_width, shown_height) {
+        return;
+    }
+    let row = shown_width.min(width) as usize * 4;
+    for y in 0..shown_height.min(height) as usize {
+        unsafe {
+            copy_nonoverlapping(
+                shown.add(y * shown_width as usize * 4),
+                back.add(y * width as usize * 4),
+                row,
+            );
+        }
+    }
 }
 
 unsafe fn draw_rect(
