@@ -6,6 +6,7 @@ use std::{
 mod actor_path;
 mod camera;
 mod chat;
+mod frame;
 mod ground_items;
 mod item_icon;
 mod item_setter;
@@ -32,6 +33,7 @@ mod world_select;
 pub use actor_path::find_actor_path;
 pub use camera::find_camera;
 pub use chat::find_chat;
+pub use frame::{find_frame, Frame};
 pub use ground_items::{find_ground_items, find_item_pile};
 pub use item_icon::find_item_icon;
 pub use item_setter::find_item_setter;

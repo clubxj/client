@@ -17,7 +17,7 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 
 ## Flow
 
-- `agent.dll` runs inside the client: finds offsets at startup, hooks the OpenGL swap and WndProc, publishes state each frame to named shared memory (`AGENT_DATA_<pid>`, `AGENT_STATE_<pid>`, ...).
+- `agent.dll` runs inside the client: finds offsets at startup, hooks the OpenGL swap, the game thread's frame and WndProc, publishes state each frame to named shared memory (`AGENT_DATA_<pid>`, `AGENT_STATE_<pid>`, ...).
 - `src/decode` decodes client memory for both the agent (in-process) and the injector (`ReadProcessMemory`).
 - The injector opens the mappings from any process (including a Windows process in the same Wine prefix) and exposes them as a Rust API and Luau globals. Input goes back as window messages flagged `ipc::input::SYNTHETIC`.
 - The loader runs each script as its own `injector run` process and reaches the backend only through the API (`/launcher/*`); see [loader-gui.md](loader-gui.md).

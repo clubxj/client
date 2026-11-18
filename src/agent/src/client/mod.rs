@@ -4,6 +4,7 @@ pub mod definitions;
 pub mod detour;
 pub mod drawn;
 pub mod focus;
+pub mod frame;
 pub mod graphics;
 pub mod hooks;
 pub mod item_log;
