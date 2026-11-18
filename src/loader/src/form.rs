@@ -293,6 +293,10 @@ impl Form {
             .any(|field| layout_kind(field) == Some(kind))
     }
 
+    pub fn spec(&self) -> &Value {
+        &self.spec
+    }
+
     pub fn remembered(&self) -> Map<String, Value> {
         collect(&self.values)
     }

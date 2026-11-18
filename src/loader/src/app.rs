@@ -152,7 +152,7 @@ enum Event {
     },
     RestartQuoted {
         run: u64,
-        result: Result<Option<(StoreScript, session::Quoted)>, ApiError>,
+        result: Result<Option<session::Restart>, ApiError>,
     },
     Heartbeat {
         session_id: String,
@@ -1918,9 +1918,14 @@ impl LoaderApp {
             store.script_id.clone(),
             store.community,
         );
+        let cached_revision = self
+            .manifests
+            .get(&script_id)
+            .map(|(revision, _)| *revision);
         self.starting = run.target.as_ref().map(|t| t.client.pid);
         self.active_run = Some(id);
         self.log_tab = LogTab::Run(id);
+        self.remember_form(id);
         self.api_job(ctx, move |api| Event::RestartQuoted {
             run: id,
             result: session::restart_quote(
@@ -1929,21 +1934,34 @@ impl LoaderApp {
                 &session_id,
                 &script_id,
                 community,
+                cached_revision,
             ),
         });
     }
 
-    fn restart_quoted(
-        &mut self,
-        ctx: &egui::Context,
-        id: u64,
-        script: StoreScript,
-        quote: Quote,
-        lib: Result<Lib, String>,
-    ) {
+    fn restart_quoted(&mut self, ctx: &egui::Context, id: u64, restart: session::Restart) {
+        let session::Restart {
+            mut script,
+            quoted: session::Quoted { me, quote, lib },
+            manifest,
+        } = restart;
+        self.refresh_me(me);
         let lib = match lib {
             Ok(lib) => lib,
             Err(error) => return self.script_error(format!("Couldn't restart: {error}")),
+        };
+        if let Some(fetched) = manifest {
+            match injector::manifest::Manifest::parse(fetched.manifest) {
+                Ok(manifest) => {
+                    self.manifests
+                        .insert(script.id.clone(), (fetched.revision, manifest));
+                    script.revision = Some(fetched.revision);
+                }
+                Err(error) => return self.script_error(format!("Couldn't restart: {error}")),
+            }
+        }
+        let Some((_, manifest)) = self.manifests.get(&script.id).cloned() else {
+            return self.script_error("Couldn't restart: the script's settings couldn't be read.");
         };
         let Some(run) = self.run_by_id(id) else {
             return;
@@ -1953,10 +1971,18 @@ impl LoaderApp {
         else {
             return;
         };
-        let values = run
-            .form_sent
-            .clone()
-            .unwrap_or_else(|| serde_json::json!({}));
+        let values = match (&manifest.settings, self.form_values(id)) {
+            (None, _) => serde_json::json!({}),
+            (Some(spec), Some((ran_with, values))) if *spec == ran_with => values,
+            (Some(_), _) => {
+                let title = script.title.clone();
+                self.configure_store_script(ctx, script, target, &manifest);
+                self.close_run(id);
+                return self.script_error(format!(
+                    "{title}'s settings changed since it last ran. Check them, then press Start."
+                ));
+            }
+        };
         let start = PendingStart {
             script,
             target,
@@ -1966,6 +1992,16 @@ impl LoaderApp {
             launch: Launch::with(values),
         };
         self.start_at_quote(ctx, start, Some(old_price), quote);
+    }
+
+    fn form_values(&self, id: u64) -> Option<(serde_json::Value, serde_json::Value)> {
+        let form = self.run_by_id(id)?.form.as_ref()?;
+        let layouts = self.layouts.get(&form.title).unwrap_or(&EMPTY_LAYOUTS);
+        let crate::form::Outcome::Submitted(values) = form.submitted(layouts, &self.known_items)
+        else {
+            return None;
+        };
+        Some((form.spec().clone(), values))
     }
 
     fn quote_store_script(
@@ -3989,9 +4025,8 @@ impl LoaderApp {
                     let started = match result {
                         Ok(prepared) => {
                             let started = self.run_prepared(ctx, pid, &script, prepared, run, *launch);
-                            if started.is_some()
-                                && let Some(old) = replaces
-                            {
+                            if let (Some(new), Some(old)) = (started, replaces) {
+                                self.carry_form(old, new);
                                 self.close_run(old);
                             }
                             started
@@ -4033,10 +4068,7 @@ impl LoaderApp {
                 Event::RestartQuoted { run, result } => {
                     self.starting = None;
                     match result {
-                        Ok(Some((script, session::Quoted { me, quote, lib }))) => {
-                            self.refresh_me(me);
-                            self.restart_quoted(ctx, run, script, quote, lib);
-                        }
+                        Ok(Some(restart)) => self.restart_quoted(ctx, run, restart),
                         Ok(None) => self.script_error("Couldn't restart: the script is no longer available to this account."),
                         Err(ApiError::SignedOut(why)) => self.sign_out(Some(why)),
                         Err(error) => self.script_error(format!("Couldn't restart: {error}")),
@@ -5222,19 +5254,15 @@ impl LoaderApp {
             .cloned()
     }
 
-    fn drop_ended_forms(&mut self) {
-        for run in self
-            .runs
-            .iter_mut()
-            .filter(|r| !r.is_running() && !r.is_configuring())
-        {
-            run.form = None;
-            run.form_sent = None;
+    fn carry_form(&mut self, from: u64, to: u64) {
+        let form = run_in(&mut self.runs, Some(from)).and_then(|r| r.form.take());
+        if let Some(run) = run_in(&mut self.runs, Some(to)) {
+            run.form = form;
         }
     }
 
-    fn remember_form(&mut self) {
-        if let Some(form) = self.run().and_then(|r| r.form.as_ref()) {
+    fn remember_form(&mut self, id: u64) {
+        if let Some(form) = self.run_by_id(id).and_then(|r| r.form.as_ref()) {
             let (title, remembered) = (form.title.clone(), form.remembered());
             self.remembered_forms.insert(title, remembered);
         }
@@ -5244,7 +5272,7 @@ impl LoaderApp {
         match outcome {
             crate::form::Outcome::Open => {}
             crate::form::Outcome::Submitted(values) => {
-                self.remember_form();
+                self.remember_form(id);
                 self.launch_run(ctx, id, values);
             }
             crate::form::Outcome::Cancelled => self.close_run(id),
@@ -5275,7 +5303,9 @@ impl LoaderApp {
         else {
             return;
         };
-        self.remember_form();
+        if let Some(id) = self.active_run {
+            self.remember_form(id);
+        }
         if let Some(run) = self.run_mut() {
             match run.send(|s| s.push_update(&values)) {
                 Ok(()) => {
@@ -5972,8 +6002,9 @@ impl LoaderApp {
             },
             None => None,
         };
-        let values = run.form_sent.clone();
-        self.run_file(ctx, file, target.as_ref(), Some(id), values);
+        self.remember_form(id);
+        let previous = self.form_values(id);
+        self.run_file(ctx, file, target.as_ref(), Some(id), previous);
     }
 
     fn run_file(
@@ -5982,7 +6013,7 @@ impl LoaderApp {
         file: ScriptFile,
         target: Option<&Target>,
         replaces: Option<u64>,
-        values: Option<serde_json::Value>,
+        previous: Option<(serde_json::Value, serde_json::Value)>,
     ) {
         let name = file.name();
         let path = std::path::Path::new(&file.path);
@@ -6007,19 +6038,22 @@ impl LoaderApp {
         );
         run.source = Some(Source::File(file.clone()));
         run.file = Some(file.clone());
-        let spec = manifest.settings.clone().filter(|_| values.is_none());
-        if let Some(spec) = spec {
+        let values = match (&manifest.settings, previous) {
+            (None, _) => Some(manifest.defaults()),
+            (Some(spec), Some((ran_with, values))) if *spec == ran_with => Some(values),
+            (Some(_), _) => None,
+        };
+        if let Some(spec) = manifest.settings.clone() {
             run.form = Some(self.settings_form(spec, &name));
-            run.info(format!("Set up {name}, then press Start."));
-        } else if let Some(spec) = manifest.settings.clone() {
-            run.form = Some(self.settings_form(spec, &name));
+            if values.is_none() {
+                run.info(format!("Set up {name}, then press Start."));
+            }
         }
         self.add_run(run);
         if let Some(old) = replaces {
             self.close_run(old);
         }
-        if manifest.settings.is_none() || values.is_some() {
-            let values = values.unwrap_or_else(|| manifest.defaults());
+        if let Some(values) = values {
             self.start_file(ctx, id, &file, target, values);
         }
     }
@@ -6751,7 +6785,9 @@ impl LoaderApp {
         ui.add_space(4.0);
         if ui
             .checkbox(&mut self.settings.script_debugging, "Script debugging")
-            .on_hover_text("Scripts and the lib draw what they plan, such as the route of each walk click.")
+            .on_hover_text(
+                "Scripts and the lib draw what they plan, such as the route of each walk click.",
+            )
             .changed()
         {
             let on = self.settings.script_debugging;
@@ -7549,7 +7585,6 @@ impl eframe::App for LoaderApp {
             self.updating_ui(ui);
             return;
         }
-        self.drop_ended_forms();
         self.reload_prompt_ui(&ctx);
         self.tiles_ui(&ctx);
         self.poll_packets(&ctx);

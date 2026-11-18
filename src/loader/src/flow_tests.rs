@@ -116,6 +116,12 @@ impl Server {
                     .collect();
                 Reply::json(200, json!({ "scripts": scripts }))
             }
+            ("GET", p) if p.starts_with("/launcher/scripts/") && p.ends_with("/manifest") => {
+                Reply::json(
+                    200,
+                    json!({ "revision": 4, "manifest": { "settings": { "fields": [] } } }),
+                )
+            }
             ("GET", p) if p.starts_with("/launcher/scripts/") && p.ends_with("/quote") => {
                 Reply::json(
                     200,
@@ -766,12 +772,12 @@ fn a_restart_ends_the_old_session_before_it_asks_for_the_quote() {
     let api = api(&fake);
 
     let root = cache("restart");
-    let (script, quoted) = restart_quote(&api, Some(&root), "s1", SCRIPT_ID, false)
+    let restart = restart_quote(&api, Some(&root), "s1", SCRIPT_ID, false, Some(4))
         .expect("quote")
         .expect("listed");
-    assert_eq!(script.id, SCRIPT_ID);
-    assert_eq!(quoted.quote.required, 30_000);
-    assert_eq!(quoted.lib.expect("lib").version, LIB_VERSION);
+    assert_eq!(restart.script.id, SCRIPT_ID);
+    assert_eq!(restart.quoted.quote.required, 30_000);
+    assert_eq!(restart.quoted.lib.expect("lib").version, LIB_VERSION);
 
     let paths: Vec<String> = fake.requests().into_iter().map(|r| r.path).collect();
     let end = paths.iter().position(|p| p.ends_with("/s1/end")).unwrap();
@@ -784,19 +790,49 @@ fn a_restart_of_a_script_no_longer_listed_finds_nothing() {
     let fake = Server::healthy().start();
     let api = api(&fake);
 
-    let found =
-        restart_quote(&api, Some(&cache("unlisted")), "s1", "not-listed", false).expect("quote");
+    let found = restart_quote(
+        &api,
+        Some(&cache("unlisted")),
+        "s1",
+        "not-listed",
+        false,
+        None,
+    )
+    .expect("quote");
     assert_eq!(found, None);
+}
+
+#[test]
+fn a_restart_reads_the_manifest_only_when_the_live_revision_is_not_cached() {
+    let fake = Server::healthy().start();
+    let root = cache("restart-manifest");
+    let cached = restart_quote(&api(&fake), Some(&root), "s1", SCRIPT_ID, false, Some(4))
+        .expect("quote")
+        .expect("listed");
+    assert_eq!(cached.manifest, None);
+    assert_eq!(
+        fake.count("GET", &format!("/launcher/scripts/{SCRIPT_ID}/manifest")),
+        0
+    );
+
+    let published = restart_quote(&api(&fake), Some(&root), "s1", SCRIPT_ID, false, Some(3))
+        .expect("quote")
+        .expect("listed");
+    assert_eq!(published.manifest.expect("manifest").revision, 4);
+    assert_eq!(
+        fake.count("GET", &format!("/launcher/scripts/{SCRIPT_ID}/manifest")),
+        1
+    );
 }
 
 #[test]
 fn a_restart_of_a_community_script_asks_for_the_list_the_account_may_read() {
     let fake = Server::healthy().start();
     let root = cache("restart-community");
-    let (script, _) = restart_quote(&api(&fake), Some(&root), "s1", COMMUNITY_ID, true)
+    let restart = restart_quote(&api(&fake), Some(&root), "s1", COMMUNITY_ID, true, None)
         .expect("quote")
         .expect("listed");
-    assert!(script.community);
+    assert!(restart.script.community);
     assert_eq!(fake.count("GET", "/launcher/scripts?community=true"), 0);
 
     let fake = Server {
@@ -805,7 +841,7 @@ fn a_restart_of_a_community_script_asks_for_the_list_the_account_may_read() {
     }
     .start();
     assert!(
-        restart_quote(&api(&fake), Some(&root), "s1", COMMUNITY_ID, true)
+        restart_quote(&api(&fake), Some(&root), "s1", COMMUNITY_ID, true, None)
             .expect("quote")
             .is_some()
     );

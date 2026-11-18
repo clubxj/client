@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::api::{
     Api, ApiError, Heartbeat, StartedSession, Stats, StoreScript,
-    models::{Ended, Me, Quote, SessionFile, credits_label, end_reason_message},
+    models::{Ended, Me, Quote, ScriptManifest, SessionFile, credits_label, end_reason_message},
 };
 use crate::libs::{self, Lib};
 use crate::script::Process;
@@ -148,13 +148,21 @@ pub fn quote(api: &Api, root: Option<&Path>, script_id: &str) -> Result<Quoted, 
     })
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Restart {
+    pub script: StoreScript,
+    pub quoted: Quoted,
+    pub manifest: Option<ScriptManifest>,
+}
+
 pub fn restart_quote(
     api: &Api,
     root: Option<&Path>,
     old_session: &str,
     script_id: &str,
     community: bool,
-) -> Result<Option<(StoreScript, Quoted)>, ApiError> {
+    cached_revision: Option<i64>,
+) -> Result<Option<Restart>, ApiError> {
     thread::scope(|scope| {
         let lib = scope.spawn(|| ensure_lib(api, root));
         let _ = api.end_session(old_session);
@@ -167,15 +175,20 @@ pub fn restart_quote(
         else {
             return Ok(None);
         };
+        let manifest = match script.revision {
+            Some(revision) if cached_revision == Some(revision) => None,
+            _ => Some(api.manifest(script_id)?),
+        };
         let quote = joined(quote)?;
-        Ok(Some((
+        Ok(Some(Restart {
             script,
-            Quoted {
+            quoted: Quoted {
                 me,
                 quote,
                 lib: joined(lib),
             },
-        )))
+            manifest,
+        }))
     })
 }
 
