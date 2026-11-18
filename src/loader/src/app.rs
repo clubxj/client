@@ -7111,7 +7111,7 @@ impl LoaderApp {
         id.and_then(|id| self.run_by_id(id))
     }
 
-    fn log_line_ui(&mut self, ui: &mut egui::Ui) {
+    fn log_line_ui(&mut self, ui: &mut egui::Ui) -> bool {
         let tab = self.log_tab;
         let shown_run = self.shown_run_log().map(|run| (run.id, run.title.clone()));
         let title = match (tab, &shown_run) {
@@ -7156,13 +7156,11 @@ impl LoaderApp {
                 });
             });
         });
-        if expand {
-            self.log_collapsed = false;
-        }
         self.log_tab = picked;
+        expand
     }
 
-    fn log_panel_ui(&mut self, ui: &mut egui::Ui) {
+    fn log_panel_ui(&mut self, ui: &mut egui::Ui) -> bool {
         ui.shrink_clip_rect(ui.available_rect_before_wrap());
         ui.spacing_mut().item_spacing.y = 0.0;
         let shown_run = self.shown_run_log().map(|run| (run.id, run.title.clone()));
@@ -7178,13 +7176,11 @@ impl LoaderApp {
                 });
             });
         });
-        if collapse {
-            self.log_collapsed = true;
-        }
         divider(ui);
         ui.spacing_mut().item_spacing.y = 4.0;
         ui.horizontal_wrapped(|ui| self.log_controls_ui(ui));
         self.log_ui(ui);
+        collapse
     }
 
     fn log_ui(&mut self, ui: &mut egui::Ui) {
@@ -7681,21 +7677,30 @@ impl eframe::App for LoaderApp {
         });
         self.update_banner_ui(&ctx, ui);
         let log_max = (window.height() * 0.5).max(60.0);
-        if self.log_collapsed {
-            egui::Panel::bottom("log_collapsed")
-                .resizable(false)
-                .show(ui, |ui| self.log_line_ui(ui));
-        } else {
+        let mut log_expanded = !self.log_collapsed;
+        let log_toggled = egui::Panel::show_switched(
+            ui,
+            &mut log_expanded,
+            egui::Panel::bottom("log_collapsed").resizable(false),
             egui::Panel::bottom("log")
                 .resizable(true)
                 .default_size((window.height() * 0.22).clamp(70.0, 180.0))
-                .min_size(48.0)
-                .max_size(log_max)
-                .show(ui, |ui| {
+                .max_size(log_max),
+            |ui, expanded| {
+                if expanded {
                     ui.add_space(4.0);
-                    self.log_panel_ui(ui);
-                });
-        }
+                    self.log_panel_ui(ui)
+                } else {
+                    self.log_line_ui(ui)
+                }
+            },
+        )
+        .inner;
+        self.log_collapsed = if log_toggled {
+            log_expanded
+        } else {
+            !log_expanded
+        };
         if self.auth.me().is_none() {
             egui::CentralPanel::default_margins().show(ui, |ui| {
                 self.login_gate_ui(ui);
