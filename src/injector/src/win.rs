@@ -4808,6 +4808,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                                 b[1].round() as i32,
                             ],
                             path.color,
+                            Layer::World,
                         );
                     }
                 }
@@ -4839,7 +4840,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     &font,
                     &label.text,
                     [left, top],
-                    label.color,
+                    (label.color, Layer::World),
                 );
             }
             for rect in &plan.rects {
@@ -4851,11 +4852,11 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     [right, bottom, left, bottom],
                     [left, bottom, left, top],
                 ] {
-                    draw_stroke(buf, width, height, line, rect.color);
+                    draw_stroke(buf, width, height, line, rect.color, Layer::Ui);
                 }
             }
             for &backdrop in &plan.backdrops {
-                fill_rect(buf, width, height, backdrop, TEXT_BACKGROUND);
+                fill_rect(buf, width, height, backdrop, TEXT_BACKGROUND, Layer::Ui);
             }
             for text in &plan.texts {
                 draw_text(
@@ -4865,7 +4866,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     &font,
                     &text.text,
                     [text.x, text.y],
-                    text.color,
+                    (text.color, Layer::Ui),
                 );
             }
         },
@@ -4899,13 +4900,13 @@ unsafe fn draw_text(
     font: &crate::font::Font,
     text: &str,
     [left, top]: [i32; 2],
-    color: Rgba,
+    (color, layer): (Rgba, Layer),
 ) {
     font.plot(text, left + 1, top + 1, LABEL_SCALE, |x, y| unsafe {
-        put_pixel(buf, width, height, x, y, LABEL_SHADOW)
+        put_layer_pixel(buf, width, height, x, y, LABEL_SHADOW, layer)
     });
     font.plot(text, left, top, LABEL_SCALE, |x, y| unsafe {
-        put_pixel(buf, width, height, x, y, color)
+        put_layer_pixel(buf, width, height, x, y, color, layer)
     });
 }
 
@@ -4915,10 +4916,11 @@ unsafe fn fill_rect(
     height: i32,
     [left, top, rect_width, rect_height]: [i32; 4],
     color: Rgba,
+    layer: Layer,
 ) {
     for y in top.max(0)..(top + rect_height).min(height) {
         for x in left.max(0)..(left + rect_width).min(width) {
-            unsafe { put_pixel(buf, width, height, x, y, color) };
+            unsafe { put_layer_pixel(buf, width, height, x, y, color, layer) };
         }
     }
 }
@@ -4929,11 +4931,12 @@ unsafe fn draw_stroke(
     height: i32,
     [x1, y1, x2, y2]: [i32; 4],
     color: Rgba,
+    layer: Layer,
 ) {
     for shift in 0..STROKE_WIDTH {
         unsafe {
-            draw_line(buf, width, height, [x1 + shift, y1, x2 + shift, y2], color, Layer::World);
-            draw_line(buf, width, height, [x1, y1 + shift, x2, y2 + shift], color, Layer::World);
+            draw_line(buf, width, height, [x1 + shift, y1, x2 + shift, y2], color, layer);
+            draw_line(buf, width, height, [x1, y1 + shift, x2, y2 + shift], color, layer);
         }
     }
 }
@@ -5066,7 +5069,7 @@ unsafe fn draw_arrow(
     let round = |[x, y]: [f32; 2]| [x.round() as i32, y.round() as i32];
     let [x1, y1] = round(from);
     let [x2, y2] = round(to);
-    unsafe { draw_stroke(buf, width, height, [x1, y1, x2, y2], color) };
+    unsafe { draw_stroke(buf, width, height, [x1, y1, x2, y2], color, Layer::World) };
     if length < 1.0 {
         return;
     }
