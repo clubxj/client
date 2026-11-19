@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub mod camera;
 pub mod chat;
 pub mod definitions;
+pub mod interface_mask;
 pub mod js5;
 pub mod locs;
 pub mod memory;

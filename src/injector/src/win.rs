@@ -85,7 +85,7 @@ use ipc::{
 
 use crate::{
     Client, Connection, DisplayName, GameState, Image, ItemIconRequest, LoadReport, Overlay,
-    Position, Rgba, TotalXp, Widget, dll_version,
+    Layer, Position, Rgba, TotalXp, Widget, dll_version,
     memory::Memory,
     projection::{self, Terrain},
     state,
@@ -3792,14 +3792,16 @@ pub fn draw_batch(pid: u32, overlays: &[Overlay]) -> Result<(), String> {
                         x2,
                         y2,
                         color,
-                    } => draw_rect(overlay_ptr, width, height, [x1, y1, x2, y2], color),
+                        layer,
+                    } => draw_rect(overlay_ptr, width, height, [x1, y1, x2, y2], color, layer),
                     Overlay::Line {
                         x1,
                         y1,
                         x2,
                         y2,
                         color,
-                    } => draw_line(overlay_ptr, width, height, [x1, y1, x2, y2], color),
+                        layer,
+                    } => draw_line(overlay_ptr, width, height, [x1, y1, x2, y2], color, layer),
                 }
             }
         },
@@ -3808,6 +3810,7 @@ pub fn draw_batch(pid: u32, overlays: &[Overlay]) -> Result<(), String> {
 
 pub(crate) fn paint_overlay(
     pid: u32,
+    layer: Layer,
     paint: impl FnOnce([i32; 2], &mut dyn FnMut(i32, i32, Rgba)),
 ) -> Result<(), String> {
     with_overlay(
@@ -3817,13 +3820,18 @@ pub(crate) fn paint_overlay(
         None,
         |buf, width, height| {
             paint([width, height], &mut |x, y, color| unsafe {
-                put_pixel(buf, width, height, x, y, color)
+                put_layer_pixel(buf, width, height, x, y, color, layer)
             })
         },
     )
 }
 
-pub fn draw_lines(pid: u32, lines: &[[i32; 4]], color: Rgba) -> Result<(), String> {
+pub fn draw_lines(
+    pid: u32,
+    lines: &[[i32; 4]],
+    color: Rgba,
+    layer: Layer,
+) -> Result<(), String> {
     with_overlay(
         pid,
         overlay_mode::ON_SERIAL,
@@ -3831,7 +3839,7 @@ pub fn draw_lines(pid: u32, lines: &[[i32; 4]], color: Rgba) -> Result<(), Strin
         None,
         |overlay_ptr, width, height| {
             for &[x1, y1, x2, y2] in lines {
-                unsafe { draw_line(overlay_ptr, width, height, [x1, y1, x2, y2], color) };
+                unsafe { draw_line(overlay_ptr, width, height, [x1, y1, x2, y2], color, layer) };
             }
         },
     )
@@ -4924,8 +4932,8 @@ unsafe fn draw_stroke(
 ) {
     for shift in 0..STROKE_WIDTH {
         unsafe {
-            draw_line(buf, width, height, [x1 + shift, y1, x2 + shift, y2], color);
-            draw_line(buf, width, height, [x1, y1 + shift, x2, y2 + shift], color);
+            draw_line(buf, width, height, [x1 + shift, y1, x2 + shift, y2], color, Layer::World);
+            draw_line(buf, width, height, [x1, y1 + shift, x2, y2 + shift], color, Layer::World);
         }
     }
 }
@@ -5027,19 +5035,20 @@ unsafe fn draw_rect(
     height: i32,
     [x1, y1, x2, y2]: [i32; 4],
     color: Rgba,
+    layer: Layer,
 ) {
     let (left, right) = (x1.min(x2), x1.max(x2));
     let (top, bottom) = (y1.min(y2), y1.max(y2));
     for x in left.max(0)..=right.min(width - 1) {
         unsafe {
-            put_pixel(buf, width, height, x, top, color);
-            put_pixel(buf, width, height, x, bottom, color);
+            put_layer_pixel(buf, width, height, x, top, color, layer);
+            put_layer_pixel(buf, width, height, x, bottom, color, layer);
         }
     }
     for y in top.max(0)..=bottom.min(height - 1) {
         unsafe {
-            put_pixel(buf, width, height, left, y, color);
-            put_pixel(buf, width, height, right, y, color);
+            put_layer_pixel(buf, width, height, left, y, color, layer);
+            put_layer_pixel(buf, width, height, right, y, color, layer);
         }
     }
 }
@@ -5101,6 +5110,7 @@ unsafe fn draw_line(
     height: i32,
     [x1, y1, x2, y2]: [i32; 4],
     color: Rgba,
+    layer: Layer,
 ) {
     let (dx, dy) = (
         (i64::from(x2) - i64::from(x1)).abs(),
@@ -5109,7 +5119,7 @@ unsafe fn draw_line(
     let (sx, sy) = (if x1 < x2 { 1 } else { -1 }, if y1 < y2 { 1 } else { -1 });
     let (mut x, mut y, mut err) = (x1, y1, dx + dy);
     for _ in 0..=dx.max(-dy).min(1 << 15) {
-        unsafe { put_pixel(buf, width, height, x, y, color) };
+        unsafe { put_layer_pixel(buf, width, height, x, y, color, layer) };
         if x == x2 && y == y2 {
             break;
         }
@@ -5126,6 +5136,19 @@ unsafe fn draw_line(
 }
 
 unsafe fn put_pixel(buf: *mut u8, width: i32, height: i32, x: i32, y: i32, color: Rgba) {
+    unsafe { put_layer_pixel(buf, width, height, x, y, color, Layer::World) }
+}
+
+unsafe fn put_layer_pixel(
+    buf: *mut u8,
+    width: i32,
+    height: i32,
+    x: i32,
+    y: i32,
+    color: Rgba,
+    layer: Layer,
+) {
+    let color = layer.tag(color);
     if x < 0 || y < 0 || x >= width || y >= height {
         return;
     }

@@ -12,7 +12,7 @@ use mlua::{
 use serde::Serialize;
 
 use crate::{
-    Input, MouseButton, Overlay, Rgba,
+    Input, Layer, MouseButton, Overlay, Rgba,
     async_input::{Pace, Worker},
     input_jobs::{self, Job},
     wind_mouse,
@@ -166,7 +166,7 @@ mod offline {
         fn act_on(u32, &crate::Act, &dyn super::Pace) -> crate::ActResult;
         fn draw(u32, &Overlay) -> ();
         fn draw_batch(u32, &[Overlay]) -> ();
-        fn draw_lines(u32, &[[i32; 4]], crate::Rgba) -> ();
+        fn draw_lines(u32, &[[i32; 4]], crate::Rgba, crate::Layer) -> ();
     }
 }
 
@@ -328,7 +328,7 @@ fn rgba(r: u8, g: u8, b: u8, a: Option<u8>) -> Rgba {
     }
 }
 
-fn shape(line: bool, [x1, y1, x2, y2]: [i32; 4], color: Rgba) -> Overlay {
+fn shape(line: bool, [x1, y1, x2, y2]: [i32; 4], color: Rgba, layer: Layer) -> Overlay {
     if line {
         Overlay::Line {
             x1,
@@ -336,6 +336,7 @@ fn shape(line: bool, [x1, y1, x2, y2]: [i32; 4], color: Rgba) -> Overlay {
             x2,
             y2,
             color,
+            layer,
         }
     } else {
         Overlay::Rect {
@@ -344,14 +345,24 @@ fn shape(line: bool, [x1, y1, x2, y2]: [i32; 4], color: Rgba) -> Overlay {
             x2,
             y2,
             color,
+            layer,
         }
     }
 }
 
-type ShapeArgs = (i32, i32, i32, i32, u8, u8, u8, Option<u8>);
+fn layer_arg(name: Option<String>) -> mlua::Result<Layer> {
+    name.map_or(Ok(Layer::World), |name| {
+        Layer::parse(&name).map_err(mlua::Error::RuntimeError)
+    })
+}
 
-fn shape_args(line: bool, (x1, y1, x2, y2, r, g, b, a): ShapeArgs) -> Overlay {
-    shape(line, [x1, y1, x2, y2], rgba(r, g, b, a))
+type ShapeArgs = (i32, i32, i32, i32, u8, u8, u8, Option<u8>, Option<String>);
+
+fn shape_args(
+    line: bool,
+    (x1, y1, x2, y2, r, g, b, a, layer): ShapeArgs,
+) -> mlua::Result<Overlay> {
+    Ok(shape(line, [x1, y1, x2, y2], rgba(r, g, b, a), layer_arg(layer)?))
 }
 
 fn overlay_arg(table: &mlua::Table) -> mlua::Result<Overlay> {
@@ -366,9 +377,10 @@ fn overlay_arg(table: &mlua::Table) -> mlua::Result<Overlay> {
         table.get("b")?,
         table.get("a")?,
     );
+    let layer = layer_arg(table.get("layer")?)?;
     match kind.as_str() {
-        "rect" => Ok(shape(false, corners, color)),
-        "line" => Ok(shape(true, corners, color)),
+        "rect" => Ok(shape(false, corners, color, layer)),
+        "line" => Ok(shape(true, corners, color, layer)),
         _ => Err(mlua::Error::RuntimeError(format!(
             "unknown shape kind: {kind}"
         ))),
@@ -2086,21 +2098,19 @@ pub fn run_with_modules(
     s.with_worker("input_cancel", |worker, (): ()| cancel_input(worker))?;
 
     s.action("draw_rect", |pid, args: ShapeArgs| {
-        Ok(draw(pid, &shape_args(false, args)))
+        Ok(draw(pid, &shape_args(false, args)?))
     })?;
     s.action("draw_line", |pid, args: ShapeArgs| {
-        Ok(draw(pid, &shape_args(true, args)))
+        Ok(draw(pid, &shape_args(true, args)?))
     })?;
-    s.action(
-        "draw_lines",
-        |pid, (lines, r, g, b, a): (Vec<mlua::Table>, u8, u8, u8, Option<u8>)| {
-            let lines = lines
-                .iter()
-                .map(|line| rounded(line, [1, 2, 3, 4]))
-                .collect::<mlua::Result<Vec<_>>>()?;
-            Ok(draw_lines(pid, &lines, rgba(r, g, b, a)))
-        },
-    )?;
+    type LinesArgs = (Vec<mlua::Table>, u8, u8, u8, Option<u8>, Option<String>);
+    s.action("draw_lines", |pid, (lines, r, g, b, a, layer): LinesArgs| {
+        let lines = lines
+            .iter()
+            .map(|line| rounded(line, [1, 2, 3, 4]))
+            .collect::<mlua::Result<Vec<_>>>()?;
+        Ok(draw_lines(pid, &lines, rgba(r, g, b, a), layer_arg(layer)?))
+    })?;
     s.action("clear_overlay", |pid, (): ()| {
         Ok(draw(pid, &Overlay::Clear))
     })?;
@@ -2156,6 +2166,31 @@ mod tests {
     ) -> (Vec<String>, mlua::Result<()>) {
         let name = path.file_name().unwrap().to_string_lossy();
         run_collect(&name, source, Some(path), lib_dir, HashMap::new())
+    }
+
+    #[test]
+    fn draw_batch_shapes_take_a_world_or_ui_layer() {
+        let lua = Lua::new();
+        let shape = |source: &str| {
+            let table: mlua::Table = lua.load(source).eval().unwrap();
+            overlay_arg(&table)
+        };
+        let base = "kind = 'rect', x1 = 1, y1 = 2, x2 = 3, y2 = 4, r = 5, g = 6, b = 7";
+        let layer_of = |overlay: Overlay| match overlay {
+            Overlay::Rect { layer, .. } | Overlay::Line { layer, .. } => Some(layer),
+            Overlay::Clear => None,
+        };
+        assert_eq!(layer_of(shape(&format!("{{ {base} }}")).unwrap()), Some(Layer::World));
+        assert_eq!(
+            layer_of(shape(&format!("{{ {base}, layer = 'ui' }}")).unwrap()),
+            Some(Layer::Ui)
+        );
+        assert_eq!(
+            layer_of(shape(&format!("{{ {base}, layer = 'world' }}")).unwrap()),
+            Some(Layer::World)
+        );
+        let error = shape(&format!("{{ {base}, layer = 'hud' }}")).unwrap_err();
+        assert!(error.to_string().contains("unknown overlay layer \"hud\""));
     }
 
     #[test]

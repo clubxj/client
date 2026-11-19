@@ -48,6 +48,8 @@ Library and CLI for everything outside the client: find clients, inject the agen
 - **`movement()`** reads the agent's `Movement` block, filled before each packet, so it is exact across ticks a busy script missed; tick callbacks can't give that.
 - **Entry swaps**: the account folder is found by duplicating client handles (up to `HANDLE_SCAN_LIMIT`) until one is a file under `users\<digits>` below a drive-root profile folder, so a numeric Windows user name doesn't match. Fails while logged out.
 
+- **Overlay layers**: world drawings hide under interfaces through the agent's interface mask ([agent-dll.md](agent-dll.md)). `draw_batch` shapes and `draw_rect`/`draw_line`/`draw_lines` take `layer = "world" | "ui"` (default world, anything else is an error); the bank PIN cover is UI, every other painter is world.
+
 ## Sandbox boundary
 
 - `run_with_modules` opens only `TABLE | STRING | MATH | BIT`: no `os`, `io` or `debug`. `dofile` and `loadfile` are removed; `require` is the sandboxed one.

@@ -325,8 +325,11 @@ unsafe fn draw_frame() {
             None => release_frame_buffers(),
         }
 
+        super::interface_mask::want(overlay.map(|_| [width, height]));
         if let Some((overlay, size, serial)) = overlay {
-            draw_overlay(viewport, overlay, size, serial);
+            super::interface_mask::with_current(|mask| {
+                draw_overlay(viewport, overlay, size, serial, mask)
+            });
         }
 
         if cursor != cursor_style::OFF && mouse.0 > -1 && mouse.1 > -1 {

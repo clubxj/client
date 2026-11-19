@@ -51,6 +51,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
     }
 
     super::definitions::stop();
+    super::interface_mask::stop();
     super::packets::close();
     super::script_runs::close();
     super::varc_log::close();

@@ -240,7 +240,7 @@ impl Client for Live<'_> {
         }
 
         if let Some(area) = area {
-            let _ = crate::paint_overlay(self.pid, |size, put| {
+            let _ = crate::paint_overlay(self.pid, crate::Layer::Ui, |size, put| {
                 crate::bank_pin_overlay::paint(area, size, put)
             });
         }

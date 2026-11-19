@@ -477,7 +477,7 @@ fn run() -> ExitCode {
             "       injector wind_mouse <pid> <x> <y> <speed> <wind> <gravity> <timeout ms> <pace>"
         );
         eprintln!(
-            "       injector overlay <pid> rect <x1> <y1> <x2> <y2> <r> <g> <b> <a> | overlay <pid> clear"
+            "       injector overlay <pid> rect <x1> <y1> <x2> <y2> <r> <g> <b> <a> [world|ui] | overlay <pid> clear"
         );
         eprintln!("       injector serve | run [--script <path> [--lib <dir>]] [pid]");
         return ExitCode::from(2);

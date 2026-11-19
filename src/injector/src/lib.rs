@@ -14,7 +14,7 @@ use ipc::{Header, Incompatible};
 pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
-pub const HOST_API: u32 = 27;
+pub const HOST_API: u32 = 28;
 pub const HOST_API_MIN: u32 = 22;
 
 pub mod antiban;
@@ -655,6 +655,37 @@ pub struct Rgba {
     pub a: u8,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Layer {
+    #[default]
+    World,
+    Ui,
+}
+
+impl Layer {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::World => "world",
+            Self::Ui => "ui",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "world" => Ok(Self::World),
+            "ui" => Ok(Self::Ui),
+            _ => Err(format!("unknown overlay layer {name:?}, expected \"world\" or \"ui\"")),
+        }
+    }
+
+    pub fn tag(self, color: Rgba) -> Rgba {
+        Rgba {
+            a: ipc::tag_alpha(color.a, self == Self::Ui),
+            ..color
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Overlay {
     Rect {
@@ -663,6 +694,7 @@ pub enum Overlay {
         x2: i32,
         y2: i32,
         color: Rgba,
+        layer: Layer,
     },
     Line {
         x1: i32,
@@ -670,6 +702,7 @@ pub enum Overlay {
         x2: i32,
         y2: i32,
         color: Rgba,
+        layer: Layer,
     },
     Clear,
 }
@@ -684,6 +717,7 @@ impl Overlay {
                 x2,
                 y2,
                 color: Rgba { r, g, b, a },
+                layer,
             }
             | Self::Line {
                 x1,
@@ -691,6 +725,7 @@ impl Overlay {
                 x2,
                 y2,
                 color: Rgba { r, g, b, a },
+                layer,
             } => vec![
                 "overlay".into(),
                 pid,
@@ -708,6 +743,7 @@ impl Overlay {
                 g.to_string(),
                 b.to_string(),
                 a.to_string(),
+                layer.name().into(),
             ],
             Self::Clear => vec!["overlay".into(), pid, "clear".into()],
         }
@@ -723,13 +759,18 @@ impl Overlay {
 
     fn parse(args: &[&str]) -> Result<Option<Self>, String> {
         Ok(Some(match args {
-            [kind @ ("rect" | "line"), x1, y1, x2, y2, r, g, b, a] => {
+            [kind @ ("rect" | "line"), x1, y1, x2, y2, r, g, b, a, layer @ ..] => {
                 let (x1, y1, x2, y2) = (number(x1)?, number(y1)?, number(x2)?, number(y2)?);
                 let color = Rgba {
                     r: byte(r)?,
                     g: byte(g)?,
                     b: byte(b)?,
                     a: byte(a)?,
+                };
+                let layer = match layer {
+                    [] => Layer::World,
+                    [name] => Layer::parse(name)?,
+                    _ => return Ok(None),
                 };
                 if *kind == "line" {
                     Self::Line {
@@ -738,6 +779,7 @@ impl Overlay {
                         x2,
                         y2,
                         color,
+                        layer,
                     }
                 } else {
                     Self::Rect {
@@ -746,6 +788,7 @@ impl Overlay {
                         x2,
                         y2,
                         color,
+                        layer,
                     }
                 }
             }

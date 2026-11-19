@@ -13,7 +13,7 @@ pub mod script_runs;
 pub mod state;
 pub mod varc_log;
 
-pub const PROTOCOL_VERSION: u8 = 66;
+pub const PROTOCOL_VERSION: u8 = 67;
 
 pub fn shared_memory_name(pid: u32) -> String {
     format!("AGENT_DATA_{pid}")
@@ -29,6 +29,20 @@ pub const OVERLAY_SLOTS: usize = 2;
 
 pub const fn overlay_offset(slot: usize) -> usize {
     HEADER_SIZE + IMAGE_DATA_SIZE * (1 + slot)
+}
+
+pub const MASK_RECTS: usize = 32;
+
+pub const UI_ALPHA_BIT: u8 = 1;
+
+pub const fn tag_alpha(alpha: u8, ui: bool) -> u8 {
+    if alpha == 0 {
+        0
+    } else if ui {
+        alpha | UI_ALPHA_BIT
+    } else {
+        alpha & !UI_ALPHA_BIT
+    }
 }
 
 pub const VERSION_LEN: usize = 7;
@@ -199,6 +213,16 @@ mod tests {
         assert_eq!(core::mem::offset_of!(Header, frame_serial), 57);
         assert_eq!(core::mem::offset_of!(Header, overlay_sizes), 61);
         assert_eq!(HEADER_SIZE, PREAMBLE_SIZE + 28 + 3 + 4 + 8 + 4 + 1 + 4 + 16);
+    }
+
+    #[test]
+    fn alpha_tags_layers_in_the_lowest_bit() {
+        assert_eq!(tag_alpha(255, true), 255);
+        assert_eq!(tag_alpha(128, true), 129);
+        assert_eq!(tag_alpha(255, false), 254);
+        assert_eq!(tag_alpha(129, false), 128);
+        assert_eq!(tag_alpha(0, false), 0);
+        assert_eq!(tag_alpha(0, true), 0);
     }
 
     #[test]

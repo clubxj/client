@@ -8,6 +8,8 @@ mod camera;
 mod chat;
 mod frame;
 mod ground_items;
+#[cfg(test)]
+mod highlights;
 mod item_icon;
 mod item_setter;
 mod items;

@@ -7,6 +7,7 @@ pub mod focus;
 pub mod frame;
 pub mod graphics;
 pub mod hooks;
+pub mod interface_mask;
 pub mod item_log;
 pub mod items;
 pub mod log;

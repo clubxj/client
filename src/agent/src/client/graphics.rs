@@ -5,6 +5,8 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use decode::interface_mask::Rect;
+
 use gl::{
     types::{
         GLbitfield, GLchar, GLenum, GLfloat, GLint, GLintptr, GLsizei, GLsizeiptr, GLsync, GLuint,
@@ -67,6 +69,8 @@ gl_functions! {
     use_program = c"glUseProgram": fn(GLuint);
     gen_vertex_arrays = c"glGenVertexArrays": fn(GLsizei, *mut GLuint);
     uniform_2fv = c"glUniform2fv": fn(GLint, GLsizei, *const GLfloat);
+    uniform_1i = c"glUniform1i": fn(GLint, GLint);
+    uniform_4iv = c"glUniform4iv": fn(GLint, GLsizei, *const GLint);
     tex_storage_2d = c"glTexStorage2D": fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
     active_texture = c"glActiveTexture": fn(GLenum);
 }
@@ -277,8 +281,22 @@ const OVERLAY_FS: &CStr = c"
     in vec2 texCoord;
     out vec4 FragColor;
     uniform sampler2D screenTex;
+    layout(location = 0) uniform int maskCount;
+    layout(location = 1) uniform ivec4 maskRects[32];
     void main() {
-        FragColor = texture(screenTex, vec2(texCoord.x, 1.0 - texCoord.y));
+        ivec2 size = textureSize(screenTex, 0);
+        ivec2 pixel = min(ivec2(vec2(texCoord.x, 1.0 - texCoord.y) * vec2(size)), size - 1);
+        vec4 texel = texelFetch(screenTex, pixel, 0);
+        bool world = (int(round(texel.a * 255.0)) & 1) == 0;
+        if (world) {
+            for (int i = 0; i < maskCount; i++) {
+                ivec4 rect = maskRects[i];
+                if (all(greaterThanEqual(pixel, rect.xy)) && all(lessThan(pixel, rect.zw))) {
+                    discard;
+                }
+            }
+        }
+        FragColor = texel;
     }";
 
 struct OverlayTexture {
@@ -329,6 +347,7 @@ pub fn draw_overlay(
     src: *const u8,
     [painted_width, painted_height]: [i32; 2],
     serial: u32,
+    mask: &[Rect],
 ) {
     let (shown_width, shown_height) = (painted_width.min(width), painted_height.min(height));
     if shown_width <= 0 || shown_height <= 0 {
@@ -373,6 +392,11 @@ pub fn draw_overlay(
         }
 
         (gl.use_program)(program);
+        let rects: Vec<[GLint; 4]> = mask.iter().map(|rect| rect.map(GLint::from)).collect();
+        (gl.uniform_1i)(0, rects.len() as GLint);
+        if !rects.is_empty() {
+            (gl.uniform_4iv)(1, rects.len() as GLsizei, rects.as_ptr().cast());
+        }
         (gl.active_texture)(TEXTURE0);
         glBindTexture(TEXTURE_2D, texture);
 
