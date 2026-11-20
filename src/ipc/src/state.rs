@@ -39,6 +39,7 @@ pub mod part {
     pub const LOGIN_PROVIDER: u64 = 1 << 24;
     pub const MENU_ORDER: u64 = 1 << 25;
     pub const MENU_SETTINGS: u64 = 1 << 26;
+    pub const GROUND_ITEM_OWNERSHIP: u64 = 1 << 27;
 }
 
 pub mod varp {
@@ -249,6 +250,11 @@ pub struct GroundItemsLayout {
     pub level: u32,
     pub node_item: u32,
     pub id: u32,
+    pub public_tick: u32,
+    pub despawn_tick: u32,
+    pub ownership: u32,
+    pub never_public: u32,
+    pub op_flags: u32,
 }
 
 #[repr(C)]
@@ -1093,6 +1099,7 @@ mod tests {
             7 * 4
         );
         assert_eq!(size_of::<ProjectionLayout>(), 24 * 4);
+        assert_eq!(size_of::<GroundItemsLayout>(), 9 * 4);
         assert_eq!(size_of::<ChatLayout>(), 10 * 4);
         assert_eq!(size_of::<ProjectileLayout>(), 24 * 4);
         assert_eq!(size_of::<SpotAnimLayout>(), 8 * 4);
@@ -1100,7 +1107,7 @@ mod tests {
         assert_eq!(size_of::<MenuStateLayout>(), 33 * 4);
         assert_eq!(
             offset_of!(LayoutMemory, request_sequence),
-            8 + 104 + 96 + 128 + 56 + 28 + 96 + 16 + 40 + 8 + 4 + 96 + 32 + 16 + 132 + 4
+            8 + 104 + 96 + 128 + 56 + 28 + 96 + 36 + 40 + 8 + 4 + 96 + 32 + 16 + 132
         );
         let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 28;
         assert_eq!(size_of::<MenuEntryInfo>(), entry);

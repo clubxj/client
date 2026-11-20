@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use ipc::read::{Table, local_player, table_get};
-use ipc::state::{Layout, WorldLayout};
+use ipc::state::{Layout, WorldLayout, part};
 use serde::{Deserialize, Serialize};
 
 use crate::memory::{Memory, Snapshot, TABLE_BUCKETS, TABLE_COUNT, byte, i32_pair, read_string};
@@ -29,11 +29,69 @@ pub struct GroundItem {
     pub plane: i32,
     pub scene_x: i32,
     pub scene_y: i32,
+    pub public_tick: Option<i32>,
+    pub despawn_tick: Option<i32>,
+    pub ownership: Option<i32>,
+    pub never_public: Option<bool>,
+    pub op_flags: Option<u8>,
 }
 
 const SCENE_TILES: i32 = 104;
 const LIST_SIZE: u64 = 24;
 const MAX_PILE: usize = 256;
+const MAX_ITEM_FIELDS: usize = 0x100;
+
+#[derive(Default)]
+struct ItemFields {
+    id: i32,
+    quantity: i32,
+    public_tick: Option<i32>,
+    despawn_tick: Option<i32>,
+    ownership: Option<i32>,
+    never_public: Option<bool>,
+    op_flags: Option<u8>,
+}
+
+fn item_fields(memory: &impl Memory, layout: &Layout, item: u64) -> Option<ItemFields> {
+    let g = &layout.ground_items;
+    if !layout.has(part::GROUND_ITEM_OWNERSHIP) {
+        let (id, quantity) = i32_pair(memory, item + g.id as u64)?;
+        return Some(ItemFields {
+            id,
+            quantity,
+            ..ItemFields::default()
+        });
+    }
+    let fields = [
+        g.id,
+        g.public_tick,
+        g.despawn_tick,
+        g.ownership,
+        g.never_public,
+        g.op_flags,
+    ];
+    let start = *fields.iter().min()?;
+    let len = (*fields.iter().max()? - start) as usize + 4;
+    if len > MAX_ITEM_FIELDS {
+        return None;
+    }
+    let mut bytes = [0u8; MAX_ITEM_FIELDS];
+    if !memory.read(item + start as u64, &mut bytes[..len]) {
+        return None;
+    }
+    let at = |field: u32| (field - start) as usize;
+    let i32_at =
+        |field: u32| i32::from_le_bytes(bytes[at(field)..at(field) + 4].try_into().unwrap());
+    Some(ItemFields {
+        id: i32_at(g.id),
+        quantity: i32_at(g.id + 4),
+        public_tick: Some(i32_at(g.public_tick)),
+        despawn_tick: Some(i32_at(g.despawn_tick)),
+        ownership: Some(i32_at(g.ownership)),
+        never_public: Some(bytes[at(g.never_public)] != 0),
+        op_flags: Some(bytes[at(g.op_flags)]),
+    })
+}
 
 pub fn ground_items(memory: &impl Memory, layout: &Layout) -> Option<Vec<GroundItem>> {
     let (view, _) = local_player(memory, layout)?;
@@ -79,18 +137,23 @@ fn ground_items_in(memory: &impl Memory, layout: &Layout, view: u64) -> Option<V
                 let Some(item) = memory.ptr(node + g.node_item as u64) else {
                     break;
                 };
-                let Some((id, quantity)) = i32_pair(memory, item + g.id as u64) else {
+                let Some(fields) = item_fields(memory, layout, item) else {
                     break;
                 };
                 items.push(GroundItem {
-                    id,
-                    quantity,
+                    id: fields.id,
+                    quantity: fields.quantity,
                     name: None,
                     x: base_x + x,
                     y: base_y + y,
                     plane,
                     scene_x: x,
                     scene_y: y,
+                    public_tick: fields.public_tick,
+                    despawn_tick: fields.despawn_tick,
+                    ownership: fields.ownership,
+                    never_public: fields.never_public,
+                    op_flags: fields.op_flags,
                 });
                 let Some(next) = memory.u64(node) else { break };
                 node = next;
@@ -1434,6 +1497,7 @@ mod tests {
     fn walks_the_ground_item_lists() {
         use ipc::state::{GroundItemsLayout, PlayerLayout, ProjectionLayout};
         let layout = Layout {
+            found: part::GROUND_ITEM_OWNERSHIP,
             player: PlayerLayout {
                 base_x: 0x24,
                 ..Default::default()
@@ -1450,6 +1514,11 @@ mod tests {
                 level: 0x10,
                 node_item: 0x18,
                 id: 0x20,
+                public_tick: 0x28,
+                despawn_tick: 0x2c,
+                ownership: 0x30,
+                never_public: 0x34,
+                op_flags: 0x40,
             },
             ..Layout::default()
         };
@@ -1478,13 +1547,19 @@ mod tests {
         m.put_u64(list, first);
         m.put_u64(first, second);
         m.put_u64(second, list);
-        for (node, item, id, quantity) in [
-            (first, 0x30_0000u64, 311, 1),
-            (second, 0x30_1000u64, 995, 2500),
+        for (node, item, id, quantity, ownership, never_public, op_flags) in [
+            (first, 0x30_0000u64, 311, 1, 1, 1, 0x1f),
+            (second, 0x30_1000u64, 995, 2500, 2, 0, 0x05),
         ] {
             m.put_u64(node + 0x18, item);
+            m.put(item, &[0; 0x78]);
             m.put_i32(item + 0x20, id);
             m.put_i32(item + 0x24, quantity);
+            m.put_i32(item + 0x28, 29861);
+            m.put_i32(item + 0x2c, 30061);
+            m.put_i32(item + 0x30, ownership);
+            m.put(item + 0x34, &[never_public]);
+            m.put(item + 0x40, &[op_flags]);
         }
         let items = ground_items_in(&m, &layout, view).unwrap();
         let tile = |i: &GroundItem| (i.id, i.quantity, i.x, i.y, i.plane, i.scene_x, i.scene_y);
@@ -1494,6 +1569,28 @@ mod tests {
                 (311, 1, 3138, 2785, 1, 2, 1),
                 (995, 2500, 3138, 2785, 1, 2, 1)
             ]
+        );
+        let owned = |i: &GroundItem| {
+            (
+                i.public_tick,
+                i.despawn_tick,
+                i.ownership,
+                i.never_public,
+                i.op_flags,
+            )
+        };
+        assert_eq!(
+            items.iter().map(owned).collect::<Vec<_>>(),
+            vec![
+                (Some(29861), Some(30061), Some(1), Some(true), Some(0x1f)),
+                (Some(29861), Some(30061), Some(2), Some(false), Some(0x05))
+            ]
+        );
+        let unknown = ground_items_in(&m, &Layout { found: 0, ..layout }, view).unwrap();
+        assert!(
+            unknown
+                .iter()
+                .all(|i| i.ownership.is_none() && i.op_flags.is_none())
         );
     }
 

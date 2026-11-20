@@ -36,7 +36,7 @@ pub use actor_path::find_actor_path;
 pub use camera::find_camera;
 pub use chat::find_chat;
 pub use frame::{find_frame, Frame};
-pub use ground_items::{find_ground_items, find_item_pile};
+pub use ground_items::{find_ground_item_ownership, find_ground_items, find_item_pile};
 pub use item_icon::find_item_icon;
 pub use item_setter::find_item_setter;
 pub use local_projection::find_local_projection;
@@ -1907,6 +1907,18 @@ mod tests {
                 id: 0x20
             })
         );
+        let ownership = find_ground_item_ownership(&pe, tick_count, &ground_items.unwrap());
+        println!("{ownership:x?}");
+        assert_eq!(
+            ownership,
+            Ok(ground_items::GroundItemOwnership {
+                public_tick: 0x28,
+                despawn_tick: 0x2c,
+                ownership: 0x30,
+                never_public: 0x34,
+                op_flags: 0x40
+            })
+        );
         let camera = find_camera(&pe, player.client).expect("camera not found");
         println!("{camera:x?}");
         assert_eq!(
@@ -2217,7 +2229,13 @@ mod tests {
             found("selection", build, find_selection(pe, &menu));
             let minimap = found("minimap", build, find_minimap(pe, player.client));
             found("destination", build, find_destination(pe, minimap.object));
-            found("ground items", build, find_ground_items(pe));
+            let ground_items = found("ground items", build, find_ground_items(pe));
+            let tick_count = found("tick count", build, find_tick_count(pe, player.client));
+            found(
+                "ground item ownership",
+                build,
+                find_ground_item_ownership(pe, tick_count, &ground_items),
+            );
             found("projectiles", build, find_projectiles(pe));
             found("spot animations", build, find_spot_anims(pe));
             found("chat", build, find_chat(pe));

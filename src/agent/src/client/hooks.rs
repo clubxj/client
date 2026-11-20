@@ -45,15 +45,15 @@ use super::offsets::{
     find_animation_height, find_appearance_decoder, find_camera, find_chat, find_collision_maps,
     find_component_fields, find_component_invalidate, find_component_sprite,
     find_decoration_layout, find_destination, find_frame, find_game_object_layout, find_game_state,
-    find_ground_items, find_instance_flag, find_interfaces, find_item_containers, find_item_icon,
-    find_item_pile, find_item_setter, find_loc_configs, find_local_player, find_local_projection,
-    find_login_panel, find_login_provider, find_menu, find_menu_click, find_menu_layout,
-    find_menu_open, find_menu_order, find_menu_settings, find_minimap, find_model_faces,
-    find_model_vertices, find_npc_head_icons, find_npc_model, find_packet_layouts, find_packet_names,
-    find_packets, NamedPacket, PacketAnchors,
-    find_projectiles, find_projection, find_render, find_run_energy, find_scene, find_script_runs,
-    find_selection, find_skills, find_spot_anims, find_tick_count, find_varc_setters, find_varcs,
-    find_varps, find_world_select, Pe, ScanError, World,
+    find_ground_item_ownership, find_ground_items, find_instance_flag, find_interfaces,
+    find_item_containers, find_item_icon, find_item_pile, find_item_setter, find_loc_configs,
+    find_local_player, find_local_projection, find_login_panel, find_login_provider, find_menu,
+    find_menu_click, find_menu_layout, find_menu_open, find_menu_order, find_menu_settings,
+    find_minimap, find_model_faces, find_model_vertices, find_npc_head_icons, find_npc_model,
+    find_packet_layouts, find_packet_names, find_packets, find_projectiles, find_projection,
+    find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
+    find_spot_anims, find_tick_count, find_varc_setters, find_varcs, find_varps, find_world_select,
+    NamedPacket, PacketAnchors, Pe, ScanError, World,
 };
 use super::state::{LayoutMap, LAYOUT_MAP};
 use super::unload::HookCall;
@@ -65,12 +65,12 @@ use ipc::input::{
     ACT_MESSAGE, CACHE_MESSAGE, MODIFIERS_MESSAGE, NAME_MESSAGE, OPEN_CONSOLE_MESSAGE,
     TOTAL_XP_MESSAGE,
 };
+use ipc::packets::Name;
 use ipc::state::{
     part, CameraLayout, ChatLayout, CollisionLayout, GroundItemsLayout, InterfaceLayout, Layout,
     LoginLayout, MinimapLayout, PathLayout, PlayerLayout, ProjectileLayout, ProjectionLayout,
     SceneLoaderLayout, SkillsLayout, SpotAnimLayout, WorldLayout, WorldSelectLayout,
 };
-use ipc::packets::Name;
 use ipc::{cursor_style, image_fits, overlay_mode};
 
 const MODIFIER_KEYS: [u8; 3] = [0x10, 0x11, 0x12];
@@ -453,6 +453,12 @@ unsafe fn find_offsets() {
     let minimap = player.and_then(|p| found("Minimap", find_minimap(pe, p.client)));
     let destination = minimap.and_then(|m| found("Destination", find_destination(pe, m.object)));
     let ground_items = found("Ground items", find_ground_items(pe));
+    let ground_item_ownership = ground_items.zip(tick_count).and_then(|(g, tick)| {
+        found(
+            "Ground item ownership",
+            find_ground_item_ownership(pe, tick, &g),
+        )
+    });
     let chat = found("Chat", find_chat(pe));
     let projectiles = found("Projectiles", find_projectiles(pe));
     let spot_anims = found("Spot animations", find_spot_anims(pe));
@@ -638,7 +644,16 @@ unsafe fn find_offsets() {
             level: g.level,
             node_item: g.node_item,
             id: g.id,
+            ..GroundItemsLayout::default()
         };
+    }
+    if let Some(o) = ground_item_ownership {
+        layout.found |= part::GROUND_ITEM_OWNERSHIP;
+        layout.ground_items.public_tick = o.public_tick;
+        layout.ground_items.despawn_tick = o.despawn_tick;
+        layout.ground_items.ownership = o.ownership;
+        layout.ground_items.never_public = o.never_public;
+        layout.ground_items.op_flags = o.op_flags;
     }
     if let Some(c) = chat {
         layout.found |= part::CHAT;

@@ -224,6 +224,12 @@ Facts about the client's internals that the code does not state, and the steps f
 - A full bank update is a few hundred calls in one tick.
 - Removing a container is a separate function that isn't hooked, so the log only shows a container being recreated (`old_known` false).
 
+## Ground items (`offsets/ground_items.rs`)
+
+- The server's obj add packet carries more than the Java client reads: ticks until public, ticks until despawn, ownership (0 none, 1 you, 2 another player, 3 group ironman), a never-public flag and option flags. It comes standalone with a packed absolute coord (`z | x << 14 | level << 28`, 17 bytes in `client-2026-11-05`) or inside a zone batch with a zone-local coord.
+- Both forms call one insert function (`0x140075e70` in `client-2026-11-05`) with the fields as stack arguments in that order. It stores the two timers as `[client+tick_count] + argument`, so the item holds absolute ticks that never change afterwards, and it sets the option flags through a one-store setter (`mov [rcx+X],dl; ret`). `find_ground_item_ownership` matches those stores on the object whose id field `find_ground_items` found.
+- Despawn and pickup both arrive as an obj delete from the server, around the despawn tick. Nothing in the item changes when it turns public.
+
 ## Item icons (`offsets/item_icon.rs`, `client/cache.rs`)
 
 - Java `getSprite` is native `(out: &mut [control, sprite], id, qty, border, shadow, text mode, noted: u8, width, height, text: &string)`.
