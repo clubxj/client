@@ -11,7 +11,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui;
 use loader::backend::{self, Settings, Target};
 
 use crate::accounts::Accounts;
