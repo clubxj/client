@@ -533,7 +533,7 @@ impl LoaderApp {
             self.refresh_widgets(target);
         }
         if let Some(error) = &self.widgets.error {
-            error_label(ui, error);
+            egui_error_label(ui, error);
         }
         ui.separator();
         let inspector = &mut self.widgets;
@@ -587,7 +587,7 @@ impl LoaderApp {
         });
         client_caption(ui, pid);
         if let Some(error) = inspector.error.iter().chain(&icons.error).next() {
-            error_label(ui, error);
+            egui_error_label(ui, error);
         }
         ui.separator();
         let mut picked = inspector.selected;
@@ -659,7 +659,7 @@ impl LoaderApp {
         let inspector = &mut self.script_inspector;
         client_caption(ui, pid);
         if let Some(error) = &inspector.names_error {
-            error_label(ui, error);
+            egui_error_label(ui, error);
         }
         let visible = inspector.visible();
         let names = &inspector.names;
@@ -677,7 +677,7 @@ impl LoaderApp {
             missed(inspector.dropped)
         ));
         if let Some(error) = &inspector.error {
-            error_label(ui, error);
+            egui_error_label(ui, error);
         }
         ui.separator();
         let (_, row_height) = mono_row(ui);
@@ -759,7 +759,7 @@ impl LoaderApp {
             inspector.kept()
         ));
         if let Some(error) = &inspector.error {
-            error_label(ui, error);
+            egui_error_label(ui, error);
         }
         if let Some(error) = &inspector.varc_error {
             ui.colored_label(
@@ -853,7 +853,7 @@ impl LoaderApp {
             missed(monitor.dropped)
         ));
         if let Some(error) = &monitor.error {
-            error_label(ui, error);
+            egui_error_label(ui, error);
         }
         ui.separator();
 

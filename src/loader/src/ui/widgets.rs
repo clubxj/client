@@ -324,3 +324,50 @@ pub fn table_header<'a>(heads: impl IntoIterator<Item = &'a str>) -> Vec<AnyElem
 pub fn mono_font() -> gpui_kit::Font {
     font(theme::MONO)
 }
+
+pub struct Choice {
+    label: SharedString,
+    selected: bool,
+    on_select: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+impl Choice {
+    pub fn new(
+        label: impl Into<SharedString>,
+        selected: bool,
+        on_select: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            selected,
+            on_select: std::rc::Rc::new(on_select),
+        }
+    }
+}
+
+pub fn combo(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    choices: Vec<Choice>,
+) -> impl IntoElement {
+    use gpui_kit::component::button::Button;
+    use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+    use gpui_kit::component::{Disableable, Sizable};
+    let choices = std::rc::Rc::new(choices);
+    let empty = choices.is_empty();
+    Button::new(id)
+        .label(text.into())
+        .small()
+        .dropdown_caret(true)
+        .disabled(empty)
+        .dropdown_menu(move |menu, _, _| {
+            choices.iter().fold(menu.scrollable(true), |menu, choice| {
+                let on_select = choice.on_select.clone();
+                menu.item(
+                    PopupMenuItem::new(choice.label.clone())
+                        .checked(choice.selected)
+                        .on_click(move |_, window, cx| on_select(window, cx)),
+                )
+            })
+        })
+}

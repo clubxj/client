@@ -417,7 +417,7 @@ impl LoaderApp {
                 add = chosen.cloned();
             }
             ui.separator();
-            let target = self.run_target_ui(ui);
+            let target = self.egui_run_target_ui(ui);
             let problem = self
                 .queues
                 .current

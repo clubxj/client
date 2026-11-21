@@ -163,7 +163,7 @@ impl LoaderApp {
             self.find.focus = true;
         }
 
-        let target = self.run_target_ui(ui);
+        let target = self.egui_run_target_ui(ui);
 
         let width = icon_button_width(
             ui,
@@ -185,7 +185,7 @@ impl LoaderApp {
         let stack_groups =
             run_group + ui.spacing().item_spacing.x + group_gap + file_group > available;
         let stack_buttons = run_group.max(file_group) > available;
-        fit_row(ui, !stack_groups, |ui| {
+        egui_fit_row(ui, !stack_groups, |ui| {
             crate::theme::button_group_in(ui, stack_buttons, |ui| {
                 self.run_buttons(ui, running, paused, target.as_ref(), width)
             });

@@ -198,7 +198,7 @@ impl LoaderApp {
                 });
             });
         });
-        divider(ui);
+        egui_divider(ui);
         ui.spacing_mut().item_spacing.y = 4.0;
         ui.horizontal_wrapped(|ui| self.log_controls_ui(ui));
         self.log_ui(ui);

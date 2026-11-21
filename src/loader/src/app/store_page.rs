@@ -23,7 +23,7 @@ impl LoaderApp {
         if !self.store.loaded && !self.store.loading && self.store.error.is_none() {
             self.fetch_scripts();
         }
-        let target = self.run_target_ui(ui);
+        let target = self.egui_run_target_ui(ui);
         let block = self.run_block(target.as_ref());
         let Some(me) = self.auth.me() else {
             return;

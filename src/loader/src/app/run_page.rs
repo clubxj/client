@@ -169,7 +169,7 @@ impl LoaderApp {
         if let Some(run) = self.run_mut() {
             run.tools_tab = tools_tab;
         }
-        divider(ui);
+        egui_divider(ui);
         ui.spacing_mut().item_spacing.y = 4.0;
         ui.add_space(8.0);
         let can_read = self.layout_target().is_some();
@@ -501,7 +501,7 @@ impl LoaderApp {
                 .weak(),
             );
             if let Some(error) = &self.feedback.error {
-                error_label(ui, error);
+                egui_error_label(ui, error);
             }
             return;
         };
