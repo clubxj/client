@@ -1,11 +1,20 @@
-use eframe::egui;
+use std::rc::Rc;
+
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::{
+    AnchoredPositionMode, AnyElement, App, Div, Entity, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Pixels, Size, StatefulInteractiveElement, Styled, Window, anchored,
+    deferred, div, point, prelude::FluentBuilder, px,
+};
 use injector::http;
 
 use crate::api::Config;
-use crate::theme::ROW_HEIGHT;
+use crate::ui::{theme, widgets};
 
-const ACTIONS_WIDTH: f32 = 90.0;
-const INPUT_WIDTH: f32 = 300.0;
+const ACTIONS_WIDTH: Pixels = px(90.0);
+const INPUT_WIDTH: Pixels = px(300.0);
+const DIALOG_PADDING: Pixels = px(8.0);
 const MAX_USER_ENTRIES: usize = 200;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,119 +143,216 @@ pub struct Page {
     deleting: Option<String>,
 }
 
+pub enum Click {
+    Add,
+    Delete(String),
+    Save,
+    Cancel,
+}
+
+pub type OnClick = Rc<dyn Fn(Click, &mut Window, &mut App)>;
+
 impl Page {
-    pub fn ui(&mut self, ui: &mut egui::Ui, list: &mut Whitelist) {
-        ui.add_space(12.0);
-        ui.heading("HTTP whitelist");
-        ui.label(egui::RichText::new("Scripts can only make HTTP requests to these hosts. Redirects to any other host are refused.").weak());
-        ui.add_space(6.0);
-        ui.add_enabled_ui(self.draft.is_none(), |ui| {
-            if ui.button("Add URL").clicked() {
-                self.draft = Some(Draft::default());
-            }
-            ui.add_space(6.0);
-            self.list_ui(ui, list);
-        });
-        self.dialog_ui(ui.ctx(), list);
+    pub fn draft_input(&self) -> Option<&str> {
+        self.draft.as_ref().map(|draft| draft.input.as_str())
     }
 
-    fn list_ui(&mut self, ui: &mut egui::Ui, list: &mut Whitelist) {
-        let mut remove = None;
-        let rows: Vec<(&str, bool)> = list
+    pub fn set_draft_input(&mut self, input: String) {
+        if let Some(draft) = &mut self.draft {
+            draft.input = input;
+        }
+    }
+
+    pub fn click(&mut self, click: Click, list: &mut Whitelist) {
+        match click {
+            Click::Add => {
+                if self.draft.is_none() {
+                    self.draft = Some(Draft::default());
+                }
+            }
+            Click::Delete(host) => {
+                if self.draft.is_some() {
+                    return;
+                }
+                if self.deleting.as_deref() == Some(host.as_str()) {
+                    list.remove(&host);
+                    self.deleting = None;
+                } else {
+                    self.deleting = Some(host);
+                }
+            }
+            Click::Save => {
+                if let Some(draft) = &mut self.draft {
+                    match list.add(&draft.input) {
+                        Ok(()) => self.draft = None,
+                        Err(why) => draft.error = Some(why),
+                    }
+                }
+            }
+            Click::Cancel => self.draft = None,
+        }
+    }
+
+    pub fn render(
+        &self,
+        list: &Whitelist,
+        input: &Entity<InputState>,
+        window: &Window,
+        on_click: OnClick,
+    ) -> (Div, Option<AnyElement>) {
+        let enabled = self.draft.is_none();
+        let add = on_click.clone();
+        let page = div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .pt(px(12.0))
+            .child(widgets::heading("HTTP whitelist"))
+            .child(widgets::weak(
+                "Scripts can only make HTTP requests to these hosts. Redirects to any other host are refused.",
+            ))
+            .child(
+                div().flex().pt(px(6.0)).child(widgets::button(
+                    "whitelist-add",
+                    "Add URL",
+                    enabled,
+                    move |_, window, cx| add(Click::Add, window, cx),
+                )),
+            )
+            .child(div().pt(px(6.0)).child(self.render_list(list, enabled, &on_click)));
+        let dialog = self
+            .draft
+            .as_ref()
+            .map(|draft| render_dialog(draft, input, window.viewport_size(), on_click));
+        (page, dialog)
+    }
+
+    fn render_list(&self, list: &Whitelist, enabled: bool, on_click: &OnClick) -> Div {
+        let rows = list
             .builtin
             .iter()
-            .map(|h| (h.as_str(), true))
-            .chain(list.user.iter().map(|h| (h.as_str(), false)))
-            .collect();
-        egui_extras::TableBuilder::new(ui)
-            .id_salt("http-whitelist")
-            .striped(true)
-            .vscroll(false)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::remainder().clip(true))
-            .column(egui_extras::Column::exact(ACTIONS_WIDTH))
-            .header(ROW_HEIGHT, |header| {
-                crate::theme::table_header(header, ["Host", ""])
-            })
-            .body(|body| {
-                body.rows(ROW_HEIGHT, rows.len(), |mut row| {
-                    let (host, builtin) = rows[row.index()];
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(host).truncate())
-                            .on_hover_text(host);
-                    });
-                    row.col(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if builtin {
-                                ui.label(egui::RichText::new("Built in").weak())
-                                    .on_hover_text("Built-in hosts are always allowed");
-                            } else {
-                                let armed = self.deleting.as_deref() == Some(host);
-                                if ui.button(if armed { "Sure?" } else { "Delete" }).clicked() {
-                                    remove = Some(host.to_owned());
-                                }
-                            }
-                        });
-                    });
-                });
+            .map(|host| (host, true))
+            .chain(list.user.iter().map(|host| (host, false)))
+            .enumerate()
+            .map(|(index, (host, builtin))| {
+                let action = if builtin {
+                    widgets::weak("Built in")
+                        .id(("whitelist-builtin", index))
+                        .tooltip(widgets::tooltip("Built-in hosts are always allowed"))
+                        .into_any_element()
+                } else {
+                    let armed = self.deleting.as_deref() == Some(host.as_str());
+                    let (on_click, host) = (on_click.clone(), host.clone());
+                    widgets::button(
+                        ("whitelist-delete", index),
+                        if armed { "Sure?" } else { "Delete" },
+                        enabled,
+                        move |_, window, cx| on_click(Click::Delete(host.clone()), window, cx),
+                    )
+                    .into_any_element()
+                };
+                table_row()
+                    .when(index % 2 == 0, |this| this.bg(theme::BG_FLOAT))
+                    .child(
+                        div()
+                            .id(("whitelist-host", index))
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .tooltip(widgets::tooltip(host.clone()))
+                            .child(host.clone()),
+                    )
+                    .child(actions_cell().child(action))
             });
-        let Some(host) = remove else { return };
-        if self.deleting.as_deref() == Some(host.as_str()) {
-            list.remove(&host);
-            self.deleting = None;
-        } else {
-            self.deleting = Some(host);
-        }
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                table_row()
+                    .child(widgets::strong("Host").flex_1())
+                    .child(actions_cell()),
+            )
+            .children(rows)
     }
+}
 
-    fn dialog_ui(&mut self, ctx: &egui::Context, list: &mut Whitelist) {
-        let Some(mut draft) = self.draft.take() else {
-            return;
-        };
-        let mut decision = None;
-        egui::Window::new("Add URL")
-            .id(egui::Id::new("http-whitelist-dialog"))
-            .collapsible(false)
-            .auto_sized()
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.set_max_width(INPUT_WIDTH);
-                ui.label("A host or URL scripts may send requests to. Use *.example.com for every subdomain.");
-                let response = ui.add(egui::TextEdit::singleline(&mut draft.input).hint_text("e.g. api.example.com").desired_width(INPUT_WIDTH));
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    decision = Some(true);
-                }
-                if let Some(error) = &draft.error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                ui.add_space(6.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        if ui.button("Save").clicked() {
-                            decision = Some(true);
+fn table_row() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(theme::ROW_HEIGHT)
+        .gap(theme::ITEM_GAP)
+}
+
+fn actions_cell() -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .justify_end()
+        .w(ACTIONS_WIDTH)
+}
+
+fn render_dialog(
+    draft: &Draft,
+    input: &Entity<InputState>,
+    viewport: Size<Pixels>,
+    on_click: OnClick,
+) -> AnyElement {
+    let (save, cancel, escape) = (on_click.clone(), on_click.clone(), on_click);
+    let card = div()
+        .id("whitelist-dialog")
+        .occlude()
+        .flex()
+        .flex_col()
+        .gap(theme::LINE_GAP)
+        .w(INPUT_WIDTH + DIALOG_PADDING * 2.0)
+        .p(DIALOG_PADDING)
+        .bg(theme::BG_FLOAT)
+        .border_1()
+        .border_color(theme::BORDER)
+        .child(widgets::heading("Add URL"))
+        .child(widgets::separator())
+        .child("A host or URL scripts may send requests to. Use *.example.com for every subdomain.")
+        .child(Input::new(input).small().w(INPUT_WIDTH))
+        .when_some(draft.error.clone(), |this, error| this.child(widgets::error(error)))
+        .child(
+            div()
+                .pt(px(6.0))
+                .flex()
+                .justify_end()
+                .gap(theme::ITEM_GAP)
+                .child(widgets::button("whitelist-cancel", "Cancel", true, move |_, window, cx| {
+                    cancel(Click::Cancel, window, cx)
+                }))
+                .child(widgets::button("whitelist-save", "Save", true, move |_, window, cx| {
+                    save(Click::Save, window, cx)
+                })),
+        );
+    deferred(
+        anchored()
+            .position(point(px(0.0), px(0.0)))
+            .position_mode(AnchoredPositionMode::Window)
+            .child(
+                div()
+                    .id("whitelist-backdrop")
+                    .occlude()
+                    .w(viewport.width)
+                    .h(viewport.height)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme::alpha(theme::BG_DARK, 0.5))
+                    .capture_key_down(move |event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "escape" {
+                            escape(Click::Cancel, window, cx);
+                            cx.stop_propagation();
                         }
-                        if ui.button("Cancel").clicked() {
-                            decision = Some(false);
-                        }
-                    },
-                );
-            });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            decision = Some(false);
-        }
-        match decision {
-            Some(true) => {
-                if let Err(why) = list.add(&draft.input) {
-                    draft.error = Some(why);
-                    self.draft = Some(draft);
-                }
-            }
-            Some(false) => {}
-            None => self.draft = Some(draft),
-        }
-    }
+                    })
+                    .child(card),
+            ),
+    )
+    .with_priority(1)
+    .into_any_element()
 }
 
 #[cfg(test)]
@@ -348,6 +454,24 @@ mod tests {
             &config(),
         );
         assert_eq!(list.user(), ["example.com"]);
+    }
+
+    #[test]
+    fn the_dialog_keeps_a_bad_entry_and_deleting_asks_first() {
+        let mut list = Whitelist::new(Vec::new(), &config());
+        let mut page = Page::default();
+        page.click(Click::Add, &mut list);
+        page.set_draft_input("not a host".into());
+        page.click(Click::Save, &mut list);
+        assert!(page.draft.as_ref().is_some_and(|draft| draft.error.is_some()));
+        page.set_draft_input("example.com".into());
+        page.click(Click::Save, &mut list);
+        assert!(page.draft.is_none());
+        assert_eq!(list.user(), ["example.com"]);
+        page.click(Click::Delete("example.com".into()), &mut list);
+        assert_eq!(list.user(), ["example.com"]);
+        page.click(Click::Delete("example.com".into()), &mut list);
+        assert!(list.user().is_empty());
     }
 
     #[test]

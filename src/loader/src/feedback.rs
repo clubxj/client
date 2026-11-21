@@ -1,10 +1,18 @@
 use std::{
     collections::HashMap,
+    rc::Rc,
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
 
-use eframe::egui;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Textarea, TextareaState};
+use gpui_kit::component::Sizable;
+use gpui_kit::{
+    App, AppContext, ClickEvent, Div, Entity, InteractiveElement, ParentElement, Pixels,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
+};
 use injector::{GameState, Item};
 use loader::backend::{self, Settings, Target};
 use serde::{Deserialize, Serialize};
@@ -12,6 +20,7 @@ use serde_json::{Map, Value, json};
 
 use crate::api::models::{RecentSession, Report};
 use crate::layouts::{EQUIPMENT_CONTAINER as EQUIPMENT, INVENTORY_CONTAINER as INVENTORY};
+use crate::ui::{theme, widgets};
 
 pub const KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_LOG_BYTES: usize = 256 * 1024;
@@ -430,50 +439,155 @@ impl Page {
         }
     }
 
-    pub fn ui(
+    pub fn click(
         &mut self,
-        ui: &mut egui::Ui,
+        session_id: &str,
+        click: Click,
         include_system: &mut bool,
-        running: &[String],
-    ) -> Vec<Action> {
-        let mut actions = Vec::new();
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Score the scripts you ran in the last 24 hours and report bugs to their authors.").weak());
-            if ui.add_enabled(!self.loading, egui::Button::new("Refresh")).clicked() {
-                actions.push(Action::Refresh);
+    ) -> Option<Action> {
+        let saved_score = self
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .and_then(|s| s.score);
+        let draft = self.draft(session_id);
+        match click {
+            Click::Score(score) => {
+                if draft.pending_score.is_some() || saved_score == Some(score) {
+                    return None;
+                }
+                draft.pending_score = Some(score);
+                draft.message = None;
+                Some(Action::Score {
+                    session_id: session_id.to_owned(),
+                    score,
+                })
             }
-        });
-        if let Some(error) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            Click::Toggle => {
+                draft.open = !draft.open;
+                None
+            }
+            Click::IncludeSystem(include) => {
+                *include_system = include;
+                None
+            }
+            Click::Send => {
+                if draft.sending {
+                    return None;
+                }
+                draft.sending = true;
+                draft.message = None;
+                Some(Action::Report {
+                    session_id: session_id.to_owned(),
+                    description: draft.description.trim().to_owned(),
+                })
+            }
         }
-        if self.loading && self.sessions.is_empty() {
-            ui.label("Loading your sessions…");
-        } else if self.sessions.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "No sessions in the last 24 hours. Run a script from the Scripts page first.",
-                )
-                .weak(),
-            );
-        }
-        for session in &self.sessions {
-            let draft = self.drafts.entry(session.session_id.clone()).or_default();
-            ui.add_space(8.0);
-            crate::theme::card().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(&session.title).strong());
-                    ui.label(egui::RichText::new(format!("revision {}", session.revision)).weak());
-                    ui.label(
-                        egui::RichText::new(when(session, running.contains(&session.session_id)))
-                            .weak(),
-                    );
-                });
-                actions.extend(session_ui(ui, session, draft, include_system));
-            });
-        }
-        actions
     }
+
+    pub fn render(
+        &self,
+        include_system: bool,
+        running: &[String],
+        descriptions: &HashMap<String, Entity<TextareaState>>,
+        on_refresh: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        on_click: impl Fn(&str) -> OnClick,
+    ) -> Div {
+        let empty = Draft::default();
+        let status = if self.loading && self.sessions.is_empty() {
+            Some(div().child("Loading your sessions…"))
+        } else if self.sessions.is_empty() {
+            Some(widgets::weak(
+                "No sessions in the last 24 hours. Run a script from the Scripts page first.",
+            ))
+        } else {
+            None
+        };
+        let cards = self.sessions.iter().filter_map(|session| {
+            let id = &session.session_id;
+            let description = descriptions.get(id)?;
+            let draft = self.drafts.get(id).unwrap_or(&empty);
+            Some(
+                widgets::card()
+                    .w_full()
+                    .mt(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(theme::LINE_GAP)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_x(theme::ITEM_GAP)
+                            .gap_y(theme::LINE_GAP)
+                            .child(widgets::strong(session.title.clone()))
+                            .child(widgets::weak(format!("revision {}", session.revision)))
+                            .child(widgets::weak(when(session, running.contains(id)))),
+                    )
+                    .child(session_ui(
+                        session,
+                        draft,
+                        include_system,
+                        description,
+                        on_click(id),
+                    )),
+            )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x(theme::ITEM_GAP)
+                    .gap_y(theme::LINE_GAP)
+                    .child(widgets::weak(
+                        "Score the scripts you ran in the last 24 hours and report bugs to their authors.",
+                    ))
+                    .child(widgets::button(
+                        "feedback-refresh",
+                        "Refresh",
+                        !self.loading,
+                        on_refresh,
+                    )),
+            )
+            .when_some(self.error.clone(), |this, error| {
+                this.child(widgets::error(error))
+            })
+            .children(status)
+            .children(cards)
+    }
+}
+
+pub enum Click {
+    Score(u8),
+    Toggle,
+    IncludeSystem(bool),
+    Send,
+}
+
+pub type OnClick = Rc<dyn Fn(Click, &mut Window, &mut App)>;
+
+const SCORE_WIDTH: Pixels = px(28.0);
+const REPORT_INDENT: Pixels = px(18.0);
+const REPORT_ROWS: (usize, usize) = (3, 12);
+
+pub fn description_input(window: &mut Window, cx: &mut App) -> Entity<TextareaState> {
+    cx.new(|cx| {
+        TextareaState::new(window, cx)
+            .auto_grow(REPORT_ROWS.0, REPORT_ROWS.1)
+            .placeholder(
+                "What went wrong? Where were you, what was the script doing, what did you expect?",
+            )
+    })
+}
+
+pub fn limit_description(text: &str) -> Option<String> {
+    (text.chars().count() > MAX_DESCRIPTION_CHARS)
+        .then(|| text.chars().take(MAX_DESCRIPTION_CHARS).collect())
 }
 
 fn when(session: &RecentSession, running: bool) -> String {
@@ -494,82 +608,109 @@ pub fn short_time(iso: &str) -> String {
 }
 
 pub fn session_ui(
-    ui: &mut egui::Ui,
     session: &RecentSession,
-    draft: &mut Draft,
-    include_system: &mut bool,
-) -> Vec<Action> {
-    let mut actions = Vec::new();
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Your score:");
-        let current = draft.pending_score.or(session.score);
-        for score in 1..=10u8 {
-            let selected = current == Some(score);
-            let button = egui::Button::new(score.to_string())
-                .selected(selected)
-                .min_size(egui::vec2(28.0, 0.0));
-            if ui
-                .add_enabled(draft.pending_score.is_none(), button)
-                .on_hover_text("1 is the worst, 10 the best. Only the author and moderators see scores, and not who gave them.")
-                .clicked()
-                && !selected
-            {
-                draft.pending_score = Some(score);
-                draft.message = None;
-                actions.push(Action::Score {
-                    session_id: session.session_id.clone(),
-                    score,
-                });
-            }
-        }
-        if session.score.is_some() && draft.pending_score.is_none() {
-            ui.label(egui::RichText::new("(scores apply to the script, not the run)").weak());
-        }
+    draft: &Draft,
+    include_system: bool,
+    description: &Entity<TextareaState>,
+    on_click: OnClick,
+) -> Stateful<Div> {
+    let current = draft.pending_score.or(session.score);
+    let scoring = draft.pending_score.is_none();
+    let scores = (1..=10u8).map(|score| {
+        let on_click = on_click.clone();
+        widgets::button(("score", usize::from(score)), score.to_string(), scoring, move |_, window, cx| {
+            on_click(Click::Score(score), window, cx)
+        })
+        .min_w(SCORE_WIDTH)
+        .justify_center()
+        .when(current == Some(score), |this| this.bg(theme::SEL))
+        .when(scoring, |this| {
+            this.tooltip(widgets::tooltip(
+                "1 is the worst, 10 the best. Only the author and moderators see scores, and not who gave them.",
+            ))
+        })
     });
     let reports = match session.reports {
         0 => String::new(),
         n => format!(" ({n} sent on this run)"),
     };
-    let header = egui::CollapsingHeader::new(format!("Report a bug{reports}"))
-        .id_salt(("report", &session.session_id))
-        .open(Some(draft.open));
-    let response = header.show(ui, |ui| {
-        ui.label(egui::RichText::new("The report goes to the script's author with this run's log and game state. Account names are removed from both; don't put them in the description either.").weak());
-        let edit = egui::TextEdit::multiline(&mut draft.description)
-            .desired_rows(3)
-            .desired_width(f32::INFINITY)
-            .char_limit(MAX_DESCRIPTION_CHARS)
-            .hint_text("What went wrong? Where were you, what was the script doing, what did you expect?");
-        ui.add_enabled(!draft.sending, edit);
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(include_system, "Include system info")
-                .on_hover_text("OS, Wine, CPU, memory and GPU. The loader, lib and agent versions always go with a report.");
-            if ui
-                .add_enabled(!draft.sending, egui::Button::new(if draft.sending { "Sending…" } else { "Send report" }))
-                .clicked()
-            {
-                draft.sending = true;
-                draft.message = None;
-                actions.push(Action::Report {
-                    session_id: session.session_id.clone(),
-                    description: draft.description.trim().to_owned(),
-                });
-            }
-        });
+    let toggle = on_click.clone();
+    let header = div()
+        .id("report-toggle")
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .h(theme::INTERACT_HEIGHT)
+        .cursor_pointer()
+        .hover(|style| style.text_color(theme::FG))
+        .on_click(move |_, window, cx| toggle(Click::Toggle, window, cx))
+        .child(
+            div()
+                .w(px(10.0))
+                .font_family(theme::MONO)
+                .text_color(theme::FG_DARK)
+                .child(if draft.open { "\u{f0d7}" } else { "\u{f0da}" }),
+        )
+        .child(format!("Report a bug{reports}"));
+    let body = draft.open.then(|| {
+        let (include, send) = (on_click.clone(), on_click.clone());
+        div()
+            .pl(REPORT_INDENT)
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .child(widgets::weak(
+                "The report goes to the script's author with this run's log and game state. Account names are removed from both; don't put them in the description either.",
+            ))
+            .child(Textarea::new(description).small().w_full().disabled(draft.sending))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x(theme::ITEM_GAP)
+                    .gap_y(theme::LINE_GAP)
+                    .child(
+                        Checkbox::new("include-system")
+                            .label("Include system info")
+                            .checked(include_system)
+                            .tooltip("OS, Wine, CPU, memory and GPU. The loader, lib and agent versions always go with a report.")
+                            .on_click(move |on, window, cx| include(Click::IncludeSystem(*on), window, cx)),
+                    )
+                    .child(widgets::button(
+                        "send-report",
+                        if draft.sending { "Sending…" } else { "Send report" },
+                        !draft.sending,
+                        move |_, window, cx| send(Click::Send, window, cx),
+                    )),
+            )
     });
-    if response.header_response.clicked() {
-        draft.open = !draft.open;
-    }
-    match &draft.message {
-        Some(Ok(text)) => {
-            ui.label(egui::RichText::new(text).color(crate::theme::GREEN));
-        }
-        Some(Err(text)) => {
-            ui.colored_label(ui.visuals().error_fg_color, text);
-        }
-        None => {}
-    }
-    actions
+    let message = draft.message.as_ref().map(|message| match message {
+        Ok(text) => div().text_color(theme::GREEN).child(text.clone()),
+        Err(text) => widgets::error(text.clone()),
+    });
+    div()
+        .id(SharedString::from(session.session_id.clone()))
+        .flex()
+        .flex_col()
+        .gap(theme::LINE_GAP)
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_x(theme::ITEM_GAP)
+                .gap_y(theme::LINE_GAP)
+                .child("Your score:")
+                .children(scores)
+                .when(session.score.is_some() && scoring, |this| {
+                    this.child(widgets::weak("(scores apply to the script, not the run)"))
+                }),
+        )
+        .child(header)
+        .children(body)
+        .children(message)
 }
 
 pub fn report(
@@ -754,6 +895,39 @@ mod tests {
         assert_eq!(page.sessions[0].reports, 1);
         assert_eq!(page.draft("a").description, "");
         assert!(!page.draft("a").sending);
+    }
+
+    #[test]
+    fn a_score_and_a_report_go_out_once() {
+        let mut page = Page::default();
+        page.finish(Ok(vec![session("a", "x", Some(5))]), Instant::now());
+        let mut include = false;
+        assert!(page.click("a", Click::Score(5), &mut include).is_none());
+        assert!(matches!(
+            page.click("a", Click::Score(7), &mut include),
+            Some(Action::Score { score: 7, .. })
+        ));
+        assert!(page.click("a", Click::Score(8), &mut include).is_none());
+        page.draft("a").description = "  bug \n".into();
+        assert!(matches!(
+            page.click("a", Click::Send, &mut include),
+            Some(Action::Report { description, .. }) if description == "bug"
+        ));
+        assert!(page.click("a", Click::Send, &mut include).is_none());
+        page.click("a", Click::IncludeSystem(true), &mut include);
+        assert!(include);
+        page.click("a", Click::Toggle, &mut include);
+        assert!(page.draft("a").open);
+    }
+
+    #[test]
+    fn a_description_is_cut_to_the_limit() {
+        assert_eq!(limit_description("short"), None);
+        let long = "é".repeat(MAX_DESCRIPTION_CHARS + 5);
+        assert_eq!(
+            limit_description(&long).map(|text| text.chars().count()),
+            Some(MAX_DESCRIPTION_CHARS)
+        );
     }
 
     #[test]
