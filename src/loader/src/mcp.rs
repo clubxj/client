@@ -49,14 +49,18 @@ struct Saved {
 
 fn saved() -> Saved {
     let storage = crate::storage::Storage::open();
-    let mut settings: Settings = storage.get(crate::storage::SETTINGS_KEY).unwrap_or_default();
-    settings.fill_missing(crate::update::is_dev_install());
+    let mut settings: Settings = storage
+        .get(crate::storage::SETTINGS_KEY)
+        .unwrap_or_default();
+    settings.fill_missing();
     Saved {
         settings,
         cursor: storage
             .get(crate::app::CURSOR_KEY)
             .unwrap_or(crate::app::DEFAULT_CURSOR),
-        whitelist: storage.get(crate::app::HTTP_WHITELIST_KEY).unwrap_or_default(),
+        whitelist: storage
+            .get(crate::app::HTTP_WHITELIST_KEY)
+            .unwrap_or_default(),
     }
 }
 
@@ -490,7 +494,15 @@ fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
         ))),
         prices_url: config.prices_url.clone(),
     };
+    let title = match text(args, "path")? {
+        Some(_) => path.file_name().map_or_else(
+            || "agent file".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        None => "agent snippet".to_owned(),
+    };
     let run = context.runs.start(runs::Start {
+        title: &title,
         api,
         host: &host,
         source: &source,

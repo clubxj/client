@@ -4,7 +4,7 @@ The loader binary doubles as a stdio MCP server, so any agent CLI (Claude Code, 
 
 ## Why it works this way
 
-- **Headless.** `loader mcp` never talks to the loader window. It reads the window's saved settings (`app.ron` under app id `Loader`, `storage.rs`: `app`, `cursor`, `http_whitelist`), its keyring sign-in and its lib cache, and runs scripts itself. Runs it starts are invisible to the window and stop when the agent closes stdin.
+- **Headless.** `loader mcp` never waits on the loader window. It reads the window's saved settings (`app.ron` under app id `Loader`, `storage.rs`: `app`, `cursor`, `http_whitelist`), its keyring sign-in and its lib cache, and runs scripts itself. Runs stop when the agent closes stdin. The only channel to the window is one-way: each run's record in `<data>/agent-runs/`, which the window shows under the run's client but can't control (see Agent runs in [loader-gui.md](loader-gui.md)).
 - **The agent acts through Luau, not clicks.** A model turn is far slower than a game tick and per-click control would bypass the lib's human-like input, so the only way to act is `run_luau`: a short script against the lib, run in the same sandbox as editor scripts. Agents get no power editor scripts lack.
 - **Store scripts can't be run** from the MCP server. Their decrypted source must never reach an agent.
 

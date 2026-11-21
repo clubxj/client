@@ -1121,7 +1121,14 @@ impl<L: Layout> Editor<L> {
         self.open(saved, next);
     }
 
-    fn header(&mut self, saved: &[L], ui: &mut Ui, with: &With<L>, window: &mut Window, cx: &mut App) -> Div {
+    fn header(
+        &mut self,
+        saved: &[L],
+        ui: &mut Ui,
+        with: &With<L>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Div {
         self.follow(saved);
         let current = self
             .index
@@ -1159,8 +1166,7 @@ impl<L: Layout> Editor<L> {
             .iter()
             .enumerate()
             .any(|(i, l)| Some(i) != self.index && l.name() == trimmed);
-        let can_save =
-            !trimmed.is_empty() && !taken && self.invalid.is_none() && self.dirty(saved);
+        let can_save = !trimmed.is_empty() && !taken && self.invalid.is_none() && self.dirty(saved);
         let refusal = if let Some(invalid) = &self.invalid {
             invalid.clone()
         } else if taken {
@@ -1172,7 +1178,10 @@ impl<L: Layout> Editor<L> {
         };
         let opened = self.index.is_some();
         let width = px((COLUMN_WIDTH - 2.0 * f32::from(theme::ITEM_GAP)) / 3.0);
-        let button = |id: &'static str, label: &'static str, enabled: bool, change: fn(&mut Editor<L>, &mut Vec<L>)| {
+        let button = |id: &'static str,
+                      label: &'static str,
+                      enabled: bool,
+                      change: fn(&mut Editor<L>, &mut Vec<L>)| {
             widgets::button(id, label, enabled, click(edit(with, change)))
                 .w(width)
                 .justify_center()
@@ -1218,12 +1227,24 @@ impl<L: Layout> Editor<L> {
                         button("layout-save", "Save", can_save, Editor::save)
                             .when(!can_save, |this| this.tooltip(widgets::tooltip(refusal))),
                     )
-                    .child(button("layout-duplicate", "Duplicate", opened, Editor::duplicate))
+                    .child(button(
+                        "layout-duplicate",
+                        "Duplicate",
+                        opened,
+                        Editor::duplicate,
+                    ))
                     .child(button("layout-remove", "Remove", opened, Editor::remove)),
             )
     }
 
-    fn read_ui(&self, hint: Option<&str>, can_read: bool, quick: bool, with: &With<L>, on_read: &OnRead) -> Div {
+    fn read_ui(
+        &self,
+        hint: Option<&str>,
+        can_read: bool,
+        quick: bool,
+        with: &With<L>,
+        on_read: &OnRead,
+    ) -> Div {
         let enabled = can_read && !self.reading;
         let read = |action: Action| {
             let (with, on_read) = (with.clone(), on_read.clone());
@@ -1232,27 +1253,32 @@ impl<L: Layout> Editor<L> {
                 on_read(action, cx);
             }
         };
-        let read_button = widgets::button("layout-read", "Read from client", enabled, read(Action::Read))
-            .w_full()
-            .justify_center()
-            .relative()
-            .tooltip(widgets::tooltip(if enabled {
-                "Fills the layout with what the selected client holds now."
-            } else {
-                "Select a client with the agent loaded in the Clients tab."
-            }))
-            .when(self.reading, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(px(4.0))
-                        .flex()
-                        .items_center()
-                        .child(Spinner::new().xsmall()),
-                )
-            });
+        let read_button = widgets::button(
+            "layout-read",
+            "Read from client",
+            enabled,
+            read(Action::Read),
+        )
+        .w_full()
+        .justify_center()
+        .relative()
+        .tooltip(widgets::tooltip(if enabled {
+            "Fills the layout with what the run's client holds now."
+        } else {
+            "The run's client needs the agent loaded."
+        }))
+        .when(self.reading, |this| {
+            this.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(4.0))
+                    .flex()
+                    .items_center()
+                    .child(Spinner::new().xsmall()),
+            )
+        });
         div()
             .w(px(COLUMN_WIDTH))
             .flex()
@@ -1264,17 +1290,24 @@ impl<L: Layout> Editor<L> {
             .child(read_button)
             .when(quick, |this| {
                 this.child(
-                    widgets::button("layout-read-quick", "Read quick prayers", enabled, read(Action::ReadQuick))
-                        .w_full()
-                        .justify_center()
-                        .when(enabled, |this| {
-                            this.tooltip(widgets::tooltip(
-                                "Fills the layout with the client's quick prayer selection.",
-                            ))
-                        }),
+                    widgets::button(
+                        "layout-read-quick",
+                        "Read quick prayers",
+                        enabled,
+                        read(Action::ReadQuick),
+                    )
+                    .w_full()
+                    .justify_center()
+                    .when(enabled, |this| {
+                        this.tooltip(widgets::tooltip(
+                            "Fills the layout with the client's quick prayer selection.",
+                        ))
+                    }),
                 )
             })
-            .when_some(self.error.clone(), |this, error| this.child(widgets::error(error)))
+            .when_some(self.error.clone(), |this, error| {
+                this.child(widgets::error(error))
+            })
     }
 }
 
@@ -1487,11 +1520,15 @@ fn edit<L: 'static>(
     move |cx| with(cx, &mut |editor, saved| change(editor, saved))
 }
 
-fn click(action: impl Fn(&mut App) + 'static) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+fn click(
+    action: impl Fn(&mut App) + 'static,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
     move |_, _, cx| action(cx)
 }
 
-fn right_click(action: impl Fn(&mut App) + 'static) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+fn right_click(
+    action: impl Fn(&mut App) + 'static,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
     move |event, _, cx| {
         if event.is_right_click() {
             action(cx);
@@ -1685,7 +1722,12 @@ fn padlock(width: f32) -> Div {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(div().size(px(size * 0.2)).rounded_full().bg(rgba(0x000000c8))),
+                .child(
+                    div()
+                        .size(px(size * 0.2))
+                        .rounded_full()
+                        .bg(rgba(0x000000c8)),
+                ),
         )
 }
 
@@ -1699,13 +1741,23 @@ fn item_slot(
     let frame = frame(id, SLOT_CELL.width, SLOT_CELL.height, 3.0, false, selected);
     match item {
         Some(item) => frame
-            .child(crate::icons::slot(icons.image(item.icon_key()), &item_fallback(item)))
+            .child(crate::icons::slot(
+                icons.image(item.icon_key()),
+                &item_fallback(item),
+            ))
             .when(item.locked, |this| this.child(padlock(SLOT_CELL.width))),
         None => frame.child(faint(empty_text.to_owned())),
     }
 }
 
-fn sprite_face(icons: &mut Icons, sprite: i32, cell: f32, padding: f32, faded: bool, name: &str) -> Div {
+fn sprite_face(
+    icons: &mut Icons,
+    sprite: i32,
+    cell: f32,
+    padding: f32,
+    faded: bool,
+    name: &str,
+) -> Div {
     match icons.image(Key::Sprite(sprite)) {
         Some(image) => {
             let size = image.size(0);
@@ -1756,14 +1808,14 @@ fn item_ui<L: Holds>(
         if let Some(doses) = &item.doses {
             parts.push(doses_text(doses));
         }
-        let column = column
-            .child(
-                div()
-                    .text_center()
-                    .text_color(theme::BLUE)
-                    .child("The script requires this item: it can be moved, not removed or changed."),
-            )
-            .when(!parts.is_empty(), |this| this.child(widgets::weak(parts.join(", "))));
+        let column =
+            column
+                .child(div().text_center().text_color(theme::BLUE).child(
+                    "The script requires this item: it can be moved, not removed or changed.",
+                ))
+                .when(!parts.is_empty(), |this| {
+                    this.child(widgets::weak(parts.join(", ")))
+                });
         return (column, false);
     }
     let mut column = column;
@@ -1820,7 +1872,9 @@ fn item_ui<L: Holds>(
                         .child("Max")
                         .child(max.input(true).stepper(false).w(px(AMOUNT_WIDTH))),
                 )
-                .child(widgets::weak("Equal: exactly that many. Both 0: any amount."));
+                .child(widgets::weak(
+                    "Equal: exactly that many. Both 0: any amount.",
+                ));
         }
     }
     if !item.variants.is_empty() {
@@ -1906,7 +1960,9 @@ fn item_ui<L: Holds>(
         },
     );
     let order = |highest: bool| {
-        edit_doses(with, slot, pouch, move |doses| doses.highest_first = highest)
+        edit_doses(with, slot, pouch, move |doses| {
+            doses.highest_first = highest
+        })
     };
     let column = column
         .child(row)
@@ -1924,7 +1980,9 @@ fn item_ui<L: Holds>(
             true,
             None,
         ))
-        .child(widgets::weak("A carried dose that isn't ticked is swapped at the bank."));
+        .child(widgets::weak(
+            "A carried dose that isn't ticked is swapped at the bank.",
+        ));
     (column, resorted)
 }
 
@@ -1978,9 +2036,15 @@ pub fn equipment_ui(
         |grid, &(slot, column, row)| {
             let name = slot_name(slot);
             let (item, text, hover) = match editor.draft.slot(slot) {
-                EquipmentSlot::Item(item) => (Some(item), "", format!("{name}: {}", item_hover(item))),
+                EquipmentSlot::Item(item) => {
+                    (Some(item), "", format!("{name}: {}", item_hover(item)))
+                }
                 EquipmentSlot::Empty => (None, "", format!("{name}: must be empty.")),
-                EquipmentSlot::Any => (None, "any", format!("{name}: anything or nothing may be worn.")),
+                EquipmentSlot::Any => (
+                    None,
+                    "any",
+                    format!("{name}: anything or nothing may be worn."),
+                ),
             };
             let hover = if slot == SECONDARY_AMMO_SLOT {
                 format!("{hover}\n{SECONDARY_AMMO_HINT}")
@@ -1988,19 +2052,27 @@ pub fn equipment_ui(
                 hover
             };
             grid.child(
-                item_slot(("equipment-slot", slot), icons, item, text, editor.selected == Some(slot))
-                    .absolute()
-                    .left(px(column as f32 * (cell.width + gap)))
-                    .top(px(row as f32 * (cell.height + gap)))
-                    .tooltip(widgets::tooltip(hover))
-                    .on_click(click(edit(&with, move |editor, _| editor.selected = Some(slot))))
-                    .on_aux_click(right_click(edit(&with, move |editor, _| {
-                        editor.selected = Some(slot);
-                        let slot = editor.draft.slot_mut(slot);
-                        if !matches!(slot, EquipmentSlot::Item(item) if item.locked) {
-                            *slot = EquipmentSlot::Empty;
-                        }
-                    }))),
+                item_slot(
+                    ("equipment-slot", slot),
+                    icons,
+                    item,
+                    text,
+                    editor.selected == Some(slot),
+                )
+                .absolute()
+                .left(px(column as f32 * (cell.width + gap)))
+                .top(px(row as f32 * (cell.height + gap)))
+                .tooltip(widgets::tooltip(hover))
+                .on_click(click(edit(&with, move |editor, _| {
+                    editor.selected = Some(slot)
+                })))
+                .on_aux_click(right_click(edit(&with, move |editor, _| {
+                    editor.selected = Some(slot);
+                    let slot = editor.draft.slot_mut(slot);
+                    if !matches!(slot, EquipmentSlot::Item(item) if item.locked) {
+                        *slot = EquipmentSlot::Empty;
+                    }
+                }))),
             )
         },
     );
@@ -2017,15 +2089,16 @@ pub fn equipment_ui(
                 this.child(widgets::weak(SECONDARY_AMMO_HINT).text_center())
             });
         match editor.draft.slot_mut(slot) {
-            EquipmentSlot::Item(item) => {
-                details.child(item_ui(item, (slot, false), false, i32::MAX, ui, &with, window, cx).0)
-            }
+            EquipmentSlot::Item(item) => details
+                .child(item_ui(item, (slot, false), false, i32::MAX, ui, &with, window, cx).0),
             state => {
                 const EMPTY: &str = "Must be empty";
                 const ANY: &str = "Any";
                 let any = *state == EquipmentSlot::Any;
                 let mode = |mode: EquipmentSlot| {
-                    edit(&with, move |editor, _| *editor.draft.slot_mut(slot) = mode.clone())
+                    edit(&with, move |editor, _| {
+                        *editor.draft.slot_mut(slot) = mode.clone()
+                    })
                 };
                 details.child(fields::select(
                     "equipment-slot-mode",
@@ -2093,17 +2166,34 @@ fn spell_ui(draft: &Equipment, ui: &Ui, icons: &mut Icons, with: &With<Equipment
                     let on = draft.spell.as_deref() == Some(info.key);
                     let key = info.key;
                     column.child(
-                        frame(("spell", info.sprite as usize), SPELL_CELL, SPELL_CELL, 3.0, on, on)
-                            .child(sprite_face(icons, info.sprite, SPELL_CELL, 4.0, false, info.name))
-                            .tooltip(widgets::tooltip(format!("{} (level {})", info.name, info.level)))
-                            .on_click(click(edit(with, move |editor, _| {
-                                let draft = &mut editor.draft;
-                                draft.spell = if draft.spell.as_deref() == Some(key) {
-                                    None
-                                } else {
-                                    Some(key.to_owned())
-                                };
-                            }))),
+                        frame(
+                            ("spell", info.sprite as usize),
+                            SPELL_CELL,
+                            SPELL_CELL,
+                            3.0,
+                            on,
+                            on,
+                        )
+                        .child(sprite_face(
+                            icons,
+                            info.sprite,
+                            SPELL_CELL,
+                            4.0,
+                            false,
+                            info.name,
+                        ))
+                        .tooltip(widgets::tooltip(format!(
+                            "{} (level {})",
+                            info.name, info.level
+                        )))
+                        .on_click(click(edit(with, move |editor, _| {
+                            let draft = &mut editor.draft;
+                            draft.spell = if draft.spell.as_deref() == Some(key) {
+                                None
+                            } else {
+                                Some(key.to_owned())
+                            };
+                        }))),
                     )
                 },
             ))
@@ -2162,9 +2252,21 @@ impl Render for Ghost {
             .left(self.offset.x - px(SLOT_CELL.width / 2.0))
             .top(self.offset.y - px(SLOT_CELL.height / 2.0))
             .child(
-                frame("inventory-ghost", SLOT_CELL.width, SLOT_CELL.height, 3.0, false, true)
-                    .child(crate::icons::slot(self.dragged.picture.clone(), &self.dragged.fallback))
-                    .when(self.dragged.locked, |this| this.child(padlock(SLOT_CELL.width))),
+                frame(
+                    "inventory-ghost",
+                    SLOT_CELL.width,
+                    SLOT_CELL.height,
+                    3.0,
+                    false,
+                    true,
+                )
+                .child(crate::icons::slot(
+                    self.dragged.picture.clone(),
+                    &self.dragged.fallback,
+                ))
+                .when(self.dragged.locked, |this| {
+                    this.child(padlock(SLOT_CELL.width))
+                }),
             )
     }
 }
@@ -2266,26 +2368,46 @@ pub fn inventory_ui(
         let row = (0..POUCH_SIZE).fold(div().flex().gap(px(POUCH_GAP)), |row, i| {
             let hover = runes.get(i).map_or_else(|| "Empty".to_owned(), item_hover);
             row.child(
-                item_slot(("pouch-slot", i), icons, runes.get(i), "", selected_rune == Some(i))
-                    .tooltip(widgets::tooltip(hover))
-                    .on_click(click(select(i, true)))
-                    .on_aux_click(right_click(edit(&with, move |editor, _| {
-                        if let Some(runes) = editor.draft.pouch.as_mut()
-                            && i < runes.len()
-                        {
-                            runes.remove(i);
-                            editor.selected = None;
-                        }
-                    }))),
+                item_slot(
+                    ("pouch-slot", i),
+                    icons,
+                    runes.get(i),
+                    "",
+                    selected_rune == Some(i),
+                )
+                .tooltip(widgets::tooltip(hover))
+                .on_click(click(select(i, true)))
+                .on_aux_click(right_click(edit(&with, move |editor, _| {
+                    if let Some(runes) = editor.draft.pouch.as_mut()
+                        && i < runes.len()
+                    {
+                        runes.remove(i);
+                        editor.selected = None;
+                    }
+                }))),
             )
         });
         details = details.child(widgets::strong("Rune pouch")).child(row);
         if let Some(rune) = selected_rune.and_then(|i| runes.get_mut(i)) {
             let index = selected_rune.unwrap_or_default();
-            details = details.child(item_ui(rune, (index, true), false, POUCH_MAX_AMOUNT, ui, &with, window, cx).0);
+            details = details.child(
+                item_ui(
+                    rune,
+                    (index, true),
+                    false,
+                    POUCH_MAX_AMOUNT,
+                    ui,
+                    &with,
+                    window,
+                    cx,
+                )
+                .0,
+            );
         }
         details = details
-            .child(widgets::weak("Read from client fills it from the pouch's contents."))
+            .child(widgets::weak(
+                "Read from client fills it from the pouch's contents.",
+            ))
             .child(div().h(px(6.0)));
     }
     if let Some(slot) = editor.selected.filter(|_| !editor.selected_in_pouch) {
@@ -2299,7 +2421,8 @@ pub fn inventory_ui(
         let mut resorted = false;
         details = match editor.draft.slot_mut(slot) {
             Some(item) => {
-                let (shown, sorted) = item_ui(item, (slot, false), fixed, i32::MAX, ui, &with, window, cx);
+                let (shown, sorted) =
+                    item_ui(item, (slot, false), fixed, i32::MAX, ui, &with, window, cx);
                 resorted = sorted;
                 details.child(shown)
             }
@@ -2368,18 +2491,32 @@ pub fn prayer_ui(
             };
             let key = info.key;
             grid.child(
-                frame(("prayer", i), PRAYER_CELL, PRAYER_CELL, 4.0, on, on || editor.selected == Some(i))
-                    .child(sprite_face(icons, info.sprite, PRAYER_CELL, 6.0, too_high || blocked, info.name))
-                    .when(blocked, |this| this.child(padlock(PRAYER_CELL)))
-                    .tooltip(widgets::tooltip(hover))
-                    .on_click(click(edit(&with, move |editor, _| {
-                        if blocked {
-                            editor.selected = Some(i);
-                        } else {
-                            editor.draft.toggle(key);
-                            editor.selected = None;
-                        }
-                    }))),
+                frame(
+                    ("prayer", i),
+                    PRAYER_CELL,
+                    PRAYER_CELL,
+                    4.0,
+                    on,
+                    on || editor.selected == Some(i),
+                )
+                .child(sprite_face(
+                    icons,
+                    info.sprite,
+                    PRAYER_CELL,
+                    6.0,
+                    too_high || blocked,
+                    info.name,
+                ))
+                .when(blocked, |this| this.child(padlock(PRAYER_CELL)))
+                .tooltip(widgets::tooltip(hover))
+                .on_click(click(edit(&with, move |editor, _| {
+                    if blocked {
+                        editor.selected = Some(i);
+                    } else {
+                        editor.draft.toggle(key);
+                        editor.selected = None;
+                    }
+                }))),
             )
         },
     );
@@ -2394,7 +2531,12 @@ pub fn prayer_ui(
                 .flex_col()
                 .items_center()
                 .child(widgets::strong(info.name))
-                .child(div().text_center().text_color(theme::BLUE).child(CONTROLLED))
+                .child(
+                    div()
+                        .text_center()
+                        .text_color(theme::BLUE)
+                        .child(CONTROLLED),
+                )
         });
     let names: Vec<&str> = editor
         .draft
@@ -2461,9 +2603,11 @@ pub fn picker(
             enabled,
             None,
         ))
-        .child(widgets::weak(format!("Edit them in the {} tab.", kind.label())))
+        .child(widgets::weak(format!(
+            "Edit them in the {} tab.",
+            kind.label()
+        )))
 }
-
 
 #[cfg(test)]
 mod tests {

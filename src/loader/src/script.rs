@@ -162,14 +162,31 @@ impl Process {
     }
 }
 
-fn hold_client(target: &Target) -> Result<std::fs::File, String> {
+fn client_lock(target: &Target) -> Result<std::path::PathBuf, String> {
     let dir = crate::paths::project_dirs()
         .ok_or("Can't find a data folder on this system.")?
         .data_dir()
         .join("clients");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     let name = crate::session::sha256_hex(target.key().as_bytes());
-    let path = dir.join(format!("{}.lock", &name[..16]));
+    Ok(dir.join(format!("{}.lock", &name[..16])))
+}
+
+pub fn client_held(target: &Target) -> bool {
+    let Some(file) = client_lock(target)
+        .ok()
+        .and_then(|path| std::fs::File::open(path).ok())
+    else {
+        return false;
+    };
+    matches!(
+        file.try_lock_shared(),
+        Err(std::fs::TryLockError::WouldBlock)
+    )
+}
+
+fn hold_client(target: &Target) -> Result<std::fs::File, String> {
+    let path = client_lock(target)?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)

@@ -1,10 +1,10 @@
 use super::*;
 
-use gpui_kit::{Entity, Focusable};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::{Entity, Focusable};
 
 use crate::ui::{theme, widgets};
 
@@ -292,8 +292,16 @@ impl LoaderApp {
                     .iter()
                     .map(|field| label(field.label(), field.label(), field.tooltip())),
             )
-            .child(label("output lines", "output lines", Some(LOG_LINES_TOOLTIP)))
-            .child(label("interface font", "interface font", Some(UI_FONT_TOOLTIP)));
+            .child(label(
+                "output lines",
+                "output lines",
+                Some(LOG_LINES_TOOLTIP),
+            ))
+            .child(label(
+                "interface font",
+                "interface font",
+                Some(UI_FONT_TOOLTIP),
+            ));
         let controls = div()
             .flex()
             .flex_col()
@@ -450,9 +458,9 @@ fn grid_cell() -> Div {
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("settings", |app| app.tab = Tab::Settings),
+        ("settings", |app| app.page = Page::Settings),
         ("settings-whitelist", |app| {
-            app.tab = Tab::Settings;
+            app.page = Page::Settings;
             let mut list = crate::script::write(&app.http_whitelist);
             list.add("api.example.com").unwrap();
             list.add("*.example.org").unwrap();
@@ -463,7 +471,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             );
         }),
         ("settings-whitelist-dialog", |app| {
-            app.tab = Tab::Settings;
+            app.page = Page::Settings;
             let mut list = crate::script::write(&app.http_whitelist);
             app.whitelist_page
                 .click(crate::whitelist::Click::Add, &mut list);

@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
-    rc::Rc,
     path::{Path, PathBuf},
+    rc::Rc,
     time::{Duration, Instant, SystemTime},
 };
 
+use gpui_kit::component::Sizable;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Textarea, TextareaState};
-use gpui_kit::component::Sizable;
 use gpui_kit::{
     App, AppContext, ClickEvent, Div, Entity, InteractiveElement, ParentElement, Pixels,
     SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div,
@@ -498,7 +498,7 @@ impl Page {
             Some(div().child("Loading your sessions…"))
         } else if self.sessions.is_empty() {
             Some(widgets::weak(
-                "No sessions in the last 24 hours. Run a script from the Scripts page first.",
+                "No sessions in the last 24 hours. Run a script from a client's scripts page first.",
             ))
         } else {
             None

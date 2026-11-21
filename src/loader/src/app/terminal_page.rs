@@ -37,18 +37,18 @@ const SAMPLE: &str = concat!(
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("terminal", |app| {
-            app.tab = Tab::Terminal;
+            app.page = Page::Terminal;
             app.terminal = Some(crate::terminal::Terminal::showing(SAMPLE.as_bytes(), false));
         }),
         ("terminal-exited", |app| {
-            app.tab = Tab::Terminal;
+            app.page = Page::Terminal;
             app.terminal = Some(crate::terminal::Terminal::showing(
                 b"$ exit\r\nexit\r\n",
                 true,
             ));
         }),
         ("terminal-error", |app| {
-            app.tab = Tab::Terminal;
+            app.page = Page::Terminal;
             app.terminal = Some(crate::terminal::Terminal::failed(
                 "/bin/zsh: No such file or directory",
             ));

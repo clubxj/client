@@ -2,6 +2,7 @@
 
 mod account;
 mod accounts;
+mod agent_runs;
 mod api;
 mod app;
 mod breaks;
@@ -31,16 +32,16 @@ mod script;
 mod script_log;
 mod script_names;
 mod session;
+mod storage;
 mod store;
 mod terminal;
-mod ui;
 mod transports;
+mod ui;
 mod update;
 mod vars;
+mod wake;
 mod whitelist;
 mod widgets;
-mod storage;
-mod wake;
 mod workspace;
 mod xp;
 
@@ -62,10 +63,12 @@ fn main() {
     }
     transports::start();
     let storage = storage::Storage::open();
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        app::LoaderApp::open_window(cx, storage, instance).expect("the window opens");
-    });
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            app::LoaderApp::open_window(cx, storage, instance).expect("the window opens");
+        });
     #[cfg(not(windows))]
     update::relaunch_after_exit();
 }

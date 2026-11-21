@@ -100,7 +100,7 @@ impl Check {
         }
         if script.community && !confirmed.has(&script.id, fetched.revision) {
             return Err(format!(
-                "{title} has a revision you haven't reviewed. Run it once from the Scripts page."
+                "{title} has a revision you haven't reviewed. Run it once from a client's scripts page."
             ));
         }
         let price = match self.quotes.get(&entry.script_id) {
@@ -930,6 +930,7 @@ impl LoaderApp {
 
     pub(super) fn render_queue(
         &mut self,
+        pid: u32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -940,7 +941,7 @@ impl LoaderApp {
             .flex_1()
             .min_h_0()
             .gap(theme::LINE_GAP)
-            .child(widgets::heading("Queue"));
+            .child(widgets::heading(format!("Client {pid}: queue")));
         if self.auth.me().is_none() {
             return page
                 .child("Sign in to queue store scripts.")
@@ -949,16 +950,34 @@ impl LoaderApp {
         if !self.store.loaded && !self.store.loading && self.store.error.is_none() {
             self.fetch_scripts();
         }
-        let running = self.render_running_queues(cx);
+        if let Some(running) = self.render_running_queue(pid, cx) {
+            return page
+                .child(running)
+                .child(widgets::separator())
+                .child(
+                    div()
+                        .id("queue-running")
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.render_running_entries(pid))
+                        .overflow_y_scrollbar(),
+                )
+                .into_any_element();
+        }
         let saved = self.render_saved_queues(window, cx);
         let options = self.render_queue_options(cx);
-        let add = self.render_add_entry(cx);
+        let add = self.render_add_entry(pid, cx);
         self.entry_form();
         let entries = self.render_entries(cx);
         let editor = self.render_entry_editor(window, cx);
-        let prompt = self.render_queue_prompt(window, cx);
-        page.children(running)
-            .child(saved.mt(px(8.0)))
+        let prompt = self
+            .queue_page
+            .prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.pid == pid)
+            .then(|| self.render_queue_prompt(window, cx))
+            .flatten();
+        page.child(saved.mt(px(8.0)))
             .child(options.mt(px(8.0)))
             .child(add.mt(px(8.0)))
             .child(widgets::separator())
@@ -982,45 +1001,62 @@ impl LoaderApp {
             .into_any_element()
     }
 
-    fn render_running_queues(&self, cx: &mut Context<Self>) -> Vec<Div> {
-        self.queue_runners
-            .iter()
-            .map(|runner| {
-                let pid = runner.pid;
+    fn render_running_entries(&self, pid: u32) -> Div {
+        let Some(runner) = self.queue_on(pid) else {
+            return div();
+        };
+        div().flex().flex_col().gap(theme::LINE_GAP).children(
+            runner.queue.entries.iter().enumerate().map(|(i, entry)| {
+                let current = i == runner.index;
                 row()
-                    .child(widgets::status_dot(theme::GREEN))
-                    .child(format!("Client {}: {}", pid, runner.progress()))
-                    .child(widgets::weak(crate::xp::duration(runner.started.elapsed())))
                     .child(
-                        widgets::button(
-                            ("queue-finish", pid as usize),
-                            "Finish",
-                            true,
-                            cx.listener(move |app, _: &ClickEvent, _, cx| {
-                                app.ask_queue_to_finish(pid);
-                                cx.notify();
-                            }),
-                        )
-                        .tooltip(widgets::tooltip(
-                            "Lets the current script wrap up, then ends the queue.",
-                        )),
+                        div()
+                            .when(current, |this| {
+                                this.text_color(theme::GREEN).font_weight(FontWeight::BOLD)
+                            })
+                            .when(i < runner.index, |this| this.text_color(theme::COMMENT))
+                            .child(format!("{}. {}", i + 1, entry.title)),
                     )
-                    .child(
-                        widgets::button(
-                            ("queue-stop", pid as usize),
-                            "Stop",
-                            true,
-                            cx.listener(move |app, _: &ClickEvent, _, cx| {
-                                app.stop_queue(pid);
-                                cx.notify();
-                            }),
-                        )
-                        .tooltip(widgets::tooltip(
-                            "Stops the current script now and ends the queue.",
-                        )),
+                    .child(widgets::weak(limits_text(entry)))
+            }),
+        )
+    }
+
+    fn render_running_queue(&self, pid: u32, cx: &mut Context<Self>) -> Option<Div> {
+        self.queue_on(pid).map(|runner| {
+            row()
+                .child(widgets::status_dot(theme::GREEN))
+                .child(runner.progress())
+                .child(widgets::weak(crate::xp::duration(runner.started.elapsed())))
+                .child(
+                    widgets::button(
+                        ("queue-finish", pid as usize),
+                        "Finish",
+                        true,
+                        cx.listener(move |app, _: &ClickEvent, _, cx| {
+                            app.ask_queue_to_finish(pid);
+                            cx.notify();
+                        }),
                     )
-            })
-            .collect()
+                    .tooltip(widgets::tooltip(
+                        "Lets the current script wrap up, then ends the queue.",
+                    )),
+                )
+                .child(
+                    widgets::button(
+                        ("queue-stop", pid as usize),
+                        "Stop",
+                        true,
+                        cx.listener(move |app, _: &ClickEvent, _, cx| {
+                            app.stop_queue(pid);
+                            cx.notify();
+                        }),
+                    )
+                    .tooltip(widgets::tooltip(
+                        "Stops the current script now and ends the queue.",
+                    )),
+                )
+        })
     }
 
     fn save_name_input(
@@ -1191,7 +1227,7 @@ impl LoaderApp {
             .child(on_change)
     }
 
-    fn render_add_entry(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_add_entry(&mut self, pid: u32, cx: &mut Context<Self>) -> Div {
         let scripts = self.queueable_scripts();
         let chosen = self
             .queue_page
@@ -1229,7 +1265,7 @@ impl LoaderApp {
                 cx.notify();
             }),
         );
-        let (picker, target) = self.render_run_target(cx);
+        let target = self.free_client(pid).cloned();
         let problem = self
             .queues
             .current
@@ -1240,15 +1276,12 @@ impl LoaderApp {
                     .checking
                     .map(|_| "Checking the queue…".into())
             });
-        let pid = target.map(|t| t.client.pid);
         let start = widgets::button(
             "queue-start",
             "Start queue",
             problem.is_none(),
             cx.listener(move |app, _: &ClickEvent, _, cx| {
-                if let Some(pid) = pid {
-                    app.check_queue(pid);
-                }
+                app.check_queue(pid);
                 cx.notify();
             }),
         )
@@ -1262,7 +1295,6 @@ impl LoaderApp {
                     .child(widgets::combo("queue_add", picked, choices))
                     .child(add)
                     .child(vertical_separator())
-                    .child(picker)
                     .child(start),
             )
             .when(scripts.is_empty() && self.store.loaded, |this| {
@@ -1639,7 +1671,7 @@ fn fake_queue() -> queue::Queue {
 
 #[cfg(test)]
 fn queue_page(app: &mut LoaderApp) {
-    app.tab = Tab::Queue;
+    app.page = super::Page::Queue(4242);
     app.store.loaded = true;
     app.store.scripts = vec![
         queueable("Bosses", 400_000),

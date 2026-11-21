@@ -82,6 +82,7 @@ fn measured_width(cell: Rc<Cell<Pixels>>) -> impl IntoElement {
 
 #[derive(Clone, Copy)]
 struct Account<'a> {
+    pid: u32,
     me: &'a Me,
     block: Option<&'a str>,
     has_site: bool,
@@ -99,8 +100,8 @@ impl LoaderApp {
                 self.fetch_scripts();
                 self.api_job(|api| Event::Me(api.me()));
             }
-            Action::Run(script) => {
-                if let Some(target) = self.run_target_client() {
+            Action::Run(script, pid) => {
+                if let Some(target) = self.free_client(pid).cloned() {
                     self.open_store_script(*script, target);
                 }
             }
@@ -359,6 +360,7 @@ impl LoaderApp {
             me,
             block,
             has_site,
+            ..
         } = *account;
         let blocked = block
             .map(str::to_owned)
@@ -390,14 +392,14 @@ impl LoaderApp {
             )
             .tooltip(widgets::tooltip(reason))
         } else {
-            let run = script.clone();
+            let (run, pid) = (script.clone(), account.pid);
             widgets::icon_button(
                 script_id("run", script),
                 ICON_START,
                 "Run",
                 width,
                 blocked.is_none(),
-                Self::act(move || Action::Run(Box::new(run.clone())), cx),
+                Self::act(move || Action::Run(Box::new(run.clone()), pid), cx),
             )
             .when_some(blocked, |this, reason| {
                 this.tooltip(widgets::tooltip(reason))
@@ -450,6 +452,7 @@ impl LoaderApp {
 
     pub(super) fn render_store(
         &mut self,
+        pid: u32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -465,7 +468,7 @@ impl LoaderApp {
         ui.sync(&self.store, window, cx);
         let (search, code, cell) = (ui.search.clone(), ui.code.clone(), ui.width.clone());
         let width = cell.get();
-        let (picker, target) = self.render_run_target(cx);
+        let target = self.free_client(pid).cloned();
         let block = self.run_block(target.as_ref());
         let Some(me) = self.auth.me().cloned() else {
             return div().into_any_element();
@@ -473,6 +476,7 @@ impl LoaderApp {
         let has_site = !self.api.config().site_url.is_empty();
         let full = width - px(24.0);
         let account = Account {
+            pid,
             me: &me,
             block: block.as_deref(),
             has_site,
@@ -490,7 +494,6 @@ impl LoaderApp {
             .min_h_0()
             .gap(theme::LINE_GAP)
             .child(measured_width(cell))
-            .child(picker)
             .child(self.render_store_filters(&me, &search, width, cx))
             .child(
                 self.render_store_redeem(&code, width, cx)
@@ -606,7 +609,7 @@ fn fake_scripts() -> Vec<StoreScript> {
 
 #[cfg(test)]
 fn populated(app: &mut LoaderApp) {
-    app.tab = Tab::Store;
+    app.page = Page::Store(4242);
     app.store.scripts = fake_scripts();
     app.store.loaded = true;
     app.targets = vec![fake_target(4242)];
@@ -616,9 +619,9 @@ fn populated(app: &mut LoaderApp) {
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("store", populated),
-        ("store-no-client", |app| {
+        ("store-client-busy", |app| {
             populated(app);
-            app.targets.clear();
+            app.starting = Some(4242);
         }),
         ("store-tester-busy", |app| {
             populated(app);
@@ -643,12 +646,14 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             app.store.category = "mining".into();
         }),
         ("store-error", |app| {
-            app.tab = Tab::Store;
+            app.page = Page::Store(4242);
+            app.targets = vec![fake_target(4242)];
             app.store.loaded = true;
             app.store.error = Some("Couldn't reach the server: connection refused".into());
         }),
         ("store-empty", |app| {
-            app.tab = Tab::Store;
+            app.page = Page::Store(4242);
+            app.targets = vec![fake_target(4242)];
             app.store.loaded = true;
         }),
     ]

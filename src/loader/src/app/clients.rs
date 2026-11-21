@@ -1,14 +1,12 @@
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
-use gpui_kit::component::{Disableable, Sizable, WindowExt};
-use gpui_kit::{Entity, Focusable, Hsla, KeystrokeEvent, Subscription};
+use gpui_kit::component::{Disableable, Sizable};
+use gpui_kit::{Entity, Focusable, Hsla, Subscription};
 
 use super::*;
 use crate::ui::{theme, widgets};
 
 const COLUMN_GAP: Pixels = px(16.0);
-const MIN_COLUMN: Pixels = px(48.0);
-const ROW_INSET: Pixels = px(8.0);
 const SWATCH: Pixels = px(20.0);
 const DISPLAY_NAME_WIDTH: Pixels = px(140.0);
 const CURSOR_SIZE_WIDTH: Pixels = px(100.0);
@@ -16,6 +14,7 @@ const CURSOR_SIZES: std::ops::RangeInclusive<u8> = 4..=64;
 const DISPLAY_NAME_HINT: &str = "Shown instead of your display name, in this client only, and kept across logins until reset. Empty puts the real name back.";
 
 pub(super) struct Ui {
+    pid: u32,
     display_name: Entity<InputState>,
     cursor_color: Entity<ColorPickerState>,
     cursor_size: Entity<InputState>,
@@ -45,7 +44,7 @@ fn parse_cursor_size(text: &str) -> Option<u8> {
 }
 
 impl Ui {
-    fn new(app: &LoaderApp, window: &mut Window, cx: &mut Context<LoaderApp>) -> Self {
+    fn new(pid: u32, app: &LoaderApp, window: &mut Window, cx: &mut Context<LoaderApp>) -> Self {
         let display_name = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Real name")
@@ -66,13 +65,13 @@ impl Ui {
             cx.subscribe_in(
                 &display_name,
                 window,
-                |app, input, event: &InputEvent, window, cx| match event {
+                move |app, input, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => {
                         app.display_name = input.read(cx).value().to_string();
                     }
                     InputEvent::PressEnter { .. } => {
                         window.focus(&app.chrome.focus, cx);
-                        app.submit_display_name();
+                        app.submit_display_name(pid);
                         cx.notify();
                     }
                     _ => {}
@@ -81,14 +80,14 @@ impl Ui {
             cx.subscribe_in(
                 &cursor_color,
                 window,
-                |app, _, event: &ColorPickerEvent, _, cx| {
+                move |app, _, event: &ColorPickerEvent, _, cx| {
                     let ColorPickerEvent::Change(Some(color)) = event else {
                         return;
                     };
                     let color = cursor_rgb(*color);
                     if color != app.cursor.color {
                         app.cursor.color = color;
-                        app.cursor_changed();
+                        app.cursor_changed(pid);
                         cx.notify();
                     }
                 },
@@ -96,27 +95,20 @@ impl Ui {
             cx.subscribe_in(
                 &cursor_size,
                 window,
-                |app, input, event: &InputEvent, _, cx| {
+                move |app, input, event: &InputEvent, _, cx| {
                     if let InputEvent::Change = event
                         && let Some(size) = parse_cursor_size(&input.read(cx).value())
                         && size != app.cursor.size
                     {
                         app.cursor.size = size;
-                        app.cursor_changed();
+                        app.cursor_changed(pid);
                         cx.notify();
                     }
                 },
             ),
-            cx.observe_keystrokes(|app, event: &KeystrokeEvent, window, cx| {
-                if app.tab == Tab::Clients
-                    && let Some(down) = step_key(event, window, cx)
-                {
-                    app.step_selected_client(down);
-                    cx.notify();
-                }
-            }),
         ];
         Self {
+            pid,
             display_name,
             cursor_color,
             cursor_size,
@@ -148,20 +140,6 @@ impl Ui {
     }
 }
 
-fn step_key(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) -> Option<bool> {
-    if event.action.is_some()
-        || event.keystroke.modifiers.modified()
-        || window.has_focused_input(cx)
-    {
-        return None;
-    }
-    match event.keystroke.key.as_str() {
-        "down" => Some(true),
-        "up" => Some(false),
-        _ => None,
-    }
-}
-
 fn status_of(client: &injector::Client, dll_version: Option<&str>) -> (String, Rgba, String) {
     if client.foreign_bot.is_some() {
         return (
@@ -189,34 +167,30 @@ fn status_of(client: &injector::Client, dll_version: Option<&str>) -> (String, R
 }
 
 impl LoaderApp {
-    fn cursor_changed(&mut self) {
-        if let Some(target) = self.selected_target().cloned() {
+    fn cursor_changed(&mut self, pid: u32) {
+        if let Some(target) = self.target_of(pid).cloned() {
             self.set_cursor(target);
         }
     }
 
-    fn can_set_display_name(&self) -> bool {
-        self.busy.is_none()
+    fn can_set_display_name(&self, pid: u32) -> bool {
+        !self.busy
             && self
-                .selected_target()
+                .target_of(pid)
                 .is_some_and(|t| t.client.loaded.is_some())
     }
 
-    fn submit_display_name(&mut self) {
-        if !self.can_set_display_name() {
+    fn submit_display_name(&mut self, pid: u32) {
+        if !self.can_set_display_name(pid) {
             return;
         }
-        if let Some(target) = self.selected_target().cloned() {
+        if let Some(target) = self.target_of(pid).cloned() {
             self.set_display_name(target);
         }
     }
 
-    fn client_action(&mut self, action: ClientAction) {
-        let Some(target) = self
-            .selected_target()
-            .filter(|t| t.client.foreign_bot.is_none())
-            .cloned()
-        else {
+    fn client_action(&mut self, pid: u32, action: ClientAction) {
+        let Some(target) = self.target_of(pid).cloned() else {
             return;
         };
         match action {
@@ -226,146 +200,9 @@ impl LoaderApp {
         }
     }
 
-    pub(super) fn step_selected_client(&mut self, down: bool) {
-        let keys: Vec<String> = self
-            .targets
-            .iter()
-            .filter(|t| t.client.foreign_bot.is_none())
-            .map(Target::key)
-            .collect();
-        if keys.is_empty() {
-            return;
-        }
-        let current = keys.iter().position(|k| Some(k) == self.selected.as_ref());
-        let next = match (current, down) {
-            (None, true) => 0,
-            (None, false) => keys.len() - 1,
-            (Some(i), true) => (i + 1).min(keys.len() - 1),
-            (Some(i), false) => i.saturating_sub(1),
-        };
-        self.selected = Some(keys[next].clone());
-        self.run_target.clone_from(&self.selected);
-    }
-
-    fn render_client_table(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let show_prefix = !cfg!(windows);
-        let bold_width =
-            |text: &str| (widgets::text_width(window, text, theme::BODY, true) + px(1.0)).ceil();
-        let pid_width = self
-            .targets
-            .iter()
-            .map(|t| bold_width(&t.client.pid.to_string()))
-            .fold(bold_width("PID"), Pixels::max);
-        let title_width = self
-            .targets
-            .iter()
-            .map(|t| bold_width(&t.client.title))
-            .fold(bold_width("Title"), Pixels::max);
-        let mut columns = vec![("Title", title_width)];
-        if show_prefix {
-            columns.push(("Prefix", px(CLIENT_PREFIX_WIDTH)));
-        }
-        columns.push(("Status", px(CLIENT_STATUS_WIDTH)));
-        let width = |index: usize| columns[index].1;
-        let pid_cell = || div().flex_none().w(pid_width);
-        let flex_cell = |width: Pixels| {
-            div()
-                .flex_basis(width)
-                .flex_shrink(1.0)
-                .min_w(width.min(MIN_COLUMN))
-        };
-        let row = || {
-            div()
-                .flex()
-                .items_center()
-                .gap(COLUMN_GAP)
-                .px(ROW_INSET)
-                .py(px(2.0))
-        };
-        let header = columns.iter().fold(
-            row()
-                .text_color(theme::COMMENT)
-                .child(pid_cell().child("PID")),
-            |header, (title, width)| header.child(flex_cell(*width).child(*title)),
-        );
-        let rows = self.targets.iter().enumerate().map(|(index, target)| {
-            let client = &target.client;
-            let enabled = client.foreign_bot.is_none();
-            let key = target.key();
-            let active = enabled && self.selected.as_ref() == Some(&key);
-            let text_color = if active {
-                theme::GREEN
-            } else if enabled {
-                theme::FG
-            } else {
-                theme::COMMENT
-            };
-            let (status, color, tip) = status_of(client, self.dll_version.as_deref());
-            let bold_status = active || !enabled;
-            let prefix = target.location.label().unwrap_or_default();
-            let title = div()
-                .id("title")
-                .child(client.title.clone())
-                .tooltip(widgets::tooltip(client.exe.clone()));
-            let prefix = show_prefix.then(|| {
-                flex_cell(width(1)).child(
-                    div()
-                        .id("prefix")
-                        .truncate()
-                        .child(prefix.clone())
-                        .tooltip(widgets::tooltip(prefix)),
-                )
-            });
-            let status = div()
-                .id("status")
-                .text_color(color)
-                .when(bold_status, |this| this.font_weight(FontWeight::BOLD))
-                .child(status)
-                .tooltip(widgets::tooltip(tip));
-            row()
-                .id(("client", index))
-                .max_w_full()
-                .rounded(px(3.0))
-                .text_color(text_color)
-                .when(active, |this| this.font_weight(FontWeight::BOLD))
-                .when(index % 2 == 1, |this| this.bg(theme::BG_FLOAT))
-                .when(enabled, |this| {
-                    this.cursor_pointer()
-                        .hover(|style| style.bg(theme::SEL))
-                        .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
-                            app.selected = Some(key.clone());
-                            app.run_target.clone_from(&app.selected);
-                            cx.notify();
-                        }))
-                })
-                .child(pid_cell().child(client.pid.to_string()))
-                .child(flex_cell(width(0)).child(title))
-                .children(prefix)
-                .child(flex_cell(width(columns.len() - 1)).child(status))
-        });
-        div()
-            .id("clients")
-            .flex_shrink(1.0)
-            .min_h(px(60.0))
-            .mx(-ROW_INSET)
-            .overflow_scroll()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .items_start()
-                    .child(header.max_w_full().mb(theme::LINE_GAP))
-                    .children(rows),
-            )
-    }
-
-    fn render_client_buttons(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let client = self
-            .selected_target()
-            .filter(|t| t.client.foreign_bot.is_none())
-            .map(|t| &t.client);
-        let idle = self.busy.is_none();
+    fn render_client_buttons(&self, pid: u32, window: &Window, cx: &mut Context<Self>) -> Div {
+        let client = self.target_of(pid).map(|t| &t.client);
+        let idle = !self.busy;
         let loaded = client.is_some_and(|c| c.loaded.is_some());
         let can_load = idle
             && !self.settings.dll.is_empty()
@@ -400,7 +237,7 @@ impl LoaderApp {
                 width,
                 enabled,
                 cx.listener(move |app, _: &ClickEvent, _, cx| {
-                    app.client_action(action);
+                    app.client_action(pid, action);
                     cx.notify();
                 }),
             )
@@ -443,6 +280,7 @@ impl LoaderApp {
     }
 
     fn render_client_options(&self, ui: &Ui, window: &Window, cx: &mut Context<Self>) -> Div {
+        let pid = ui.pid;
         let labels = ["Mouse cursor", "Display name"];
         let label_width = widgets::widest(window, &labels, theme::BODY).ceil();
         let option = |label: &'static str, control: Div| {
@@ -465,7 +303,7 @@ impl LoaderApp {
                         app.update(cx, |app, cx| {
                             if app.cursor.style != style {
                                 app.cursor.style = style;
-                                app.cursor_changed();
+                                app.cursor_changed(pid);
                                 cx.notify();
                             }
                         })
@@ -507,7 +345,7 @@ impl LoaderApp {
                     .suffix("px")
                     .disabled(!cursor_on),
             );
-        let can_set = self.can_set_display_name();
+        let can_set = self.can_set_display_name(pid);
         let label = if self.display_name.trim().is_empty() {
             "Reset"
         } else {
@@ -529,8 +367,8 @@ impl LoaderApp {
                     "set-display-name",
                     label,
                     can_set,
-                    cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.submit_display_name();
+                    cx.listener(move |app, _: &ClickEvent, _, cx| {
+                        app.submit_display_name(pid);
                         cx.notify();
                     }),
                 )
@@ -544,56 +382,101 @@ impl LoaderApp {
             .child(option(labels[1], name))
     }
 
-    pub(super) fn render_clients(
+    fn render_client_children(&self, pid: u32, cx: &mut Context<Self>) -> Div {
+        let buttons = self
+            .client_node(pid)
+            .children
+            .into_iter()
+            .enumerate()
+            .map(|(i, child)| {
+                let pick = child.pick;
+                widgets::button(
+                    ("client-child", i),
+                    child.name,
+                    true,
+                    cx.listener(move |app, _: &ClickEvent, _, cx| {
+                        app.go(pick.0, pick.1);
+                        cx.notify();
+                    }),
+                )
+            });
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(theme::ITEM_GAP)
+            .mt(px(20.0))
+            .children(buttons)
+    }
+
+    fn render_client_facts(&self, pid: u32) -> Div {
+        let show_prefix = !cfg!(windows);
+        let fact = |label: &'static str, value: Stateful<Div>| {
+            div()
+                .flex()
+                .items_center()
+                .gap(COLUMN_GAP)
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(70.0))
+                        .text_color(theme::COMMENT)
+                        .child(label),
+                )
+                .child(value.min_w_0())
+        };
+        let Some(target) = self.detected(pid) else {
+            return div().child(widgets::weak(
+                "This client has closed. Its runs stay here until you close them.",
+            ));
+        };
+        let client = &target.client;
+        let (status, color, tip) = status_of(client, self.dll_version.as_deref());
+        let prefix = target.location.label().unwrap_or_default();
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .child(fact(
+                "Title",
+                div()
+                    .id("client-title")
+                    .truncate()
+                    .child(client.title.clone())
+                    .tooltip(widgets::tooltip(client.exe.clone())),
+            ))
+            .when(show_prefix, |this| {
+                this.child(fact(
+                    "Prefix",
+                    div()
+                        .id("client-prefix")
+                        .truncate()
+                        .child(prefix.clone())
+                        .tooltip(widgets::tooltip(prefix)),
+                ))
+            })
+            .child(fact(
+                "Agent",
+                div()
+                    .id("client-status")
+                    .text_color(color)
+                    .child(status)
+                    .tooltip(widgets::tooltip(tip)),
+            ))
+    }
+
+    pub(super) fn render_client(
         &mut self,
+        pid: u32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let ui = match self.clients_ui.take() {
+        let ui = match self.clients_ui.take().filter(|ui| ui.pid == pid) {
             Some(ui) => ui,
-            None => Ui::new(self, window, cx),
+            None => Ui::new(pid, self, window, cx),
         };
         ui.sync(self, window, cx);
-        let idle = self.busy.is_none();
-        let header = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .child(widgets::heading("Clients"))
-            .child(widgets::button(
-                "refresh",
-                "Refresh",
-                idle,
-                cx.listener(|app, _: &ClickEvent, _, cx| {
-                    app.scan();
-                    cx.notify();
-                }),
-            ));
-        let table = if self.targets.is_empty() {
-            idle.then(|| {
-                widgets::weak("No game clients found.")
-                    .flex_none()
-                    .into_any_element()
-            })
-        } else {
-            Some(self.render_client_table(window, cx).into_any_element())
-        };
-        let options = div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .gap(theme::LINE_GAP)
-            .mt(theme::ITEM_GAP)
-            .child(widgets::heading("Client options"))
-            .child(div().flex().child(self.render_client_buttons(window, cx)))
-            .child(
-                div()
-                    .mt(px(6.0))
-                    .child(self.render_client_options(&ui, window, cx)),
-            );
-        self.clients_ui = Some(ui);
-        div()
+        let usable = self.target_of(pid).is_some_and(|t| t.client.is_64bit);
+        let page = div()
             .flex_1()
             .min_h_0()
             .relative()
@@ -601,15 +484,31 @@ impl LoaderApp {
             .flex_col()
             .gap(theme::LINE_GAP)
             .child(crate::logo::background())
-            .child(header)
-            .children(table)
-            .child(options)
-            .into_any_element()
+            .child(widgets::heading(format!("Client {pid}")))
+            .child(self.render_client_facts(pid));
+        let page = if usable {
+            page.child(
+                div()
+                    .flex()
+                    .mt(theme::ITEM_GAP)
+                    .child(self.render_client_buttons(pid, window, cx)),
+            )
+            .child(
+                div()
+                    .mt(px(6.0))
+                    .child(self.render_client_options(&ui, window, cx)),
+            )
+        } else {
+            page
+        };
+        let page = page.child(self.render_client_children(pid, cx));
+        self.clients_ui = Some(ui);
+        page.into_any_element()
     }
 }
 
 #[cfg(test)]
-fn target(pid: u32, title: &str, loaded: Option<&str>, foreign: bool) -> Target {
+pub(super) fn target(pid: u32, title: &str, loaded: Option<&str>, foreign: bool) -> Target {
     let location = if cfg!(windows) {
         serde_json::Value::Null
     } else {
@@ -635,8 +534,7 @@ fn target(pid: u32, title: &str, loaded: Option<&str>, foreign: bool) -> Target 
 }
 
 #[cfg(test)]
-fn populated(app: &mut LoaderApp) {
-    app.tab = Tab::Clients;
+pub(super) fn populated(app: &mut LoaderApp) {
     app.dll_version = Some("2026.11.20-abc1234".into());
     app.targets = vec![
         target(4120, "Game client", Some("2026.11.20-abc1234"), false),
@@ -649,106 +547,24 @@ fn populated(app: &mut LoaderApp) {
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("clients-populated", populated),
-        ("clients-selected", |app| {
+        ("client-loaded", |app| {
             populated(app);
-            app.selected = Some(app.targets[0].key());
+            app.page = Page::Client(4120);
             app.display_name = "Alt name".into();
         }),
-        ("clients-selected-unloaded", |app| {
+        ("client-unloaded", |app| {
             populated(app);
-            app.selected = Some(app.targets[1].key());
+            app.page = Page::Client(5388);
             app.cursor.style = CursorStyle::Off;
         }),
-        ("clients-busy", |app| {
+        ("client-running", |app| {
+            super::sessions::populated(app);
+            app.page = Page::Client(4120);
+        }),
+        ("client-busy", |app| {
             populated(app);
-            app.selected = Some(app.targets[0].key());
-            app.busy = Some("Loading…");
+            app.page = Page::Client(4120);
+            app.busy = true;
         }),
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{Bounds, TestAppContext};
-
-    use super::*;
-
-    struct Probe {
-        input: Entity<InputState>,
-        focus: FocusHandle,
-        steps: Vec<bool>,
-        _keys: Subscription,
-    }
-
-    impl Render for Probe {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .size_full()
-                .track_focus(&self.focus)
-                .child(Input::new(&self.input))
-        }
-    }
-
-    #[gpui_kit::test]
-    fn arrow_keys_step_only_while_no_text_input_has_focus(cx: &mut TestAppContext) {
-        cx.update(gpui_kit::init);
-        let (handle, probe) = cx
-            .update(|cx| {
-                gpui_kit::open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(Bounds {
-                            origin: Default::default(),
-                            size: size(px(400.0), px(200.0)),
-                        })),
-                        ..Default::default()
-                    },
-                    cx,
-                    |window, cx| {
-                        cx.new(|cx| {
-                            let focus = cx.focus_handle();
-                            window.focus(&focus, cx);
-                            Probe {
-                                input: cx.new(|cx| InputState::new(window, cx)),
-                                focus,
-                                steps: Vec::new(),
-                                _keys: cx.observe_keystrokes(
-                                    |probe: &mut Probe, event, window, cx| {
-                                        if let Some(down) = step_key(event, window, cx) {
-                                            probe.steps.push(down);
-                                        }
-                                    },
-                                ),
-                            }
-                        })
-                    },
-                )
-            })
-            .unwrap();
-        cx.update_window(handle, |_, window, cx| {
-            window.render_frame(cx);
-            window.press("down", cx);
-            window.press("up", cx);
-            window.press("shift-down", cx);
-            window.press("left", cx);
-        })
-        .unwrap();
-        assert_eq!(
-            probe.read_with(cx, |probe, _| probe.steps.clone()),
-            [true, false]
-        );
-        cx.update_window(handle, |_, window, cx| {
-            let input = probe.read(cx).input.clone();
-            input.update(cx, |input, cx| input.focus(window, cx));
-            window.render_frame(cx);
-            window.press("down", cx);
-            window.press("up", cx);
-        })
-        .unwrap();
-        assert_eq!(
-            probe.read_with(cx, |probe, _| probe.steps.clone()),
-            [true, false]
-        );
-    }
 }

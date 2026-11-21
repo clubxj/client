@@ -60,32 +60,36 @@ impl Default for Settings {
 }
 
 fn detect(exe_dir: &Path, name: &str) -> String {
-    let profile = exe_dir.file_name().map(PathBuf::from).unwrap_or_default();
-    [
-        exe_dir.to_path_buf(),
-        exe_dir.join("../x86_64-pc-windows-gnu").join(&profile),
-        exe_dir.join("../x86_64-pc-windows-gnu/release"),
-        exe_dir.join("../x86_64-pc-windows-gnu/debug"),
-    ]
-    .iter()
-    .map(|dir| dir.join(name))
-    .find(|p| p.is_file())
-    .and_then(|p| p.canonicalize().ok())
-    .map(|p| p.display().to_string())
-    .unwrap_or_default()
+    let beside = exe_dir.join(name);
+    let found = if beside.is_file() {
+        Some(beside)
+    } else {
+        let cross = exe_dir.join("../x86_64-pc-windows-gnu");
+        let profile = exe_dir.file_name().map(PathBuf::from).unwrap_or_default();
+        [profile.as_path(), Path::new("fast"), Path::new("release"), Path::new("debug")]
+            .iter()
+            .map(|dir| cross.join(dir).join(name))
+            .filter_map(|path| Some((path.metadata().ok()?.modified().ok()?, path)))
+            .max_by_key(|(modified, _)| *modified)
+            .map(|(_, path)| path)
+    };
+    found
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
 }
 
 impl Settings {
-    pub fn fill_missing(&mut self, dev: bool) {
-        self.resolve_paths(Self::default(), dev);
+    pub fn fill_missing(&mut self) {
+        self.resolve_paths(Self::default());
         self.log_lines = self.log_lines.clamp(*LOG_LINES.start(), *LOG_LINES.end());
     }
 
-    fn resolve_paths(&mut self, detected: Self, dev: bool) {
-        if !detected.dll.is_empty() && (!dev || !Path::new(&self.dll).is_file()) {
+    fn resolve_paths(&mut self, detected: Self) {
+        if !detected.dll.is_empty() {
             self.dll = detected.dll;
         }
-        if !detected.helper.is_empty() && (!dev || !Path::new(&self.helper).is_file()) {
+        if !detected.helper.is_empty() {
             self.helper = detected.helper;
         }
     }
@@ -137,29 +141,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_install_ignores_saved_paths_and_a_dev_build_keeps_those_that_exist() {
-        let dir = std::env::temp_dir().join(format!("volcren-paths-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let old = dir.join("old.dll").display().to_string();
-        std::fs::write(&old, b"").unwrap();
+    fn detected_files_replace_saved_paths_which_stay_only_when_nothing_is_found() {
         let with = |dll: &str| Settings {
             dll: dll.into(),
             helper: String::new(),
             ..Default::default()
         };
-
-        let mut saved = with(&old);
-        saved.resolve_paths(with("detected.dll"), false);
+        let mut saved = with("saved.dll");
+        saved.resolve_paths(with("detected.dll"));
         assert_eq!(saved.dll, "detected.dll");
+        let mut saved = with("saved.dll");
+        saved.resolve_paths(with(""));
+        assert_eq!(saved.dll, "saved.dll");
+    }
 
-        let mut saved = with(&old);
-        saved.resolve_paths(with("detected.dll"), true);
-        assert_eq!(saved.dll, old);
-
-        let mut saved = with("gone.dll");
-        saved.resolve_paths(with("detected.dll"), true);
-        assert_eq!(saved.dll, "detected.dll");
-        let _ = std::fs::remove_dir_all(&dir);
+    #[test]
+    fn a_local_build_uses_the_newest_cross_build_in_its_target_folder() {
+        let root = std::env::temp_dir().join(format!("volcren-target-{}", std::process::id()));
+        let exe_dir = root.join("debug");
+        let cross = root.join("x86_64-pc-windows-gnu");
+        for dir in [&exe_dir, &cross.join("release"), &cross.join("fast")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(cross.join("release/agent.dll"), b"").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(cross.join("fast/agent.dll"), b"").unwrap();
+        assert!(detect(&exe_dir, "agent.dll").ends_with("fast/agent.dll"));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(cross.join("release/agent.dll"), b"").unwrap();
+        assert!(detect(&exe_dir, "agent.dll").ends_with("release/agent.dll"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

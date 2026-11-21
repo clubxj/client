@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::{
-    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, Styled,
-    Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, Rgba,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use injector::form::{self as spec_form};
 use serde_json::{Map, Value, json};
@@ -21,6 +21,12 @@ const COLUMN_GAP: f32 = 8.0;
 const FIELD_GAP: f32 = 10.0;
 
 const LIST_HEIGHT: f32 = 240.0;
+
+const GRID_HEIGHT: f32 = 320.0;
+
+const GRID_CELL_WIDTH: f32 = 64.0;
+
+const GRID_RADIO: f32 = 12.0;
 
 const NUMBER_WIDTH: f32 = 110.0;
 
@@ -49,7 +55,14 @@ pub enum FieldValue {
     Number(f64),
     Text(String),
     List(Vec<(String, String, bool)>),
+    Grid(GridValue),
     Layout(Option<String>),
+}
+
+pub struct GridValue {
+    grid: spec_form::Grid,
+    picked: Vec<usize>,
+    query: String,
 }
 
 fn layout_kind(field: &Value) -> Option<Kind> {
@@ -96,6 +109,7 @@ fn collect_one(value: &FieldValue) -> Value {
                 .map(|(id, _, on)| (id.clone(), json!(on)))
                 .collect(),
         ),
+        FieldValue::Grid(value) => value.grid.value(&value.picked),
         FieldValue::Layout(name) => json!(name),
     }
 }
@@ -112,6 +126,14 @@ fn value_of(field: &Value, saved: Option<&Value>) -> Option<FieldValue> {
         return Some(FieldValue::Layout(
             saved.and_then(Value::as_str).map(str::to_owned),
         ));
+    }
+    if spec_form::kind(field) == "grid" {
+        let grid = spec_form::Grid::parse(field).ok()?;
+        return Some(FieldValue::Grid(GridValue {
+            picked: grid.picked(saved),
+            grid,
+            query: String::new(),
+        }));
     }
     let default = spec_form::default_value(field)?;
     if spec_form::kind(field) == "list" {
@@ -450,6 +472,9 @@ fn field_ui(
                 )
                 .into_any_element()
         }
+        ("grid", Some(FieldValue::Grid(value))) => {
+            grid_ui(&id, label, value, usable, place, window, cx)
+        }
         ("check", Some(FieldValue::Check(on))) => {
             let change = place.ui.change(&id);
             fields::checkbox(
@@ -590,4 +615,223 @@ fn field_ui(
         _ => return None,
     };
     Some(element)
+}
+
+fn grid_radio(color: Option<Rgba>, selected: bool, open: bool) -> Div {
+    let ring = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(GRID_RADIO))
+        .rounded_full();
+    match (selected, color) {
+        (true, Some(color)) => ring.bg(color),
+        (true, None) => ring
+            .border_1()
+            .border_color(theme::FG)
+            .child(div().size(px(GRID_RADIO / 2.0)).rounded_full().bg(theme::FG)),
+        (false, _) => ring
+            .border_1()
+            .border_color(theme::alpha(theme::COMMENT, if open { 1.0 } else { 0.35 })),
+    }
+}
+
+fn grid_ui(
+    id: &str,
+    label: &str,
+    value: &GridValue,
+    usable: bool,
+    place: &mut Place,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let GridValue {
+        grid,
+        picked,
+        query,
+    } = value;
+    let change = Rc::new(place.ui.change(id));
+    let set = {
+        let change = change.clone();
+        move |rows: Vec<usize>, column: usize, cx: &mut App| {
+            change(cx, &mut |value| {
+                if let FieldValue::Grid(value) = value {
+                    for &row in &rows {
+                        if let Some(pick) = value.picked.get_mut(row) {
+                            *pick = column;
+                        }
+                    }
+                }
+            })
+        }
+    };
+    let set = Rc::new(set);
+    let search = place.ui.texts.entry(id.to_owned()).or_insert_with(|| {
+        let change = change.clone();
+        TextField::new(
+            &grid.search,
+            move |typed, cx| {
+                change(cx, &mut |value| {
+                    if let FieldValue::Grid(value) = value {
+                        value.query.clone_from(&typed);
+                    }
+                })
+            },
+            window,
+            cx,
+        )
+    });
+    search.sync(query, window, cx);
+    let needle = query.trim().to_lowercase();
+    let shown: Vec<usize> = grid
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| needle.is_empty() || item.label.to_lowercase().contains(&needle))
+        .map(|(i, _)| i)
+        .collect();
+    let counts: Vec<usize> = (0..grid.columns.len())
+        .map(|c| grid.count(picked, c))
+        .collect();
+    let color = |c: usize| grid.columns[c].color.map(gpui_kit::rgb);
+    let small = |text: String| div().text_size(theme::SMALL).text_color(theme::COMMENT).child(text);
+    let header = grid.columns.iter().enumerate().fold(
+        div()
+            .flex()
+            .items_center()
+            .px(px(6.0))
+            .pb(px(4.0))
+            .border_b_1()
+            .border_color(theme::BORDER)
+            .child(widgets::strong(label.to_owned()).flex_1().min_w_0()),
+        |header, (c, column)| {
+            let title = div()
+                .flex()
+                .items_baseline()
+                .gap(px(3.0))
+                .child(widgets::strong(column.label.clone()))
+                .when_some(column.max, |this, max| {
+                    this.child(small(format!("{}/{max}", counts[c])))
+                });
+            let below = match column.max {
+                Some(_) => small("\u{2014}".to_owned()).into_any_element(),
+                None => {
+                    let (set, rows) = (set.clone(), shown.clone());
+                    small("all".to_owned())
+                        .id(format!("form-grid-all-{id}-{c}"))
+                        .when(usable && !shown.is_empty(), |this| {
+                            this.cursor_pointer()
+                                .hover(|style| style.text_color(theme::FG))
+                                .on_click(move |_, _, cx| set(rows.clone(), c, cx))
+                        })
+                        .into_any_element()
+                }
+            };
+            header.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .flex_none()
+                    .w(px(GRID_CELL_WIDTH))
+                    .child(title)
+                    .child(below),
+            )
+        },
+    );
+    let rows = shown.iter().enumerate().fold(div().flex().flex_col(), |rows, (n, &i)| {
+        let item = &grid.items[i];
+        let name = div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_baseline()
+            .gap(px(6.0))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(item.label.clone())
+            .when_some(item.detail.clone(), |this, detail| this.child(small(detail)));
+        let row = grid.columns.iter().enumerate().fold(
+            div()
+                .flex()
+                .items_center()
+                .h(theme::ROW_HEIGHT)
+                .px(px(6.0))
+                .when(n % 2 == 1, |this| this.bg(theme::BG_FLOAT))
+                .when(!usable, |this| this.text_color(theme::COMMENT))
+                .child(name),
+            |row, (c, column)| {
+                let selected = picked[i] == c;
+                let open = usable && column.max.is_none_or(|max| counts[c] < max);
+                let set = set.clone();
+                row.child(
+                    div()
+                        .id(format!("form-grid-{id}-{i}-{c}"))
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .w(px(GRID_CELL_WIDTH))
+                        .h(theme::ROW_HEIGHT - px(4.0))
+                        .border_1()
+                        .border_color(theme::alpha(theme::BLUE, 0.0))
+                        .when(selected, |this| this.bg(theme::BG_HL))
+                        .child(grid_radio(color(c), selected, open))
+                        .when(open && !selected, |this| {
+                            this.cursor_pointer()
+                                .hover(|style| style.border_color(theme::BLUE))
+                                .on_click(move |_, _, cx| set(vec![i], c, cx))
+                        }),
+                )
+            },
+        );
+        rows.child(row)
+    });
+    let rows = if shown.is_empty() {
+        rows.child(widgets::weak("No matches").px(px(6.0)).py(px(4.0)))
+    } else {
+        rows
+    };
+    let summary = grid.columns.iter().enumerate().fold(
+        div().flex().flex_wrap().items_baseline().gap_x(px(4.0)),
+        |summary, (c, column)| {
+            summary
+                .when(c > 0, |this| this.child(small("\u{b7}".to_owned())))
+                .child(
+                    widgets::strong(counts[c].to_string())
+                        .text_color(color(c).unwrap_or(theme::FG)),
+                )
+                .child(small(column.summary.clone()))
+        },
+    );
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(px(6.0))
+        .p(px(6.0))
+        .border_1()
+        .border_color(theme::BORDER)
+        .rounded(px(2.0))
+        .child(search.input(usable).w_full())
+        .child(header)
+        .child(
+            div()
+                .id(format!("form-grid-scroll-{id}"))
+                .max_h(px(GRID_HEIGHT))
+                .overflow_y_scrollbar()
+                .child(rows),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_baseline()
+                .justify_between()
+                .gap_x(px(12.0))
+                .text_size(theme::SMALL)
+                .child(summary)
+                .when_some(grid.note.clone(), |this, note| this.child(small(note))),
+        )
+        .into_any_element()
 }

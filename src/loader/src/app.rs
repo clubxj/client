@@ -33,9 +33,9 @@ use crate::libs::Lib;
 use crate::pipe::Rows;
 use crate::script::{Launch, Script, ScriptEvent};
 use crate::session::{self, Kept, Prepared};
+use crate::storage::Storage;
 use crate::store::{Confirmed, Store};
 use crate::update;
-use crate::storage::Storage;
 use crate::wake::Wake;
 
 mod accounts_page;
@@ -45,6 +45,7 @@ mod development;
 mod dialogs;
 mod editor;
 mod feedback_page;
+mod nav;
 mod output;
 mod queue_page;
 mod run_page;
@@ -244,6 +245,7 @@ fn progress_text(progress: &update::Progress) -> String {
 enum Source {
     File(ScriptFile),
     Store(StoreScript),
+    Agent,
 }
 
 struct Run {
@@ -271,6 +273,7 @@ struct Run {
     xp_next: Instant,
     xp_reading: bool,
     editors: crate::layouts::Editors,
+    agent: bool,
 }
 
 impl Run {
@@ -308,15 +311,39 @@ impl Run {
             xp_next: now,
             xp_reading: false,
             editors: Default::default(),
+            agent: false,
         }
     }
 
     fn is_running(&self) -> bool {
         self.script.as_ref().is_some_and(Script::is_running)
+            || (self.agent && self.finished.is_none())
+    }
+
+    fn end_agent_run(&mut self, result: Result<(), String>, stopped: bool) {
+        match (&result, stopped) {
+            (_, true) => self.info("Script stopped."),
+            (Ok(()), false) => self.info("Script finished."),
+            (Err(error), false) => self.error(format!("Script failed: {error}")),
+        }
+        self.finished = Some((result, stopped));
+        self.ended = Some(Instant::now());
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.target.as_ref().map(|t| t.client.pid)
+    }
+
+    fn is_live(&self) -> bool {
+        self.is_running() || self.is_configuring()
+    }
+
+    fn failed(&self) -> bool {
+        matches!(self.finished, Some((Err(_), false)))
     }
 
     fn is_configuring(&self) -> bool {
-        self.script.is_none()
+        self.script.is_none() && !self.agent
     }
 
     fn stop(&mut self) {
@@ -371,6 +398,8 @@ impl Run {
     fn state(&self) -> RunState {
         if self.is_configuring() {
             RunState::Waiting
+        } else if self.failed() {
+            RunState::Failed
         } else if !self.is_running() {
             RunState::Ended
         } else if self.stop_requested() {
@@ -390,6 +419,7 @@ enum RunState {
     Paused,
     Stopping,
     Ended,
+    Failed,
 }
 
 impl RunState {
@@ -400,6 +430,7 @@ impl RunState {
             Self::Paused => "paused",
             Self::Stopping => "stopping",
             Self::Ended => "ended",
+            Self::Failed => "failed",
         }
     }
 
@@ -410,6 +441,7 @@ impl RunState {
             Self::Paused => crate::ui::theme::YELLOW,
             Self::Stopping => crate::ui::theme::RED,
             Self::Ended => crate::ui::theme::COMMENT,
+            Self::Failed => crate::ui::theme::RED,
         }
     }
 }
@@ -469,19 +501,73 @@ struct StartPrompt {
     old_price: Option<i64>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Clients,
-    Store,
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Page {
     Sessions,
-    Queue,
-    Run,
-    Scripts,
-    Development,
+    Client(u32),
+    Store(u32),
+    Queue(u32),
+    Editor(Option<u32>),
+    Development(u32),
+    History(u32),
+    Run(RunPage),
     Terminal,
     Accounts,
     Feedback,
     Settings,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum RunPage {
+    Overview,
+    Settings,
+    Trackers,
+    Feedback,
+}
+
+#[derive(Default)]
+struct Editor {
+    owner: Option<u32>,
+    file: ScriptFile,
+    find: Find,
+    fold: crate::fold::Folds,
+    ui: editor::Ui,
+}
+
+struct Inspectors {
+    pid: Option<u32>,
+    varp: usize,
+    varps: Option<Vec<i32>>,
+    toggles: [bool; DEV_TOGGLES.len()],
+    tab: DevTab,
+    inspector_tab: InspectorTab,
+    tiles: Option<TilesWorker>,
+    packets: crate::packets::Monitor,
+    vars: crate::vars::Inspector,
+    script_inspector: crate::script_log::Inspector,
+    inventory: crate::inventory::Inspector,
+    widgets: crate::widgets::Inspector,
+    ui: development::Ui,
+}
+
+impl Inspectors {
+    fn new(pid: Option<u32>) -> Self {
+        Self {
+            pid,
+            varp: varp::RUN,
+            varps: None,
+            toggles: [false; DEV_TOGGLES.len()],
+            tab: DevTab::Tools,
+            inspector_tab: InspectorTab::Widget,
+            tiles: None,
+            packets: crate::packets::Monitor::default(),
+            vars: crate::vars::Inspector::default(),
+            script_inspector: crate::script_log::Inspector::default(),
+            inventory: crate::inventory::Inspector::default(),
+            widgets: crate::widgets::Inspector::new(),
+            ui: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -530,13 +616,11 @@ fn open_site(site_url: &str, path: &str) {
 }
 
 const SIDEBAR_MIN_WINDOW: f32 = 760.0;
-const SIDEBAR_WIDTH: f32 = 190.0;
+const SIDEBAR_WIDTH: f32 = 220.0;
 const HEADER_COMPACT_WINDOW: f32 = 640.0;
 const HEADER_STACK_WINDOW: f32 = 400.0;
 const HEADER_TINY_WINDOW: f32 = 200.0;
 const SIDEBAR_HANDLE_WIDTH: f32 = 18.0;
-const CLIENT_PREFIX_WIDTH: f32 = 130.0;
-const CLIENT_STATUS_WIDTH: f32 = 220.0;
 
 #[derive(Clone, Copy)]
 enum ClientAction {
@@ -710,6 +794,7 @@ const CONFIRMED_KEY: &str = "community_confirmed";
 pub(crate) const HTTP_WHITELIST_KEY: &str = "http_whitelist";
 
 const XP_READ_EVERY: Duration = Duration::from_secs(5);
+const RESCAN_EVERY: Duration = Duration::from_secs(5);
 const SAVE_EVERY: Duration = Duration::from_secs(30);
 
 const EXAMPLE_SCRIPT: &str = r#"local GameState = require("game_state")
@@ -813,6 +898,7 @@ impl ScriptFile {
 struct ReloadPrompt {
     disk: String,
     restart: Option<u64>,
+    editor: Option<u32>,
 }
 
 fn default_script_path() -> Option<std::path::PathBuf> {
@@ -1048,9 +1134,7 @@ enum ToolsTab {
     Equipment,
     Inventory,
     Prayer,
-    Xp,
     Breaks,
-    Feedback,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1067,21 +1151,17 @@ enum LogTab {
 
 pub struct LoaderApp {
     settings: Settings,
-    tab: Tab,
+    page: Page,
+    focus_client: Option<u32>,
     sidebar_open: bool,
     terminal: Option<crate::terminal::Terminal>,
     display_name: String,
-    varp: usize,
-    varps: Option<Vec<i32>>,
-    script_file: ScriptFile,
+    editor: Editor,
+    editors: HashMap<Option<u32>, Editor>,
     last_script: Option<String>,
-    find: Find,
-    fold: crate::fold::Folds,
-    editor_ui: editor::Ui,
     runs: Vec<Run>,
     active_run: Option<u64>,
     next_run: u64,
-    run_target: Option<String>,
     start_prompt: Option<StartPrompt>,
     reload_prompt: Option<ReloadPrompt>,
     remembered_forms: HashMap<String, serde_json::Map<String, serde_json::Value>>,
@@ -1092,17 +1172,10 @@ pub struct LoaderApp {
     clients_ui: Option<clients::Ui>,
     accounts_ui: Option<crate::accounts::Ui>,
     run_ui: run_page::Ui,
-    dev_toggles: [bool; DEV_TOGGLES.len()],
     cursor: Cursor,
     ui_font: crate::ui::theme::UiFont,
-    dev_tab: DevTab,
-    inspector_tab: InspectorTab,
-    tiles: Option<TilesWorker>,
-    packets: crate::packets::Monitor,
-    vars: crate::vars::Inspector,
-    script_inspector: crate::script_log::Inspector,
-    inventory: crate::inventory::Inspector,
-    widgets: crate::widgets::Inspector,
+    dev: Inspectors,
+    parked_dev: HashMap<u32, Inspectors>,
     api: Api,
     auth: Auth,
     store: Store,
@@ -1119,11 +1192,13 @@ pub struct LoaderApp {
     starting: Option<u32>,
     targets: Vec<Target>,
     dll_version: Option<String>,
-    selected: Option<String>,
-    busy: Option<&'static str>,
+    scanning: bool,
+    last_scan: Instant,
+    scan_errors: Vec<String>,
+    busy: bool,
     log_tab: LogTab,
     log_collapsed: bool,
-    followed_tab: (Tab, Option<u64>),
+    followed_tab: (Page, Option<u64>),
     loader_log: Log,
     output_ui: output::Ui,
     breaks_tab: BreaksTab,
@@ -1142,19 +1217,20 @@ pub struct LoaderApp {
     last_save: Instant,
     quit: bool,
     copy: Option<String>,
-    dev_ui: development::Ui,
+    agent_watch: crate::agent_runs::Watcher,
+    agent_files: HashMap<std::path::PathBuf, u64>,
     chrome: Chrome,
 }
 
-fn selected_in<'a>(targets: &'a [Target], selected: Option<&str>) -> Option<&'a Target> {
-    let key = selected?;
+fn target_in(targets: &[Target], pid: Option<u32>) -> Option<&Target> {
+    let pid = pid?;
     targets
         .iter()
-        .find(|t| t.key() == key && t.client.foreign_bot.is_none())
+        .find(|t| t.client.pid == pid && t.client.foreign_bot.is_none())
 }
 
-fn loaded_in<'a>(targets: &'a [Target], selected: Option<&str>) -> Option<&'a Target> {
-    selected_in(targets, selected).filter(|t| t.client.loaded.is_some())
+fn loaded_in(targets: &[Target], pid: Option<u32>) -> Option<&Target> {
+    target_in(targets, pid).filter(|t| t.client.loaded.is_some())
 }
 
 fn run_in(runs: &mut [Run], id: Option<u64>) -> Option<&mut Run> {
@@ -1192,7 +1268,7 @@ impl LoaderApp {
         let mut settings: Settings = storage
             .get(crate::storage::SETTINGS_KEY)
             .unwrap_or_default();
-        settings.fill_missing(update::is_dev_install());
+        settings.fill_missing();
         let data_dir = crate::paths::project_dirs().map(|dirs| dirs.data_dir().to_path_buf());
         let (layouts, layouts_unreadable) =
             crate::layouts::load(&storage, LAYOUTS_KEY, data_dir.as_deref());
@@ -1200,61 +1276,48 @@ impl LoaderApp {
         let loader_log = Log::new(settings.log_lines);
         let mut app = Self {
             settings,
-            tab: Tab::Clients,
+            page: Page::Sessions,
+            focus_client: None,
             sidebar_open: false,
             terminal: None,
             display_name: String::new(),
-            varp: varp::RUN,
-            varps: None,
-            script_file: load_default_script()
-                .or_else(|| storage.get(SCRIPT_KEY))
-                .unwrap_or_default(),
+            editor: Editor {
+                file: load_default_script()
+                    .or_else(|| storage.get(SCRIPT_KEY))
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+            editors: HashMap::new(),
             last_script: storage.get(LAST_SCRIPT_KEY).flatten(),
-            find: Find::default(),
-            fold: crate::fold::Folds::default(),
-            editor_ui: editor::Ui::default(),
             reload_prompt: None,
-            remembered_forms: storage.get(FORMS_KEY)
-                .unwrap_or_default(),
+            remembered_forms: storage.get(FORMS_KEY).unwrap_or_default(),
             manifests: HashMap::new(),
-            queues: storage.get(crate::queue::STORAGE_KEY)
-                .unwrap_or_default(),
+            queues: storage.get(crate::queue::STORAGE_KEY).unwrap_or_default(),
             queue_runners: Vec::new(),
             queue_page: queue_page::Page::default(),
             clients_ui: None,
             accounts_ui: None,
             run_ui: run_page::Ui::default(),
-            dev_toggles: [false; DEV_TOGGLES.len()],
-            cursor: storage.get(CURSOR_KEY)
-                .unwrap_or(DEFAULT_CURSOR),
+            cursor: storage.get(CURSOR_KEY).unwrap_or(DEFAULT_CURSOR),
             ui_font: storage.get(UI_FONT_KEY).unwrap_or_default(),
-            dev_tab: DevTab::Tools,
-            inspector_tab: InspectorTab::Widget,
-            tiles: None,
-            packets: crate::packets::Monitor::default(),
-            vars: crate::vars::Inspector::default(),
-            script_inspector: crate::script_log::Inspector::default(),
-            inventory: crate::inventory::Inspector::default(),
-            widgets: crate::widgets::Inspector::new(),
+            dev: Inspectors::new(None),
+            parked_dev: HashMap::new(),
             api: Api::new(config.clone()),
             auth: Auth::Restoring,
             store: Store::default(),
             store_page: None,
             accounts: Arc::new(RwLock::new(crate::accounts::Accounts::load())),
             http_whitelist: Arc::new(RwLock::new(crate::whitelist::Whitelist::new(
-                storage.get(HTTP_WHITELIST_KEY)
-                    .unwrap_or_default(),
+                storage.get(HTTP_WHITELIST_KEY).unwrap_or_default(),
                 &config,
             ))),
             whitelist_page: Default::default(),
             settings_page: Default::default(),
-            confirmed: storage.get(CONFIRMED_KEY)
-                .unwrap_or_default(),
+            confirmed: storage.get(CONFIRMED_KEY).unwrap_or_default(),
             warning: None,
             runs: Vec::new(),
             active_run: None,
             next_run: 1,
-            run_target: None,
             start_prompt: None,
             update: None,
             update_state: UpdateState::Offered,
@@ -1262,11 +1325,13 @@ impl LoaderApp {
             starting: None,
             targets: Vec::new(),
             dll_version: None,
-            selected: None,
-            busy: None,
+            scanning: false,
+            last_scan: Instant::now(),
+            scan_errors: Vec::new(),
+            busy: false,
             log_tab: LogTab::Loader,
             log_collapsed: false,
-            followed_tab: (Tab::Clients, None),
+            followed_tab: (Page::Sessions, None),
             breaks_tab: BreaksTab::Breaks,
             icons: Default::default(),
             layouts,
@@ -1285,7 +1350,8 @@ impl LoaderApp {
             last_save: Instant::now(),
             quit: false,
             copy: None,
-            dev_ui: Default::default(),
+            agent_watch: Default::default(),
+            agent_files: HashMap::new(),
             chrome,
         };
         if let Some(message) = layouts_unreadable {
@@ -1306,9 +1372,7 @@ impl LoaderApp {
     }
 
     fn end_session_job(&self, session_id: String) {
-        self.api_job(move |api| {
-            Event::SessionEnded(api.end_session(&session_id))
-        });
+        self.api_job(move |api| Event::SessionEnded(api.end_session(&session_id)));
     }
 
     fn next_run_id(&mut self) -> u64 {
@@ -1334,9 +1398,7 @@ impl LoaderApp {
         let cancel = Arc::new(AtomicBool::new(false));
         self.auth = Auth::SigningIn(cancel.clone());
         self.info(WAITING_FOR_BROWSER);
-        self.api_job(move |api| {
-            Event::SignedIn(account::sign_in(&api, &cancel))
-        });
+        self.api_job(move |api| Event::SignedIn(account::sign_in(&api, &cancel)));
     }
 
     fn stop_all(&mut self) {
@@ -1385,11 +1447,7 @@ impl LoaderApp {
         }
     }
 
-    fn store_changed<T>(
-        &mut self,
-        result: Result<T, ApiError>,
-        done: &str,
-    ) -> bool {
+    fn store_changed<T>(&mut self, result: Result<T, ApiError>, done: &str) -> bool {
         match result {
             Ok(_) => {
                 self.store.redeem_result = Some((true, done.into()));
@@ -1416,9 +1474,7 @@ impl LoaderApp {
         self.store.loading = true;
         self.store.error = None;
         let community = self.store.community;
-        self.api_job(move |api| {
-            Event::Scripts(api.scripts("", "", community))
-        });
+        self.api_job(move |api| Event::Scripts(api.scripts("", "", community)));
     }
 
     fn run_block(&self, target: Option<&Target>) -> Option<String> {
@@ -1437,7 +1493,7 @@ impl LoaderApp {
         }
         target
             .is_none()
-            .then(|| "Pick a client with the agent loaded that isn't running a script.".into())
+            .then(|| "This client needs the agent loaded and no script running.".into())
     }
 
     fn client_free(&self, target: &Target) -> bool {
@@ -1454,6 +1510,9 @@ impl LoaderApp {
     }
 
     fn restart_refusal(&self, run: &Run) -> Option<String> {
+        if run.agent {
+            return Some("An agent started this run. Ask it to run the script again.".into());
+        }
         if run.store.is_none() {
             return self.file_restart_refusal(run);
         }
@@ -1467,24 +1526,17 @@ impl LoaderApp {
             .as_ref()
             .and_then(|t| self.free_client(t.client.pid))
             .is_none()
-            .then(|| "Its client is gone or busy. Start the script from the Scripts page.".into())
+            .then(|| "Its client is gone or busy. Start it from a client's scripts page.".into())
     }
 
     fn file_restart_refusal(&self, run: &Run) -> Option<String> {
         if self.reload_prompt.is_some() || self.start_prompt.is_some() || self.warning.is_some() {
             return Some("Answer the open dialog first.".into());
         }
-        if self
-            .runs
-            .iter()
-            .any(|r| r.store.is_none() && r.is_running())
-        {
-            return Some("A script from the editor is running.".into());
-        }
         run.target
             .as_ref()
             .is_some_and(|t| self.free_client(t.client.pid).is_none())
-            .then(|| "Its client is gone or busy. Run the script from the editor.".into())
+            .then(|| "Its client is gone or busy. Run it from a client's editor.".into())
     }
 
     fn restart_run(&mut self, id: u64) {
@@ -1677,12 +1729,7 @@ impl LoaderApp {
         }
     }
 
-    fn start_at_quote(
-        &mut self,
-        start: PendingStart,
-        old_price: Option<i64>,
-        quote: Quote,
-    ) {
+    fn start_at_quote(&mut self, start: PendingStart, old_price: Option<i64>, quote: Quote) {
         let microcredits = self.auth.me().map_or(0, |me| me.microcredits);
         let target = self.free_client(start.target.client.pid).cloned();
         let refusal = session::start_block(&start.script, &quote, microcredits);
@@ -1781,8 +1828,12 @@ impl LoaderApp {
     fn add_run(&mut self, run: Run) {
         self.active_run = Some(run.id);
         self.log_tab = LogTab::Run(run.id);
+        self.page = Page::Run(if run.is_configuring() && run.form.is_some() {
+            RunPage::Settings
+        } else {
+            RunPage::Overview
+        });
         self.runs.push(run);
-        self.tab = Tab::Run;
         self.sidebar_open = false;
     }
 
@@ -1814,6 +1865,61 @@ impl LoaderApp {
                 result: backend::state(&target, &settings),
             });
         }
+    }
+
+    fn watch_agent_runs(&mut self) {
+        use crate::agent_runs::Entry;
+        let now = Instant::now();
+        if self.runs.iter().any(|r| r.agent && r.is_running()) {
+            self.wake.wake_after(crate::agent_runs::POLL_EVERY);
+        }
+        let Some(seen) = self.agent_watch.poll(now) else {
+            return;
+        };
+        for crate::agent_runs::Seen { file, entry } in seen {
+            match entry {
+                Entry::Start { pid, title } => {
+                    let Some(target) = self.target_of(pid).cloned() else {
+                        self.agent_watch.rewind(&file);
+                        continue;
+                    };
+                    let id = self.next_run_id();
+                    let mut run = Run::new(id, title, None, Some(target), None, &self.settings);
+                    run.agent = true;
+                    run.source = Some(Source::Agent);
+                    run.info("An agent started this run.");
+                    self.runs.push(run);
+                    self.agent_files.insert(file, id);
+                }
+                Entry::Line { text } => {
+                    if let Some(run) = self.agent_run(&file) {
+                        run.info(text);
+                    }
+                }
+                Entry::End { error, stopped } => {
+                    if let Some(run) = self.agent_run(&file) {
+                        run.end_agent_run(error.map_or(Ok(()), Err), stopped);
+                    }
+                }
+            }
+        }
+        for run in self.runs.iter_mut().filter(|r| r.agent && r.is_running()) {
+            if run
+                .target
+                .as_ref()
+                .is_some_and(|target| !crate::script::client_held(target))
+            {
+                run.end_agent_run(
+                    Err("The agent's run ended without saying how.".into()),
+                    false,
+                );
+            }
+        }
+    }
+
+    fn agent_run(&mut self, file: &std::path::Path) -> Option<&mut Run> {
+        let id = *self.agent_files.get(file)?;
+        self.run_by_id_mut(id)
     }
 
     fn script_host(&self) -> crate::script::Host {
@@ -2064,19 +2170,12 @@ impl LoaderApp {
         self.script_log(true, text);
     }
 
-    fn spawn(
-        &mut self,
-        label: &'static str,
-        job: impl FnOnce(Settings) -> Event + Send + 'static,
-    ) {
-        self.busy = Some(label);
+    fn spawn(&mut self, job: impl FnOnce(Settings) -> Event + Send + 'static) {
+        self.busy = true;
         self.background(job);
     }
 
-    fn background(
-        &self,
-        job: impl FnOnce(Settings) -> Event + Send + 'static,
-    ) {
+    fn background(&self, job: impl FnOnce(Settings) -> Event + Send + 'static) {
         let (tx, wake, settings) = (self.tx.clone(), self.wake.clone(), self.settings.clone());
         thread::spawn(move || {
             let _ = tx.send(job(settings));
@@ -2087,28 +2186,29 @@ impl LoaderApp {
     fn tiles_ui(&mut self) {
         let mut layers: Vec<String> = DEV_LAYERS
             .iter()
-            .zip(&self.dev_toggles)
+            .zip(&self.dev.toggles)
             .filter(|(_, on)| **on)
             .filter_map(|(layer, _)| layer.map(str::to_owned))
             .collect();
         if self.widget_inspector_showing() {
-            layers.extend(self.widgets.highlight_layers());
+            layers.extend(self.dev.widgets.highlight_layers());
         }
         let Some(target) = (!layers.is_empty())
-            .then(|| loaded_in(&self.targets, self.selected.as_deref()))
+            .then(|| loaded_in(&self.targets, self.dev.pid))
             .flatten()
         else {
-            self.tiles = None;
+            self.dev.tiles = None;
             return;
         };
         if self
+            .dev
             .tiles
             .as_ref()
             .is_some_and(|worker| worker.pid != target.client.pid)
         {
-            self.tiles = None;
+            self.dev.tiles = None;
         }
-        match &self.tiles {
+        match &self.dev.tiles {
             Some(worker) => {
                 if let Ok(mut current) = worker.layers.lock()
                     && *current != layers
@@ -2117,7 +2217,7 @@ impl LoaderApp {
                 }
             }
             None => {
-                self.tiles = Some(TilesWorker::start(
+                self.dev.tiles = Some(TilesWorker::start(
                     self.wake.clone(),
                     self.tx.clone(),
                     target.clone(),
@@ -2129,26 +2229,26 @@ impl LoaderApp {
     }
 
     fn poll_packets(&mut self) {
-        if !self.packets.capture {
+        if !self.dev.packets.capture {
             return;
         }
-        let Some(target) = loaded_in(&self.targets, self.selected.as_deref()) else {
+        let Some(target) = loaded_in(&self.targets, self.dev.pid) else {
             return;
         };
         let now = Instant::now();
         self.wake.wake_after(crate::packets::POLL_EVERY);
-        if self.packets.wants_layouts(target.client.pid, now) {
-            self.packets.start_layouts(target.client.pid);
+        if self.dev.packets.wants_layouts(target.client.pid, now) {
+            self.dev.packets.start_layouts(target.client.pid);
             let (pid, target) = (target.client.pid, target.clone());
             self.background(move |settings| Event::PacketLayouts {
                 pid,
                 result: backend::packet_layouts(&target, &settings),
             });
         }
-        if !self.packets.due(target.client.pid, now) {
+        if !self.dev.packets.due(target.client.pid, now) {
             return;
         }
-        let (pid, since) = (target.client.pid, self.packets.start(target.client.pid));
+        let (pid, since) = (target.client.pid, self.dev.packets.start(target.client.pid));
         let target = target.clone();
         self.background(move |settings| Event::Packets {
             pid,
@@ -2157,15 +2257,15 @@ impl LoaderApp {
     }
 
     fn poll_vars(&mut self) {
-        if !self.vars.enabled {
+        if !self.dev.vars.enabled {
             return;
         }
-        let Some(target) = loaded_in(&self.targets, self.selected.as_deref()) else {
+        let Some(target) = loaded_in(&self.targets, self.dev.pid) else {
             return;
         };
         let now = Instant::now();
         self.wake.wake_after(crate::vars::POLL_EVERY);
-        if !self.vars.due(target.client.pid, now) {
+        if !self.dev.vars.due(target.client.pid, now) {
             return;
         }
         let pid = target.client.pid;
@@ -2173,7 +2273,7 @@ impl LoaderApp {
             previous,
             known,
             varc_since,
-        } = self.vars.start(pid);
+        } = self.dev.vars.start(pid);
         let target = target.clone();
         self.background(move |settings| {
             let tick_count = || {
@@ -2223,14 +2323,14 @@ impl LoaderApp {
     }
 
     fn poll_widget_mouse(&mut self) {
-        if !self.widgets.follow_mouse || !self.widget_inspector_showing() {
+        if !self.dev.widgets.follow_mouse || !self.widget_inspector_showing() {
             return;
         }
-        let Some(target) = loaded_in(&self.targets, self.selected.as_deref()) else {
+        let Some(target) = loaded_in(&self.targets, self.dev.pid) else {
             return;
         };
         self.wake.wake_after(crate::widgets::FOLLOW_EVERY);
-        if !self.widgets.follow_due(Instant::now()) {
+        if !self.dev.widgets.follow_due(Instant::now()) {
             return;
         }
         let (pid, target) = (target.client.pid, target.clone());
@@ -2246,8 +2346,8 @@ impl LoaderApp {
 
     fn refresh_widgets(&mut self, target: Target) {
         let pid = target.client.pid;
-        self.widgets.start(pid);
-        let known = self.widgets.known_groups();
+        self.dev.widgets.start(pid);
+        let known = self.dev.widgets.known_groups();
         self.background(move |settings| {
             let read = || -> Result<crate::widgets::Poll, String> {
                 let tree = backend::widget_tree(&target, &settings)?;
@@ -2280,20 +2380,20 @@ impl LoaderApp {
     }
 
     fn poll_script_log(&mut self) {
-        if !self.script_inspector.enabled {
+        if !self.dev.script_inspector.enabled {
             return;
         }
-        let Some(target) = loaded_in(&self.targets, self.selected.as_deref()) else {
+        let Some(target) = loaded_in(&self.targets, self.dev.pid) else {
             return;
         };
         let now = Instant::now();
         self.wake.wake_after(crate::script_log::POLL_EVERY);
-        if !self.script_inspector.due(target.client.pid, now) {
+        if !self.dev.script_inspector.due(target.client.pid, now) {
             return;
         }
         let (pid, since) = (
             target.client.pid,
-            self.script_inspector.start(target.client.pid),
+            self.dev.script_inspector.start(target.client.pid),
         );
         let target = target.clone();
         self.background(move |settings| Event::ScriptRuns {
@@ -2304,17 +2404,17 @@ impl LoaderApp {
     }
 
     fn poll_inventory(&mut self) {
-        if !self.inventory.enabled {
+        if !self.dev.inventory.enabled {
             return;
         }
-        let Some(target) = loaded_in(&self.targets, self.selected.as_deref()) else {
+        let Some(target) = loaded_in(&self.targets, self.dev.pid) else {
             return;
         };
         let now = Instant::now();
-        if let Some(wait) = self.inventory.retry_in(now) {
+        if let Some(wait) = self.dev.inventory.retry_in(now) {
             self.wake.wake_after(wait);
         }
-        if !self.inventory.due(target.client.pid, now) {
+        if !self.dev.inventory.due(target.client.pid, now) {
             return;
         }
         let pid = target.client.pid;
@@ -2322,7 +2422,7 @@ impl LoaderApp {
             since,
             known_containers,
             known_items,
-        } = self.inventory.start(pid);
+        } = self.dev.inventory.start(pid);
         let target = target.clone();
         self.background(move |settings| {
             let read = || -> Result<crate::inventory::Poll, String> {
@@ -2406,10 +2506,10 @@ impl LoaderApp {
         if !self.icons.due(now) {
             return;
         }
-        let Some(target) = loaded_in(&self.targets, self.selected.as_deref()) else {
+        let Some(target) = self.icon_target().cloned() else {
             return;
         };
-        let (batch, target) = (self.icons.start(), target.clone());
+        let batch = self.icons.start();
         self.background(move |settings| {
             let mut pictures = Vec::new();
             let mut read = || -> Result<(), String> {
@@ -2441,7 +2541,9 @@ impl LoaderApp {
     }
 
     fn scan(&mut self) {
-        self.spawn("Looking for clients…", |settings| {
+        self.scanning = true;
+        self.last_scan = Instant::now();
+        self.background(|settings| {
             let mut scan = backend::scan(&settings);
             match settings.dll_version() {
                 Ok(version) => scan.dll_version = Some(version),
@@ -2452,10 +2554,24 @@ impl LoaderApp {
         });
     }
 
+    fn rescan_when_due(&mut self) {
+        if self.page != Page::Sessions {
+            return;
+        }
+        let due = self.last_scan + RESCAN_EVERY;
+        if !self.scanning && Instant::now() >= due {
+            self.scan();
+        }
+        self.wake.wake_after(
+            due.saturating_duration_since(Instant::now())
+                .max(RESCAN_EVERY / 4),
+        );
+    }
+
     fn unload(&mut self, target: Target) {
         let pid = target.client.pid;
         self.info(format!("Unloading agent from {pid}…"));
-        self.spawn("Unloading…", move |settings| Event::Unloaded {
+        self.spawn(move |settings| Event::Unloaded {
             pid,
             result: backend::unload(&target, &settings),
         });
@@ -2463,7 +2579,7 @@ impl LoaderApp {
 
     fn console(&mut self, target: Target) {
         let pid = target.client.pid;
-        self.spawn("Opening console…", move |settings| Event::Done {
+        self.spawn(move |settings| Event::Done {
             pid,
             what: "Opening the console",
             result: backend::console(&target, &settings),
@@ -2484,7 +2600,7 @@ impl LoaderApp {
         let pid = target.client.pid;
         self.info(format!("Loading into {pid}…"));
         let cursor = self.cursor;
-        self.spawn("Loading…", move |settings| Event::Loaded {
+        self.spawn(move |settings| Event::Loaded {
             pid,
             result: backend::load(&target, &settings, &cursor),
         });
@@ -2493,14 +2609,14 @@ impl LoaderApp {
     fn read_state(&mut self, target: Target, read: Read) {
         let pid = target.client.pid;
         if read.is_varp() {
-            self.spawn("Reading…", move |settings| Event::Varps {
+            self.spawn(move |settings| Event::Varps {
                 pid,
                 read,
                 result: backend::varps(&target, &settings),
             });
             return;
         }
-        self.spawn("Reading…", move |settings| Event::State {
+        self.spawn(move |settings| Event::State {
             pid,
             read,
             result: backend::state(&target, &settings),
@@ -2510,7 +2626,7 @@ impl LoaderApp {
     fn set_display_name(&mut self, target: Target) {
         let pid = target.client.pid;
         let name = self.display_name.trim().to_owned();
-        self.spawn("Setting the name…", move |settings| {
+        self.spawn(move |settings| {
             let result = backend::set_display_name(&target, &settings, &name);
             Event::Name { pid, name, result }
         });
@@ -2532,20 +2648,22 @@ impl LoaderApp {
                     | Event::LayoutRead { .. }
                     | Event::Widgets { .. }
                     | Event::WidgetMouse { .. }
+                    | Event::Scanned(_)
             ) {
-                self.busy = None;
+                self.busy = false;
             }
             match event {
                 Event::Scanned(scan) => {
+                    self.scanning = false;
                     self.targets = scan.targets;
                     self.dll_version = scan.dll_version;
-                    for error in scan.errors {
-                        self.error(error);
+                    for error in &scan.errors {
+                        if !self.scan_errors.contains(error) {
+                            self.error(error.clone());
+                        }
                     }
-                    let usable = |t: &&Target| t.client.foreign_bot.is_none() && t.client.is_64bit;
-                    if !self.targets.iter().filter(usable).any(|t| Some(t.key()) == self.selected) {
-                        self.selected = self.targets.iter().find(usable).map(Target::key);
-                    }
+                    self.scan_errors = scan.errors;
+                    self.forget_gone_clients();
                 }
                 Event::Loaded { pid, result } => {
                     match result {
@@ -2564,9 +2682,9 @@ impl LoaderApp {
                     self.scan();
                 }
                 Event::Tiles { pid, result } => {
-                    if let Err(error) = result {
-                        self.tiles = None;
-                        for (on, layer) in self.dev_toggles.iter_mut().zip(DEV_LAYERS) {
+                    if let (Err(error), Some(dev)) = (result, self.dev_of(pid)) {
+                        dev.tiles = None;
+                        for (on, layer) in dev.toggles.iter_mut().zip(DEV_LAYERS) {
                             if layer.is_some() {
                                 *on = false;
                             }
@@ -2776,18 +2894,34 @@ impl LoaderApp {
                     self.error(format!("Couldn't keep the run for bug reports: {error}"))
                 }
                 Event::Packets { pid, result } => {
-                    self.packets.finish(pid, Instant::now(), result);
-                    let piped = self.packets.write_pipe();
-                    self.report_pipe(piped.map(|()| None));
+                    let piped = self.dev_of(pid).map(|dev| {
+                        dev.packets.finish(pid, Instant::now(), result);
+                        dev.packets.write_pipe()
+                    });
+                    if let Some(piped) = piped {
+                        self.report_pipe(piped.map(|()| None));
+                    }
                 }
-                Event::PacketLayouts { pid, result } => self.packets.finish_layouts(pid, result),
-                Event::ScriptNames(result) => self.script_inspector.finish_names(result),
+                Event::PacketLayouts { pid, result } => {
+                    if let Some(dev) = self.dev_of(pid) {
+                        dev.packets.finish_layouts(pid, result);
+                    }
+                }
+                Event::ScriptNames(result) => self.dev.script_inspector.finish_names(result),
                 Event::ScriptRuns { pid, result } => {
-                    self.script_inspector.finish(pid, Instant::now(), result);
-                    let piped = self.script_inspector.write_pipe();
-                    self.report_pipe(piped.map(|()| None));
+                    let piped = self.dev_of(pid).map(|dev| {
+                        dev.script_inspector.finish(pid, Instant::now(), result);
+                        dev.script_inspector.write_pipe()
+                    });
+                    if let Some(piped) = piped {
+                        self.report_pipe(piped.map(|()| None));
+                    }
                 }
-                Event::Inventory { pid, result } => self.inventory.finish(pid, Instant::now(), result),
+                Event::Inventory { pid, result } => {
+                    if let Some(dev) = self.dev_of(pid) {
+                        dev.inventory.finish(pid, Instant::now(), result);
+                    }
+                }
                 Event::Icons { pictures, error } => self.icons.finish(Instant::now(), pictures, error),
                 Event::LayoutRead { run, kind, result } => {
                     if let Some(editors) = editors_of(&mut self.runs, Some(run)) {
@@ -2812,19 +2946,30 @@ impl LoaderApp {
                     }
                     Err(error) => self.error(format!("Couldn't read the script's required items: {error}")),
                 },
-                Event::Widgets { pid, result } => self.widgets.finish(pid, result),
+                Event::Widgets { pid, result } => {
+                    if let Some(dev) = self.dev_of(pid) {
+                        dev.widgets.finish(pid, result);
+                    }
+                }
                 Event::WidgetMouse { pid, result } => {
-                    self.widgets.mouse_done();
-                    match result {
-                        Ok(Some((x, y))) if self.widgets.follow_mouse && self.widgets.has_pid(pid) => self.widgets.pick_at(x, y),
-                        Ok(_) => {}
-                        Err(error) => self.widgets.error = Some(error),
+                    if let Some(dev) = self.dev_of(pid) {
+                        let widgets = &mut dev.widgets;
+                        widgets.mouse_done();
+                        match result {
+                            Ok(Some((x, y))) if widgets.follow_mouse && widgets.has_pid(pid) => widgets.pick_at(x, y),
+                            Ok(_) => {}
+                            Err(error) => widgets.error = Some(error),
+                        }
                     }
                 }
                 Event::Vars { pid, result } => {
-                    self.vars.finish(pid, Instant::now(), result, |id| known_varp(id).map(str::to_owned));
-                    let piped = self.vars.write_pipe();
-                    self.report_pipe(piped.map(|()| None));
+                    let piped = self.dev_of(pid).map(|dev| {
+                        dev.vars.finish(pid, Instant::now(), result, |id| known_varp(id).map(str::to_owned));
+                        dev.vars.write_pipe()
+                    });
+                    if let Some(piped) = piped {
+                        self.report_pipe(piped.map(|()| None));
+                    }
                 }
                 Event::State { pid, read, result } => match result {
                     Ok(state) => self.report_state(pid, read, &state),
@@ -2833,8 +2978,11 @@ impl LoaderApp {
                 Event::Varps { pid, read, result } => match result {
                     Ok(None) => self.info(format!("{pid}: No varps (not logged in).")),
                     Ok(Some(varps)) => {
-                        let text = varps_report(read, &varps, self.varps.as_deref());
-                        self.varps = Some(varps);
+                        let Some(dev) = self.dev_of(pid) else {
+                            continue;
+                        };
+                        let text = varps_report(read, &varps, dev.varps.as_deref());
+                        dev.varps = Some(varps);
                         if let Some(text) = text {
                             self.info(format!("{pid}: {text}"));
                         }
@@ -2961,12 +3109,8 @@ impl LoaderApp {
         }
     }
 
-    fn selected_target(&self) -> Option<&Target> {
-        selected_in(&self.targets, self.selected.as_deref())
-    }
-
-    fn selected_loaded_target(&self) -> Option<&Target> {
-        loaded_in(&self.targets, self.selected.as_deref())
+    fn target_of(&self, pid: u32) -> Option<&Target> {
+        target_in(&self.targets, Some(pid))
     }
 
     fn handle_script_events(&mut self) {
@@ -3034,11 +3178,19 @@ impl LoaderApp {
     }
 
     fn close_run(&mut self, id: u64) {
+        let back = self
+            .run_by_id(id)
+            .map(|run| (run.pid(), run.is_configuring(), run.source.clone()));
         self.runs.retain(|r| r.id != id || r.is_running());
         if self.active_run == Some(id) && self.run().is_none() {
             self.active_run = None;
-            if self.tab == Tab::Run {
-                self.tab = Tab::Sessions;
+            if let (Page::Run(_), Some((pid, configuring, source))) = (self.page, back) {
+                self.page = match (pid, configuring, source) {
+                    (None, ..) => Page::Sessions,
+                    (Some(pid), true, Some(Source::Store(_))) => Page::Store(pid),
+                    (Some(pid), true, _) => Page::Editor(Some(pid)),
+                    (Some(pid), false, _) => Page::History(pid),
+                };
             }
         }
         self.repair_log_tab();
@@ -3050,13 +3202,6 @@ impl LoaderApp {
         {
             self.log_tab = LogTab::Loader;
         }
-    }
-
-    fn run_target_client(&self) -> Option<Target> {
-        self.targets
-            .iter()
-            .find(|t| Some(t.key()) == self.run_target && self.client_free(t))
-            .cloned()
     }
 
     fn carry_form(&mut self, from: u64, to: u64) {
@@ -3094,7 +3239,7 @@ impl LoaderApp {
                 Some(target) => self.quote_store_script(script, target, Some(id), values),
                 None => self.script_error("Pick a client to run the script on."),
             },
-            None => {}
+            Some(Source::Agent) | None => {}
         }
     }
 
@@ -3152,7 +3297,7 @@ impl LoaderApp {
     fn layout_target(&self) -> Option<&Target> {
         self.run()
             .and_then(Run::loaded_target)
-            .or_else(|| self.selected_loaded_target())
+            .or_else(|| loaded_in(&self.targets, self.focus_client))
     }
 
     fn read_layout(&mut self, kind: crate::layouts::Kind, quick: bool) {
@@ -3356,15 +3501,9 @@ impl LoaderApp {
         });
     }
 
-    fn editor_run_mut(&mut self) -> Option<&mut Run> {
-        self.runs
-            .iter_mut()
-            .find(|r| r.store.is_none() && r.is_running())
-    }
-
     fn open_script(&mut self) {
         let mut dialog = rfd::FileDialog::new().add_filter("Luau script", SCRIPT_FILTER);
-        if let Some(dir) = start_dir(&self.script_file.path) {
+        if let Some(dir) = start_dir(&self.editor.file.path) {
             dialog = dialog.set_directory(dir);
         }
         if let Some(path) = dialog.pick_file() {
@@ -3375,12 +3514,12 @@ impl LoaderApp {
     fn open_path(&mut self, path: &std::path::Path) {
         match std::fs::read_to_string(path) {
             Ok(text) => {
-                self.script_file = ScriptFile {
+                self.editor.file = ScriptFile {
                     path: path.display().to_string(),
                     disk: Some(text.clone()),
                     text,
                 };
-                self.last_script = Some(self.script_file.path.clone());
+                self.last_script = Some(self.editor.file.path.clone());
                 self.info(format!("Opened {}.", path.display()));
             }
             Err(error) => {
@@ -3427,8 +3566,7 @@ impl LoaderApp {
             Ok(process) => {
                 let interval =
                     Duration::from_secs(prepared.session.heartbeat_seconds.clamp(10, 120));
-                let closed =
-                    self.keep_session(session_id.clone(), process.process(), interval);
+                let closed = self.keep_session(session_id.clone(), process.process(), interval);
                 let store = StoreRun {
                     session_id,
                     script_id: script.id.clone(),
@@ -3494,6 +3632,7 @@ impl LoaderApp {
                 self.reload_prompt = Some(ReloadPrompt {
                     disk,
                     restart: Some(id),
+                    editor: self.editor.owner,
                 })
             }
             None => self.rerun_file(id, file),
@@ -3614,10 +3753,12 @@ impl LoaderApp {
     }
 
     fn save_script(&mut self) {
-        let path = self.script_file.path.clone();
-        match std::fs::write(&path, &self.script_file.text) {
+        let path = self.editor.file.path.clone();
+        match std::fs::write(&path, &self.editor.file.text) {
             Ok(()) => {
-                self.script_file.disk = Some(self.script_file.text.clone());
+                self.editor.file.disk = Some(self.editor.file.text.clone());
+                let text = self.editor.file.text.clone();
+                self.saved_elsewhere(&path, &text);
                 self.info(format!("Saved {path}."));
             }
             Err(error) => self.error(format!("Cannot save {path}: {error}")),
@@ -3627,22 +3768,22 @@ impl LoaderApp {
     fn save_script_as(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .add_filter("Luau script", SCRIPT_FILTER)
-            .set_file_name(self.script_file.name());
-        if let Some(dir) = start_dir(&self.script_file.path) {
+            .set_file_name(self.editor.file.name());
+        if let Some(dir) = start_dir(&self.editor.file.path) {
             dialog = dialog.set_directory(dir);
         }
         let Some(path) = dialog.save_file() else {
             return;
         };
-        self.script_file.path = path.display().to_string();
-        self.last_script = Some(self.script_file.path.clone());
+        self.editor.file.path = path.display().to_string();
+        self.last_script = Some(self.editor.file.path.clone());
         self.save_script();
     }
 
     fn widget_inspector_showing(&self) -> bool {
-        self.tab == Tab::Development
-            && self.dev_tab == DevTab::Inspectors
-            && self.inspector_tab == InspectorTab::Widget
+        matches!(self.page, Page::Development(pid) if self.dev.pid == Some(pid))
+            && self.dev.tab == DevTab::Inspectors
+            && self.dev.inspector_tab == InspectorTab::Widget
     }
 
     fn log_ref(&self, tab: LogTab) -> &Log {
@@ -3709,13 +3850,8 @@ impl LoaderApp {
     }
 
     fn shown_run_log(&self) -> Option<&Run> {
-        let id = match self.log_tab {
-            LogTab::Run(id) => Some(id),
-            LogTab::Loader => self.active_run,
-        };
-        id.and_then(|id| self.run_by_id(id))
+        self.context_run().and_then(|id| self.run_by_id(id))
     }
-
 }
 
 fn varps_report(read: Read, varps: &[i32], previous: Option<&[i32]>) -> Option<String> {
@@ -3807,10 +3943,13 @@ impl LoaderApp {
         self.handle_script_events();
         self.drive_queues();
         self.drive_xp();
+        self.rescan_when_due();
+        self.watch_agent_runs();
         if self.last_save.elapsed() >= SAVE_EVERY {
             self.save();
         }
-        self.wake.wake_after(SAVE_EVERY.saturating_sub(self.last_save.elapsed()));
+        self.wake
+            .wake_after(SAVE_EVERY.saturating_sub(self.last_save.elapsed()));
         if matches!(
             self.update_state,
             UpdateState::Downloading(_) | UpdateState::Installing
@@ -3829,9 +3968,10 @@ impl LoaderApp {
     pub fn save(&mut self) {
         self.last_save = Instant::now();
         self.sync_queue_form();
+        let script = self.global_script().clone();
         let storage = &mut self.storage;
         storage.set(crate::storage::SETTINGS_KEY, &self.settings);
-        storage.set(SCRIPT_KEY, &self.script_file);
+        storage.set(SCRIPT_KEY, &script);
         storage.set(LAST_SCRIPT_KEY, &self.last_script);
         storage.set(FORMS_KEY, &self.remembered_forms);
         storage.set(crate::queue::STORAGE_KEY, &self.queues);
@@ -3849,8 +3989,13 @@ impl LoaderApp {
     }
 
     pub fn on_exit(&mut self) {
-        if let Some(tiles) = self.tiles.take() {
+        if let Some(tiles) = self.dev.tiles.take() {
             tiles.finish();
+        }
+        for dev in self.parked_dev.values_mut() {
+            if let Some(tiles) = dev.tiles.take() {
+                tiles.finish();
+            }
         }
         if let Some(terminal) = &mut self.terminal {
             terminal.close();

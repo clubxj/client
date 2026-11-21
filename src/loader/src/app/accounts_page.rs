@@ -2,7 +2,7 @@ use super::*;
 
 impl LoaderApp {
     fn read_client_name(&mut self) {
-        if let Some(target) = self.selected_loaded_target().cloned() {
+        if let Some(target) = loaded_in(&self.targets, self.focus_client).cloned() {
             self.background(move |settings| {
                 Event::AccountName(
                     backend::state(&target, &settings).map(|state| state.account_name),
@@ -17,13 +17,13 @@ impl LoaderApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let accounts = self.accounts.clone();
-        let client = self.selected_loaded_target().is_some();
+        let client = loaded_in(&self.targets, self.focus_client).is_some();
         let home = self.chrome.focus.clone();
         let ui = self.accounts_ui.get_or_insert_with(|| {
             crate::accounts::Ui::new(
                 &accounts,
                 home,
-                |app: &LoaderApp| app.tab == Tab::Accounts,
+                |app: &LoaderApp| app.page == Page::Accounts,
                 window,
                 cx,
             )
@@ -51,7 +51,7 @@ fn entry(name: &str, account: &str, pin: &str, lamp_skill: &str) -> crate::accou
 
 #[cfg(test)]
 fn saved(app: &mut LoaderApp) {
-    app.tab = Tab::Accounts;
+    app.page = Page::Accounts;
     app.accounts = Arc::new(RwLock::new(crate::accounts::Accounts::with_entries(vec![
         entry("Main", "first account", "1234", "Slayer"),
         entry("Ironman (just for me)", "second account", "9876", ""),
@@ -63,7 +63,7 @@ fn saved(app: &mut LoaderApp) {
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("accounts-empty", |app| {
-            app.tab = Tab::Accounts;
+            app.page = Page::Accounts;
             app.accounts = Arc::new(RwLock::new(crate::accounts::Accounts::with_entries(
                 Vec::new(),
             )));
@@ -82,7 +82,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             crate::accounts::snapshot_changing(&app.accounts);
         }),
         ("accounts-locked", |app| {
-            app.tab = Tab::Accounts;
+            app.page = Page::Accounts;
             app.accounts = Arc::new(RwLock::new(crate::accounts::Accounts::locked(
                 "the system keyring isn't available",
             )));

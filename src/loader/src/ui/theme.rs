@@ -112,10 +112,10 @@ pub fn install(cx: &mut App, ui_font: UiFont) {
     c.link = BLUE.into();
     c.link_hover = BLUE.into();
     c.link_active = BLUE.into();
-    c.primary = BG_HL.into();
-    c.primary_hover = SEL.into();
-    c.primary_active = SEL.into();
-    c.primary_foreground = FG.into();
+    c.primary = BLUE.into();
+    c.primary_hover = BLUE.into();
+    c.primary_active = BLUE.into();
+    c.primary_foreground = BG_DARK.into();
     c.secondary = BG_HL.into();
     c.secondary_hover = SEL.into();
     c.secondary_active = SEL.into();

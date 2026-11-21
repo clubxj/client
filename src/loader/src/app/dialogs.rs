@@ -273,7 +273,8 @@ fn pending(script: StoreScript, replaces: Option<u64>) -> PendingStart {
 
 #[cfg(test)]
 fn prompt(app: &mut LoaderApp, replaces: Option<u64>, fee: i64, nth: i64, old_price: Option<i64>) {
-    app.tab = Tab::Store;
+    app.page = Page::Store(4242);
+    app.targets = vec![super::store_page::fake_target(4242)];
     app.store.loaded = true;
     app.start_prompt = Some(StartPrompt {
         start: pending(super::store_page::fake_script("Miner", 180_000), replaces),
@@ -297,7 +298,8 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             prompt(app, Some(1), 2_000_000, 3, Some(120_000))
         }),
         ("dialog-community-warning", |app| {
-            app.tab = Tab::Store;
+            app.page = Page::Store(4242);
+            app.targets = vec![super::store_page::fake_target(4242)];
             app.store.loaded = true;
             app.warning = Some(pending(
                 StoreScript {

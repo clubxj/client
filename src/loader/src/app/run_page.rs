@@ -54,18 +54,21 @@ fn layout_read(cx: &mut Context<LoaderApp>, kind: Kind) -> crate::layouts::OnRea
     })
 }
 
-const TOOLS_TABS: [(ToolsTab, &str); 7] = [
+const TOOLS_TABS: [(ToolsTab, &str); 5] = [
     (ToolsTab::Settings, "Settings"),
     (ToolsTab::Equipment, "Equipment"),
     (ToolsTab::Inventory, "Inventory"),
     (ToolsTab::Prayer, "Prayer"),
-    (ToolsTab::Xp, "Stats"),
     (ToolsTab::Breaks, "Breaks"),
-    (ToolsTab::Feedback, "Feedback"),
 ];
 
 impl LoaderApp {
-    pub(super) fn render_run(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_run(
+        &mut self,
+        sub: RunPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(run) = self.run() else {
             return div().into_any_element();
         };
@@ -89,8 +92,7 @@ impl LoaderApp {
             ToolsTab::Equipment => has(Kind::Equipment),
             ToolsTab::Inventory => has(Kind::Inventory),
             ToolsTab::Prayer => has(Kind::Prayer),
-            ToolsTab::Feedback => is_store,
-            ToolsTab::Settings | ToolsTab::Xp | ToolsTab::Breaks => true,
+            ToolsTab::Settings | ToolsTab::Breaks => true,
         };
         let tabs: Vec<(ToolsTab, &str)> = TOOLS_TABS
             .into_iter()
@@ -102,7 +104,8 @@ impl LoaderApp {
         }
         let run_id = run.id;
         let title = run.title.clone();
-        let restartable = !running && !waiting;
+        let restartable = !running && !waiting && !run.agent;
+        let agent = run.agent;
         let restart_refusal = self.restart_refusal(run);
         let state = run.state();
         if self.run_ui.run != Some(run_id) {
@@ -160,7 +163,7 @@ impl LoaderApp {
             )
         };
         let (pause_icon, pause_text) = run_pause_label(paused);
-        let can_pause = running && !stopping && !waiting;
+        let can_pause = running && !stopping && !waiting && !agent;
         let pause = widgets::icon_button(
             "run-pause",
             pause_icon,
@@ -189,7 +192,7 @@ impl LoaderApp {
             stop_icon,
             stop_text,
             width,
-            waiting || (running && !stopping),
+            waiting || (running && !stopping && !agent),
             cx.listener(move |app, _: &ClickEvent, _, cx| {
                 if waiting {
                     app.answer_form(run_id, crate::form::Outcome::Cancelled);
@@ -199,6 +202,11 @@ impl LoaderApp {
                 cx.notify();
             }),
         );
+        let stop = stop.when(agent && running, |this| {
+            this.tooltip(widgets::tooltip(
+                "An agent started this run. Ask it to stop, or stop it from the terminal.",
+            ))
+        });
         let restart = restartable.then(|| {
             widgets::icon_button(
                 "run-restart",
@@ -235,7 +243,43 @@ impl LoaderApp {
                     }),
                 ))
             });
-        let content = self.render_tools_tab(tools_tab, run_id, window, cx);
+        let body = match sub {
+            RunPage::Overview => self.render_run_overview(run_id).into_any_element(),
+            RunPage::Settings => {
+                let content = self.render_tools_tab(tools_tab, run_id, window, cx);
+                div()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .child(div().flex_none().child(strip))
+                    .child(divider())
+                    .child(
+                        div().flex_1().min_h_0().mt(px(8.0)).child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(widgets::tab_content().child(content))
+                                .overflow_y_scrollbar()
+                                .id(("tools-scroll", tools_tab as usize)),
+                        ),
+                    )
+                    .into_any_element()
+            }
+            RunPage::Trackers => div()
+                .flex()
+                .flex_col()
+                .child(self.render_stats())
+                .overflow_y_scrollbar()
+                .id("run-trackers")
+                .into_any_element(),
+            RunPage::Feedback => div()
+                .flex()
+                .flex_col()
+                .child(self.render_run_feedback(window, cx))
+                .overflow_y_scrollbar()
+                .id("run-feedback")
+                .into_any_element(),
+        };
         div()
             .size_full()
             .flex()
@@ -266,19 +310,69 @@ impl LoaderApp {
                     .child(widgets::status_dot(state.color()))
                     .child(div().text_color(state.color()).child(state.label())),
             )
-            .child(div().flex_none().mt(px(20.0)).child(strip))
-            .child(divider())
             .child(
-                div().flex_1().min_h_0().mt(px(8.0)).child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(widgets::tab_content().child(content))
-                        .overflow_y_scrollbar()
-                        .id(("tools-scroll", tools_tab as usize)),
-                ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .mt(px(20.0))
+                    .child(body),
             )
             .into_any_element()
+    }
+
+    fn render_run_overview(&self, run_id: u64) -> Div {
+        let Some(run) = self.run_by_id(run_id) else {
+            return div();
+        };
+        let minutes_per_month = self.auth.me().map_or(43_200, |me| me.minutes_per_month);
+        let rate = run
+            .store
+            .as_ref()
+            .map_or(0.0, |store| store.rate_per_hour(minutes_per_month));
+        let client = run
+            .pid()
+            .map_or_else(|| "no client".to_owned(), |pid| format!("client {pid}"));
+        let kind = match &run.source {
+            Some(Source::Store(_)) => "Store script",
+            Some(Source::File(file)) if file.path.is_empty() => "Editor script",
+            Some(Source::File(_)) => "Local file",
+            Some(Source::Agent) => "Agent run",
+            None => "Script",
+        };
+        let fact = |label: &'static str, value: String| {
+            div()
+                .flex()
+                .gap(px(16.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(70.0))
+                        .text_color(theme::COMMENT)
+                        .child(label),
+                )
+                .child(value)
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .child(fact("Runs on", format!("{kind}, {client}")))
+            .child(fact("Time", crate::xp::duration(run.run_time())))
+            .when_some(
+                run.store.as_ref().filter(|_| run.is_running()),
+                |this, store| {
+                    this.child(
+                        div()
+                            .mt(theme::LINE_GAP)
+                            .child(self.render_session_billing(run, store, rate)),
+                    )
+                },
+            )
+            .when(run.store.is_none(), |this| {
+                this.child(widgets::weak("Run from a local file, not billed."))
+            })
     }
 
     fn render_tools_tab(
@@ -383,9 +477,7 @@ impl LoaderApp {
                     None => div().into_any_element(),
                 }
             }
-            ToolsTab::Xp => self.render_stats().into_any_element(),
             ToolsTab::Breaks => self.render_breaks(window, cx).into_any_element(),
-            ToolsTab::Feedback => self.render_run_feedback(window, cx),
         };
         if !unknown.is_empty() {
             self.describe_items(unknown);
@@ -653,6 +745,11 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         ("run-configuring", |app| {
             fakes::add_run(app, None, true);
         }),
+        ("run-grid", |app| {
+            let id = fakes::add_run(app, None, true);
+            let run = run_in(&mut app.runs, Some(id)).expect("just added");
+            run.form = Some(crate::form::Form::new(fakes::grid_spec(), None));
+        }),
         ("run-equipment", |app| {
             let id = fakes::running(app, ToolsTab::Equipment);
             fakes::open_layouts(app, id);
@@ -668,8 +765,13 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         ("run-new-layout", |app| {
             fakes::running(app, ToolsTab::Inventory);
         }),
+        ("run-overview", |app| {
+            let id = fakes::add_run(app, Some(Script::idle(false)), true);
+            fakes::on_page(app, id, RunPage::Overview);
+        }),
         ("run-stats", |app| {
-            let id = fakes::running(app, ToolsTab::Xp);
+            let id = fakes::running(app, ToolsTab::Settings);
+            fakes::on_page(app, id, RunPage::Trackers);
             let run = run_in(&mut app.runs, Some(id)).expect("just added");
             let skill = |name: &str, level, xp| crate::xp::SkillXp {
                 name: name.into(),
@@ -756,9 +858,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         }),
         ("run-paused", |app| {
             let id = fakes::add_run(app, Some(Script::idle(true)), true);
-            if let Some(run) = run_in(&mut app.runs, Some(id)) {
-                run.tools_tab = ToolsTab::Feedback;
-            }
+            fakes::on_page(app, id, RunPage::Feedback);
         }),
         ("run-ended-queue", |app| {
             let id = fakes::add_run(app, Some(Script::idle(false)), true);
@@ -817,6 +917,45 @@ mod fakes {
                 { "kind": "equipment", "id": "gear", "label": "Gear", "required": [{ "ids": [11323], "slot": 3 }] },
                 { "kind": "inventory", "id": "bag", "required": [{ "ids": [2434], "slot": 0, "doses": [4, 3] }, { "ids": [314], "min": 100, "max": 0 }] },
                 { "kind": "prayer", "id": "prayers", "locked": ["protect_from_melee"] }
+            ]
+        })
+    }
+
+    pub(super) fn grid_spec() -> serde_json::Value {
+        let tasks = [
+            ("Aberrant spectres", "7", "do"),
+            ("Abyssal demons", "12", "do"),
+            ("Adamant dragons", "2", "skip"),
+            ("Ankou", "5", "do"),
+            ("Aviansies", "8 \u{b7} unlock", "do"),
+            ("Basilisks", "7 \u{b7} unlock", "do"),
+            ("Black demons", "8", "do"),
+            ("Black dragons", "9", "block"),
+            ("Bloodveld", "8", "do"),
+            ("Blue dragons", "4", "do"),
+            ("Bosses", "12 \u{b7} unlock", "skip"),
+            ("Cave horrors", "4", "skip"),
+            ("Dagannoth", "9", "block"),
+        ];
+        let items: Vec<serde_json::Value> = tasks
+            .iter()
+            .map(|(label, detail, default)| {
+                serde_json::json!({ "id": label.to_lowercase(), "label": label, "detail": detail, "default": default })
+            })
+            .collect();
+        serde_json::json!({
+            "fields": [
+                { "kind": "grid", "id": "tasks", "label": "Task", "search": "Search tasks",
+                  "note": "Blocks apply to every master",
+                  "columns": [
+                      { "id": "do", "label": "Do", "summary": "do" },
+                      { "id": "skip", "label": "Skip", "summary": "skip" },
+                      { "id": "block", "label": "Block", "summary": "blocked here", "max": 6 }
+                  ],
+                  "items": items },
+                { "kind": "grid", "id": "loot", "label": "Item", "colors": false, "default": "keep",
+                  "columns": [{ "id": "keep", "label": "Keep" }, { "id": "drop", "label": "Drop" }],
+                  "items": [{ "id": "bones", "label": "Bones" }, { "id": "coins", "label": "Coins" }, { "id": "herbs", "label": "Herbs", "default": "drop" }] }
             ]
         })
     }
@@ -894,7 +1033,7 @@ mod fakes {
             id,
             "Snapshot script".into(),
             script,
-            None,
+            Some(super::super::store_page::fake_target(4120)),
             store,
             &app.settings,
         );
@@ -913,8 +1052,14 @@ mod fakes {
         app.feedback.fetched_at = Some(Instant::now());
         app.runs.push(run);
         app.active_run = Some(id);
-        app.tab = Tab::Run;
+        app.page = Page::Run(RunPage::Settings);
+        app.targets = vec![super::super::store_page::fake_target(4120)];
         id
+    }
+
+    pub(super) fn on_page(app: &mut LoaderApp, id: u64, sub: RunPage) {
+        app.active_run = Some(id);
+        app.page = Page::Run(sub);
     }
 
     pub(super) fn running(app: &mut LoaderApp, tab: ToolsTab) -> u64 {

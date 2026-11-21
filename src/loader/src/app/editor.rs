@@ -47,10 +47,10 @@ fn page_width(window: &Window) -> Pixels {
 
 impl LoaderApp {
     fn editor_parts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Parts {
-        if let Some(parts) = &self.editor_ui.parts {
+        if let Some(parts) = &self.editor.ui.parts {
             return parts.clone();
         }
-        let text = self.script_file.text.clone();
+        let text = self.editor.file.text.clone();
         let code = cx.new(|cx| CodeEditor::new(&text, cx));
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
         let replacement = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
@@ -58,14 +58,14 @@ impl LoaderApp {
             cx.subscribe_in(&code, window, |app, code, event: &code::Event, _, cx| {
                 match event {
                     code::Event::Edited => {
-                        app.script_file.text = code.read(cx).text().to_owned();
+                        app.editor.file.text = code.read(cx).text().to_owned();
                     }
                     code::Event::Moved(at) => {
-                        app.fold.follow_cursor(&app.script_file.text, *at);
+                        app.editor.fold.follow_cursor(&app.editor.file.text, *at);
                         app.push_shown(code, cx);
                     }
                     code::Event::Fold(line) => {
-                        app.fold.toggle(*line);
+                        app.editor.fold.toggle(*line);
                         app.push_shown(code, cx);
                     }
                 }
@@ -75,10 +75,10 @@ impl LoaderApp {
                 match event {
                     InputEvent::Change => {
                         let value = input.read(cx).value().to_string();
-                        if value != app.find.query {
-                            app.find.query = value;
-                            app.find.current = 0;
-                            app.find.jump = true;
+                        if value != app.editor.find.query {
+                            app.editor.find.query = value;
+                            app.editor.find.current = 0;
+                            app.editor.find.jump = true;
                         }
                     }
                     InputEvent::PressEnter { shift, .. } => app.find_step(*shift),
@@ -91,7 +91,7 @@ impl LoaderApp {
                 window,
                 |app, input, event: &InputEvent, _, cx| {
                     if let InputEvent::Change = event {
-                        app.find.replacement = input.read(cx).value().to_string();
+                        app.editor.find.replacement = input.read(cx).value().to_string();
                         cx.notify();
                     }
                 },
@@ -103,23 +103,24 @@ impl LoaderApp {
             query,
             replacement,
         };
-        self.editor_ui.parts = Some(parts.clone());
-        self.editor_ui.subscriptions = subscriptions;
+        self.editor.ui.parts = Some(parts.clone());
+        self.editor.ui.subscriptions = subscriptions;
         parts
     }
 
     fn push_shown(&mut self, code: &Entity<CodeEditor>, cx: &mut Context<Self>) {
-        self.fold
-            .sync(&self.script_file.path, &self.script_file.text);
-        let view = self.fold.view(&self.script_file.text);
+        self.editor
+            .fold
+            .sync(&self.editor.file.path, &self.editor.file.text);
+        let view = self.editor.fold.view(&self.editor.file.text);
         let rows = view
             .visible
             .iter()
             .map(|&line| Row {
                 line,
-                fold: if !self.fold.is_foldable(line) {
+                fold: if !self.editor.fold.is_foldable(line) {
                     Fold::None
-                } else if self.fold.is_folded(line) {
+                } else if self.editor.fold.is_folded(line) {
                     Fold::Folded
                 } else {
                     Fold::Open
@@ -129,48 +130,52 @@ impl LoaderApp {
         let shown = Shown {
             rows,
             headers: view.headers,
-            lines: self.fold.line_count(),
-            longest: self.fold.longest_line(),
+            lines: self.editor.fold.line_count(),
+            longest: self.editor.fold.longest_line(),
         };
         code.update(cx, |code, cx| code.set_shown(shown, cx));
     }
 
     fn sync_editor(&mut self, parts: &Parts, window: &mut Window, cx: &mut Context<Self>) -> usize {
-        let text = self.script_file.text.clone();
-        if self.editor_ui.path.as_deref() != Some(self.script_file.path.as_str()) {
-            self.editor_ui.path = Some(self.script_file.path.clone());
+        let text = self.editor.file.text.clone();
+        if self.editor.ui.path.as_deref() != Some(self.editor.file.path.as_str()) {
+            self.editor.ui.path = Some(self.editor.file.path.clone());
             parts.code.update(cx, |code, cx| code.load(&text, cx));
         } else {
             parts.code.update(cx, |code, cx| code.set_text(&text, cx));
         }
-        let matches = if self.find.open {
-            find_matches(&text, &self.find.query, self.find.case_sensitive)
+        let matches = if self.editor.find.open {
+            find_matches(
+                &text,
+                &self.editor.find.query,
+                self.editor.find.case_sensitive,
+            )
         } else {
             Vec::new()
         };
         let count = matches.len();
-        self.find.current = self.find.current.min(count.saturating_sub(1));
-        let jump = self.find.open && std::mem::take(&mut self.find.jump);
-        if jump && let Some(&at) = matches.get(self.find.current) {
-            self.fold.reveal(text[..at].matches('\n').count());
+        self.editor.find.current = self.editor.find.current.min(count.saturating_sub(1));
+        let jump = self.editor.find.open && std::mem::take(&mut self.editor.find.jump);
+        if jump && let Some(&at) = matches.get(self.editor.find.current) {
+            self.editor.fold.reveal(text[..at].matches('\n').count());
         }
         self.push_shown(&parts.code, cx);
-        let query_len = self.find.query.len();
+        let query_len = self.editor.find.query.len();
         let ranges = matches.iter().map(|&at| at..at + query_len).collect();
-        let current = (count > 0).then_some(self.find.current);
+        let current = (count > 0).then_some(self.editor.find.current);
         parts
             .code
             .update(cx, |code, cx| code.set_matches(ranges, current, jump, cx));
         for (input, value) in [
-            (&parts.query, &self.find.query),
-            (&parts.replacement, &self.find.replacement),
+            (&parts.query, &self.editor.find.query),
+            (&parts.replacement, &self.editor.find.replacement),
         ] {
             if input.read(cx).value().as_ref() != value.as_str() {
                 let value = value.clone();
                 input.update(cx, |input, cx| input.set_value(value, window, cx));
             }
         }
-        if self.find.open && std::mem::take(&mut self.find.focus) {
+        if self.editor.find.open && std::mem::take(&mut self.editor.find.focus) {
             parts.query.update(cx, |input, cx| input.focus(window, cx));
         }
         count
@@ -181,158 +186,142 @@ impl LoaderApp {
         let command = keystroke.modifiers.secondary(cx) && !keystroke.modifiers.alt;
         let key = keystroke.key.as_str();
         if command && (key == "f" || key == "r") {
-            self.find.open = true;
-            self.find.replace |= key == "r";
-            self.find.focus = true;
+            self.editor.find.open = true;
+            self.editor.find.replace |= key == "r";
+            self.editor.find.focus = true;
             cx.stop_propagation();
             cx.notify();
-        } else if key == "escape" && self.find.open {
-            self.find.open = false;
+        } else if key == "escape" && self.editor.find.open {
+            self.editor.find.open = false;
             cx.notify();
         }
     }
 
-    fn run_editor_file(&mut self) {
-        match self.script_file.changed_on_disk() {
+    fn run_editor_file(&mut self, pid: u32) {
+        match self.editor.file.changed_on_disk() {
             Some(disk) => {
                 self.reload_prompt = Some(ReloadPrompt {
                     disk,
                     restart: None,
+                    editor: Some(pid),
                 })
             }
-            None => {
-                let target = self.run_target_client();
-                self.run_file(self.script_file.clone(), target.as_ref(), None, None);
-            }
+            None => self.run_editor_on(pid, self.editor.file.clone()),
+        }
+    }
+
+    fn run_editor_on(&mut self, pid: u32, file: ScriptFile) {
+        match self.free_client(pid).cloned() {
+            Some(target) => self.run_file(file, Some(&target), None, None),
+            None => self.error(format!(
+                "Couldn't run {}: client {pid} needs the agent loaded and no script running.",
+                file.name()
+            )),
         }
     }
 
     fn find_step(&mut self, back: bool) {
         let count = find_matches(
-            &self.script_file.text,
-            &self.find.query,
-            self.find.case_sensitive,
+            &self.editor.file.text,
+            &self.editor.find.query,
+            self.editor.find.case_sensitive,
         )
         .len();
         if count == 0 {
             return;
         }
-        let current = self.find.current.min(count - 1);
-        self.find.current = if back {
+        let current = self.editor.find.current.min(count - 1);
+        self.editor.find.current = if back {
             (current + count - 1) % count
         } else {
             (current + 1) % count
         };
-        self.find.jump = true;
+        self.editor.find.jump = true;
     }
 
     fn replace_current(&mut self) {
         let matches = find_matches(
-            &self.script_file.text,
-            &self.find.query,
-            self.find.case_sensitive,
+            &self.editor.file.text,
+            &self.editor.find.query,
+            self.editor.find.case_sensitive,
         );
-        let current = self.find.current.min(matches.len().saturating_sub(1));
+        let current = self
+            .editor
+            .find
+            .current
+            .min(matches.len().saturating_sub(1));
         let Some(&at) = matches.get(current) else {
             return;
         };
-        let replacement = self.find.replacement.clone();
-        let text = &mut self.script_file.text;
-        text.replace_range(at..at + self.find.query.len(), &replacement);
+        let replacement = self.editor.find.replacement.clone();
+        let text = &mut self.editor.file.text;
+        text.replace_range(at..at + self.editor.find.query.len(), &replacement);
         let after = at + replacement.len();
-        let next = find_matches(text, &self.find.query, self.find.case_sensitive);
-        self.find.current = next.iter().position(|&start| start >= after).unwrap_or(0);
-        self.find.jump = true;
+        let next = find_matches(
+            text,
+            &self.editor.find.query,
+            self.editor.find.case_sensitive,
+        );
+        self.editor.find.current = next.iter().position(|&start| start >= after).unwrap_or(0);
+        self.editor.find.jump = true;
     }
 
     fn replace_all(&mut self) {
         let matches = find_matches(
-            &self.script_file.text,
-            &self.find.query,
-            self.find.case_sensitive,
+            &self.editor.file.text,
+            &self.editor.find.query,
+            self.editor.find.case_sensitive,
         );
         if matches.is_empty() {
             return;
         }
-        let query_len = self.find.query.len();
-        let mut out = String::with_capacity(self.script_file.text.len());
+        let query_len = self.editor.find.query.len();
+        let mut out = String::with_capacity(self.editor.file.text.len());
         let mut last = 0;
         for &at in &matches {
-            out.push_str(&self.script_file.text[last..at]);
-            out.push_str(&self.find.replacement);
+            out.push_str(&self.editor.file.text[last..at]);
+            out.push_str(&self.editor.find.replacement);
             last = at + query_len;
         }
-        out.push_str(&self.script_file.text[last..]);
-        self.script_file.text = out;
-        self.find.current = 0;
+        out.push_str(&self.editor.file.text[last..]);
+        self.editor.file.text = out;
+        self.editor.find.current = 0;
     }
 
-    fn render_run_buttons(
-        &mut self,
-        running: bool,
-        paused: bool,
-        width: Pixels,
-        vertical: bool,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let can_run = !running && !self.script_file.text.trim().is_empty();
-        let (pause_icon, pause_text) = run_pause_label(paused);
-        widgets::button_group(vertical)
-            .child(widgets::icon_button(
+    fn render_run_button(&mut self, pid: u32, width: Pixels, cx: &mut Context<Self>) -> Div {
+        let block = self.run_block(self.free_client(pid));
+        let can_run = block.is_none() && !self.editor.file.text.trim().is_empty();
+        widgets::button_group(false).child(
+            widgets::icon_button(
                 "editor-run",
                 ICON_START,
                 "Run",
                 width,
                 can_run,
-                cx.listener(|app, _: &ClickEvent, _, cx| {
-                    app.run_editor_file();
+                cx.listener(move |app, _: &ClickEvent, _, cx| {
+                    app.run_editor_file(pid);
                     cx.notify();
                 }),
-            ))
-            .child(widgets::icon_button(
-                "editor-pause",
-                pause_icon,
-                pause_text,
-                width,
-                running,
-                cx.listener(|app, _: &ClickEvent, _, cx| {
-                    if let Some(id) = app.editor_run_mut().map(|r| r.id) {
-                        app.toggle_pause_of(id);
-                    }
-                    cx.notify();
-                }),
-            ))
-            .child(widgets::icon_button(
-                "editor-stop",
-                ICON_STOP,
-                "Stop",
-                width,
-                running,
-                cx.listener(|app, _: &ClickEvent, _, cx| {
-                    if let Some(run) = app.editor_run_mut() {
-                        run.stop();
-                    }
-                    cx.notify();
-                }),
-            ))
+            )
+            .when_some(block, |this, why| this.tooltip(widgets::tooltip(why))),
+        )
     }
 
     fn render_file_buttons(
         &mut self,
-        running: bool,
         width: Pixels,
         vertical: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let last = self.last_script.clone();
-        let open_last = !running && last.is_some();
+        let open_last = last.is_some();
         widgets::button_group(vertical)
             .child(widgets::icon_button(
                 "editor-open",
                 ICON_OPEN,
                 "Open…",
                 width,
-                !running,
+                true,
                 cx.listener(|app, _: &ClickEvent, _, cx| {
                     app.open_script();
                     cx.notify();
@@ -361,7 +350,7 @@ impl LoaderApp {
                 ICON_SAVE,
                 "Save",
                 width,
-                !running && !self.script_file.path.is_empty(),
+                !self.editor.file.path.is_empty(),
                 cx.listener(|app, _: &ClickEvent, _, cx| {
                     app.save_script();
                     cx.notify();
@@ -372,7 +361,7 @@ impl LoaderApp {
                 ICON_SAVE_AS,
                 "Save as…",
                 width,
-                !running,
+                true,
                 cx.listener(|app, _: &ClickEvent, _, cx| {
                     app.save_script_as();
                     cx.notify();
@@ -381,12 +370,12 @@ impl LoaderApp {
     }
 
     fn render_find(&mut self, parts: &Parts, count: usize, cx: &mut Context<Self>) -> Div {
-        let status = if self.find.query.is_empty() {
+        let status = if self.editor.find.query.is_empty() {
             String::new()
         } else if count == 0 {
             "No matches".into()
         } else {
-            format!("{} of {count}", self.find.current + 1)
+            format!("{} of {count}", self.editor.find.current + 1)
         };
         let any = count > 0;
         let find = div()
@@ -422,11 +411,11 @@ impl LoaderApp {
             .child(
                 Checkbox::new("find-case")
                     .label("Match case")
-                    .checked(self.find.case_sensitive)
+                    .checked(self.editor.find.case_sensitive)
                     .on_click(cx.listener(|app, checked: &bool, _, cx| {
-                        app.find.case_sensitive = *checked;
-                        app.find.current = 0;
-                        app.find.jump = true;
+                        app.editor.find.case_sensitive = *checked;
+                        app.editor.find.current = 0;
+                        app.editor.find.jump = true;
                         cx.notify();
                     })),
             )
@@ -437,13 +426,13 @@ impl LoaderApp {
                     "Close",
                     true,
                     cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.find.open = false;
+                        app.editor.find.open = false;
                         cx.notify();
                     }),
                 )
                 .tooltip(widgets::tooltip("Escape")),
             );
-        let replace = self.find.replace.then(|| {
+        let replace = self.editor.find.replace.then(|| {
             div()
                 .flex()
                 .flex_wrap()
@@ -481,9 +470,11 @@ impl LoaderApp {
 
     pub(super) fn render_editor(
         &mut self,
+        owner: Option<u32>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.show_editor(owner);
         let parts = self.editor_parts(window, cx);
         if window
             .focused(cx)
@@ -492,17 +483,10 @@ impl LoaderApp {
             window.focus(&parts.page, cx);
         }
         let count = self.sync_editor(&parts, window, cx);
-        let (running, paused) = self
-            .editor_run_mut()
-            .map_or((false, false), |r| (true, r.is_paused()));
-        let (picker, _) = self.render_run_target(cx);
         let width = widgets::icon_button_width(
             window,
             &[
                 (ICON_START, "Run"),
-                PAUSE_BUTTONS[0],
-                PAUSE_BUTTONS[1],
-                (ICON_STOP, "Stop"),
                 (ICON_OPEN, "Open…"),
                 (ICON_OPEN_LAST, "Open last"),
                 (ICON_SAVE, "Save"),
@@ -510,37 +494,41 @@ impl LoaderApp {
             ],
         );
         let available = page_width(window);
-        let run_group = group_width(3, width);
+        let run_group = if owner.is_some() {
+            group_width(1, width)
+        } else {
+            px(0.0)
+        };
         let file_group = group_width(4, width);
         let stack_groups = run_group + theme::ITEM_GAP + GROUP_GAP + file_group > available;
-        let stack_buttons = run_group.max(file_group) > available;
-        let run_buttons = self.render_run_buttons(running, paused, width, stack_buttons, cx);
-        let file_buttons = self.render_file_buttons(running, width, stack_buttons, cx);
-        let buttons =
-            fit_row(!stack_groups)
-                .flex_none()
-                .when(stack_groups, |row| row.items_start())
-                .child(run_buttons)
-                .child(file_buttons.map(|group| {
-                    if stack_groups {
-                        group.mt(GROUP_GAP)
-                    } else {
-                        group.ml(GROUP_GAP)
-                    }
-                }));
-        let status = match (running, paused) {
-            (true, true) => "paused",
-            (true, false) => "running",
-            (false, _) => "not running",
+        let stack_buttons = file_group > available;
+        let run_button = owner.map(|pid| self.render_run_button(pid, width, cx));
+        let file_buttons = self.render_file_buttons(width, stack_buttons, cx);
+        let buttons = fit_row(!stack_groups)
+            .flex_none()
+            .when(stack_groups, |row| row.items_start())
+            .children(run_button)
+            .child(file_buttons.map(|group| match (owner, stack_groups) {
+                (None, _) => group,
+                (Some(_), true) => group.mt(GROUP_GAP),
+                (Some(_), false) => group.ml(GROUP_GAP),
+            }));
+        let heading = match owner {
+            Some(pid) => format!("Client {pid}: editor"),
+            None => "Editor".to_owned(),
         };
         let label = div()
             .id("editor-file")
             .flex_none()
-            .child(format!("{}, {status}", self.script_file.name()))
-            .when(!self.script_file.path.is_empty(), |this| {
-                this.tooltip(widgets::tooltip(self.script_file.path.clone()))
+            .child(self.editor.file.name())
+            .when(!self.editor.file.path.is_empty(), |this| {
+                this.tooltip(widgets::tooltip(self.editor.file.path.clone()))
             });
-        let find = self.find.open.then(|| self.render_find(&parts, count, cx));
+        let find = self
+            .editor
+            .find
+            .open
+            .then(|| self.render_find(&parts, count, cx));
         div()
             .id("editor-page")
             .track_focus(&parts.page)
@@ -551,7 +539,7 @@ impl LoaderApp {
             .capture_key_down(
                 cx.listener(|app, event: &KeyDownEvent, _, cx| app.editor_key(event, cx)),
             )
-            .child(picker.flex_none())
+            .child(widgets::heading(heading).flex_none())
             .child(buttons)
             .child(label)
             .children(find)
@@ -566,18 +554,24 @@ impl LoaderApp {
     }
 
     fn answer_reload(&mut self, choice: Option<bool>) {
-        let Some(ReloadPrompt { disk, restart }) = self.reload_prompt.take() else {
+        let Some(ReloadPrompt {
+            disk,
+            restart,
+            editor,
+        }) = self.reload_prompt.take()
+        else {
             return;
         };
         let Some(reload) = choice else {
             return;
         };
+        self.show_editor(editor);
         let file = match restart {
             Some(id) => match self.run_by_id(id).and_then(|r| r.file.clone()) {
                 Some(file) => file,
                 None => return,
             },
-            None => self.script_file.clone(),
+            None => self.editor.file.clone(),
         };
         let mut file = file;
         file.disk = Some(disk.clone());
@@ -587,9 +581,10 @@ impl LoaderApp {
         match restart {
             Some(id) => self.rerun_file(id, file),
             None => {
-                self.script_file = file.clone();
-                let target = self.run_target_client();
-                self.run_file(file, target.as_ref(), None, None);
+                self.editor.file = file.clone();
+                if let Some(pid) = editor {
+                    self.run_editor_on(pid, file);
+                }
             }
         }
     }
@@ -599,7 +594,10 @@ impl LoaderApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let restart = self.reload_prompt.as_ref()?.restart;
+        let (restart, editor) = self
+            .reload_prompt
+            .as_ref()
+            .map(|prompt| (prompt.restart, prompt.editor))?;
         let file = match restart {
             Some(id) => match self.run_by_id(id).and_then(|r| r.file.clone()) {
                 Some(file) => file,
@@ -608,7 +606,14 @@ impl LoaderApp {
                     return None;
                 }
             },
-            None => self.script_file.clone(),
+            None if self.editor.owner == editor => self.editor.file.clone(),
+            None => match self.editors.get(&editor) {
+                Some(parked) => parked.file.clone(),
+                None => {
+                    self.reload_prompt = None;
+                    return None;
+                }
+            },
         };
         let name = file.name();
         let unsaved =
@@ -700,34 +705,43 @@ impl LoaderApp {
 
 #[cfg(test)]
 fn example(app: &mut LoaderApp) {
-    app.tab = Tab::Scripts;
-    app.script_file = ScriptFile::default();
+    super::clients::populated(app);
+    app.page = Page::Editor(Some(4120));
+    app.show_editor(Some(4120));
+    app.editor.file = ScriptFile::default();
 }
 
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("editor", example),
+        ("editor-global", |app| {
+            app.page = Page::Editor(None);
+            app.editor.file = ScriptFile::default();
+        }),
         ("editor-folded", |app| {
             example(app);
-            app.fold.sync(&app.script_file.path, &app.script_file.text);
-            app.fold.toggle(3);
-            app.fold.toggle(19);
+            app.editor
+                .fold
+                .sync(&app.editor.file.path, &app.editor.file.text);
+            app.editor.fold.toggle(3);
+            app.editor.fold.toggle(19);
         }),
         ("editor-find", |app| {
             example(app);
-            app.find.open = true;
-            app.find.replace = true;
-            app.find.query = "state".into();
-            app.find.current = 2;
-            app.find.jump = true;
+            app.editor.find.open = true;
+            app.editor.find.replace = true;
+            app.editor.find.query = "state".into();
+            app.editor.find.current = 2;
+            app.editor.find.jump = true;
         }),
         ("editor-reload", |app| {
             example(app);
-            app.script_file.disk = Some(String::new());
+            app.editor.file.disk = Some(String::new());
             app.reload_prompt = Some(ReloadPrompt {
                 disk: String::new(),
                 restart: None,
+                editor: Some(4120),
             });
         }),
     ]

@@ -7,8 +7,9 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 | Path | Holds |
 | --- | --- |
 | `app.rs` | `LoaderApp`: app state, events, jobs, run/session logic, `tick` (the per-frame logic), `save`/`on_exit` |
-| `app/chrome.rs` | Window, `Render`, the wake loop, header, sidebar and drawer, sign-in gate, update banner/screen, page dispatch, overlay dialogs |
-| `app/<page>.rs` | One module per page (`clients`, `store_page`, `sessions`, `run_page`, `editor` + `editor/code.rs`, `development`, `terminal_page`, `accounts_page`, `feedback_page`, `settings_page`, `queue_page`, `output`, `dialogs`), each with its widget state in one `Ui` field on `LoaderApp`; `shared.rs` holds what several pages use |
+| `app/chrome.rs` | Window, `Render`, the wake loop, header, sidebar tree and drawer, sign-in gate, update banner/screen, page dispatch, overlay dialogs |
+| `app/nav.rs` | Which page belongs to which client, client state (colour), page repair, the per-client editor and inspector swaps |
+| `app/<page>.rs` | One module per page (`clients` the client page, `store_page`, `sessions` the overview and a client's history, `run_page`, `editor` + `editor/code.rs`, `development`, `terminal_page`, `accounts_page`, `feedback_page`, `settings_page`, `queue_page`, `output`, `dialogs`), each with its widget state in one `Ui` field on `LoaderApp`; `shared.rs` holds what several pages use |
 | `app/snapshots.rs` | Offscreen page snapshots (test only), see below |
 | `ui/` | `theme.rs` palette, sizes, fonts, gpui-component theme; `widgets.rs` and `fields.rs` shared widgets |
 | `storage.rs`, `wake.rs` | `app.ron` key/value store; `Wake`, the handle background threads use to wake the window |
@@ -31,6 +32,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 | `icons.rs` | Icon store |
 | `terminal.rs` | Terminal page (`portable-pty` + `alacritty_terminal`), started in the agent workspace |
 | `mcp.rs`, `mcp/`, `workspace.rs` | `loader mcp` server and the agent workspace, see [mcp.md](mcp.md) |
+| `agent_runs.rs` | Run records `loader mcp` writes and the window reads, see Agent runs |
 | `log_view.rs`, `pipe.rs` | Output tab buffer; append-to-file pipe |
 | `highlight.rs`, `fold.rs` | Luau highlighting, folding |
 | `backend/` | `mod.rs` `Settings` + platform-neutral facade; `native.rs` (Windows, calls `injector` lib); `wine.rs` (Linux helper) |
@@ -78,14 +80,31 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - Under a cargo `target/` dir it never installs (`Kind::Dev`); the header's version hover names the newer version.
 - Linux: unpack into `<install>/.update/`, rename each file in `FILES` (`update/archive.rs`) in with hard links for rollback, start the new loader after this one closes (so `save()`/`on_exit` run). Unwritable install dir falls back to browser download.
 - Windows: MSI to `<data>/update/`, sha256 checked; loader copies itself there and runs the copy with `--finish-update`, which waits, runs `msiexec /passive` with the install's own mode and folder (read from Windows Installer; upgrades don't cross modes), and restarts the installed loader unelevated, with `--update-failed <msg>` on failure (declined UAC counts). Non-MSI installs get browser download.
-- `Settings::fill_missing` forces an install to use the `agent.dll` and `injector` next to it, so a saved path can't pair versions.
+- `Settings::fill_missing` makes every loader use the `agent.dll` and `injector` it detects over the saved paths, so a saved path can't pair versions; a saved path is used only when nothing is detected. An install finds them next to the executable. A build under `target/` takes the newest of `target/x86_64-pc-windows-gnu/{its profile,fast,release,debug}`, so a `cargo fast-win` build is picked up on the next start.
 - Versions: `YYYY.MM.DD-<7 char commit>`, or `dev` outside git.
+
+## Navigation
+
+- The sidebar is a tree rebuilt every frame from state: `sessions/` lists every detected client, plus any closed client that still has runs. Clients are scanned at start, after a load or unload, and every 5 s while `sessions/` is open (`RESCAN_EVERY`), so a newly started client appears once that page is visited. A scan never sets `busy`, which only disables the client and state-reading buttons while such a job runs; a scan error is logged only when it is new.
+- `Page` names where the user is. Client pages carry the pid; a run page uses `active_run`. Nothing holds a global selected client: every action takes its client from its page, so the store, queue and editor start only on the client whose page started them.
+- A client's children follow its state: idle and loaded shows `scripts/`, `queue/`, `editor/`; a live run (running or configuring) or a queue hides them, since the client lock allows one script per client; `development/` shows while the agent is loaded; ended runs sit under `history/`. A client's page has a button for each of its children, built from the same node. `repair_page` moves the user to the client page (or `sessions/`) when the page they are on stops being offered.
+- A node shows its children only when the current page is it or below it, so the tree folds to the path of the open page.
+- Client colour: dimmed without a loaded agent, green while a script or queue runs, red when its latest ended run failed.
+- The output panel shows the run of the page's client (the open run, else its live run, else its latest) next to the Loader log; outside a client it shows the Loader log.
+- Each client has its own editor and inspectors. The one on screen lives in `LoaderApp::editor`/`dev` and the others are parked by owner (`show_editor`, `show_dev`), so page code works on one set. A client's editor starts as a copy of the global editor's file, and saving updates other editors of the same file that hold no unsaved edits; the rest get the reload prompt when they run. Only the global editor's file is saved to `app.ron`. Inspectors poll only for the client whose development page was opened last, so a capture keeps going while other pages are open; parked ones pause and their tiles worker stops.
+- The global `editor/` only edits files. The accounts page reads the account name from the client opened last.
+
+## Agent runs
+
+- `loader mcp` appends each run to `<data>/agent-runs/<unix>-<process>-<run>.jsonl` (`agent_runs::Entry`: start, output lines, end). The window polls the folder every second and shows each record as a run under its client with `Run::agent` set: its log, state and trackers work as for its own runs, but the window can't pause, stop or restart it, since only the agent's process owns the script.
+- A record without an end is live while its client's lock is held (`script::client_held`, a shared-lock probe); when the lock is free, the run is marked ended. A record whose client isn't detected yet is read again on the next poll.
+- On start the window skips records that ended before it opened. Records are deleted after 24 h without writes.
 
 ## UI mechanisms
 
 - GPUI keeps no hidden widget state for us: text inputs are entities, scroll positions handles, open sections flags. Each page keeps them in its `Ui` struct, created on first render; the model the logic reads (`Settings`, forms, the inspectors) stays the source of truth, and inputs are pushed from it when they aren't focused.
 - Overlay dialogs (start prompt, community warning, reload prompt, queue prompt, accounts and whitelist dialogs) are absolutely positioned elements over a backdrop, not windows.
-- Key events only travel the path to the focused element and the window root usually has focus, so page shortcuts (Clients arrows, accounts Escape) use `cx.observe_keystrokes` gated on the tab, no modifiers and `window.has_focused_input`, which replaces egui's `wants_keyboard_input`. The Editor takes focus when nothing inside a page has it, so Ctrl+F/Ctrl+R/Escape reach it.
+- Key events only travel the path to the focused element and the window root usually has focus, so page shortcuts (accounts Escape) use `cx.observe_keystrokes` gated on the tab, no modifiers and `window.has_focused_input`, which replaces egui's `wants_keyboard_input`. The Editor takes focus when nothing inside a page has it, so Ctrl+F/Ctrl+R/Escape reach it.
 - `widgets::text_width` measures with the current UI font (`theme::current_ui_family`), not `window.text_style()`, which is GPUI's default outside layout. `widgets::icon_button_width` sizes a group from all its possible labels so buttons never resize.
 - Output panel (`app/output.rs`): the log view is a `uniform_list` of wrapped rows, so only visible rows are drawn. Each entry is wrapped once; an append wraps only the new entries (`Log::appended` tells an append from a rebuild because a rebuild or clear raises `revision` by more than the entries added). A tab switch, filter change, trim or clear re-wraps the whole tab and drops the selection; a new width only re-wraps it.
 - Output tabs are capped (`backend::LOG_LINES`, 2000 to 10 000), trimmed a quarter at a time. A trim or filter change rebuilds the tab's text and re-wraps it, and Copy all and Save copy the whole text.
@@ -100,7 +119,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - Lines written to the script's stdin before start: antiban config (`injector::antiban::line`), transports (`TRANSPORT_SETTINGS`), Script debugging (`DEBUG`), `prices_url` (`injector::prices::line`), `SETTINGS` (the form's values, `script::Launch`) and, for a queue entry, `RESUME` (the previous entry's break plan). Live: `UPDATE` (settings changed while running, read by `Host.form_update()`), antiban push, transport push, Script debugging push, skip-next, `FINISH` (queue only).
 - Settings come from the script's `manifest.json` (`injector::manifest`): the store's live revision through `GET /launcher/scripts/:id/manifest`, cached in memory by script and revision, or the file beside an editor script. A script with settings opens a **configuring** run (`Run::is_configuring`: no process, no session) whose Start quotes, starts the session and launches it, so nothing is billed while the form is open. Without settings it starts at once. Values are remembered per script title; layouts resolve to their contents when Start is pressed.
 - Script requests on stdout: `LAMPREQ`, PIN, `HTTPREQ`. The layout JSON a script gets is documented in the lib's `host.luau`.
-- Settings persisted: `dll`, `helper`, `lib_dir`, `antiban`, `transports`, `include_system_info`, `log_lines`; detected next to the executable first, then `target/x86_64-pc-windows-gnu/{release,debug}`.
+- Settings persisted: `dll`, `helper`, `lib_dir`, `antiban`, `transports`, `include_system_info`, `log_lines`. `dll` and `helper` are replaced by detected files on start (see Update flow).
 - Cursor preference is passed to `injector load`; the injector leaves it in an `AGENT_CURSOR_<pid>` mapping the agent reads.
 
 ## HTTP whitelist
@@ -132,7 +151,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - Inspectors poll on `POLL_EVERY` except the inventory inspector, which blocks on an agent event (`WAIT_FOR_CHANGE`) and on Linux uses its own helper lane (`Lane::Events`); after a baseline it applies slot changes to its own copy.
 - Script names are downloaded on demand from RuneLite's `cs2-scripts` zip and kept in memory only (the cache has only hashes).
 - Packet layouts come from the agent (`injector packet-layouts`) and fall back to `packet_defs.tsv`. Names the agent found (with their field names) win; shipped names apply by opcode only while all packet sizes match. Opcodes change with game updates.
-- Icons are drawn by the selected client and cached in `icons.bin` (append-only; older format restarted), so layouts show icons with no client loaded.
+- Icons are drawn by the client opened last (else any loaded client) and cached in `icons.bin` (append-only; older format restarted), so layouts show icons with no client loaded.
 
 ## Queue
 

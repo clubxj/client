@@ -51,7 +51,7 @@ pub struct Store {
 
 pub enum Action {
     Refresh,
-    Run(Box<StoreScript>),
+    Run(Box<StoreScript>, u32),
     Redeem(String),
     RemoveGrant(Box<StoreScript>),
     OpenSite(String),

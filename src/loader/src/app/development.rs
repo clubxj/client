@@ -165,30 +165,35 @@ impl Inputs {
             InputState::new(window, cx)
                 .min(0.0)
                 .max((injector::MAX_VARPS - 1) as f64)
-                .default_value(app.varp.to_string())
+                .default_value(app.dev.varp.to_string())
         });
-        let blacklist = text(&app.script_inspector.blacklist, "6697, 4730", window, cx);
+        let blacklist = text(
+            &app.dev.script_inspector.blacklist,
+            "6697, 4730",
+            window,
+            cx,
+        );
         let filter = text(
-            &app.packets.filter,
+            &app.dev.packets.filter,
             "40, VARP_LARGE or !PLAYER_INFO",
             window,
             cx,
         );
-        let name_search = text(&app.packets.name_search, "🔍 Search names", window, cx);
+        let name_search = text(&app.dev.packets.name_search, "🔍 Search names", window, cx);
         let subscriptions = vec![
             cx.subscribe_in(&varp, window, |app, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change)
                     && let Ok(varp) = input.read(cx).value().trim().parse::<usize>()
                 {
-                    app.varp = varp.min(injector::MAX_VARPS - 1);
+                    app.dev.varp = varp.min(injector::MAX_VARPS - 1);
                     cx.notify();
                 }
             }),
             cx.subscribe_in(&varp, window, |app, _, event: &NumberInputEvent, _, cx| {
                 let NumberInputEvent::Step(step) = event;
-                app.varp = match step {
-                    StepAction::Increment => (app.varp + 1).min(injector::MAX_VARPS - 1),
-                    StepAction::Decrement => app.varp.saturating_sub(1),
+                app.dev.varp = match step {
+                    StepAction::Increment => (app.dev.varp + 1).min(injector::MAX_VARPS - 1),
+                    StepAction::Decrement => app.dev.varp.saturating_sub(1),
                 };
                 cx.notify();
             }),
@@ -197,14 +202,14 @@ impl Inputs {
                 window,
                 |app, input, event: &InputEvent, _, cx| {
                     if matches!(event, InputEvent::Change) {
-                        app.script_inspector.blacklist = input.read(cx).value().to_string();
+                        app.dev.script_inspector.blacklist = input.read(cx).value().to_string();
                         cx.notify();
                     }
                 },
             ),
             cx.subscribe_in(&filter, window, |app, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
-                    app.packets.filter = input.read(cx).value().to_string();
+                    app.dev.packets.filter = input.read(cx).value().to_string();
                     cx.notify();
                 }
             }),
@@ -213,7 +218,7 @@ impl Inputs {
                 window,
                 |app, input, event: &InputEvent, _, cx| {
                     if matches!(event, InputEvent::Change) {
-                        app.packets.name_search = input.read(cx).value().to_string();
+                        app.dev.packets.name_search = input.read(cx).value().to_string();
                         cx.notify();
                     }
                 },
@@ -315,7 +320,7 @@ fn small_button(
 fn client_caption(pid: Option<u32>) -> Div {
     match pid {
         Some(pid) => widgets::weak(format!("Client {pid}.")),
-        None => div().child("Select a client with agent loaded in the Clients tab."),
+        None => div().child("Load the agent into this client first."),
     }
 }
 
@@ -435,7 +440,7 @@ fn rows_buttons<T: Rows + 'static>(
 }
 
 fn script_rows(app: &LoaderApp, range: Range<usize>) -> Vec<LogRow> {
-    let inspector = &app.script_inspector;
+    let inspector = &app.dev.script_inspector;
     let visible = inspector.visible();
     range
         .filter_map(|index| {
@@ -461,7 +466,7 @@ fn script_rows(app: &LoaderApp, range: Range<usize>) -> Vec<LogRow> {
 }
 
 fn var_rows(app: &LoaderApp, range: Range<usize>) -> Vec<LogRow> {
-    let visible = app.vars.visible();
+    let visible = app.dev.vars.visible();
     range
         .filter_map(|index| {
             let entry = visible.get(index)?;
@@ -487,7 +492,7 @@ fn var_rows(app: &LoaderApp, range: Range<usize>) -> Vec<LogRow> {
 }
 
 fn packet_rows(app: &LoaderApp, range: Range<usize>) -> Vec<LogRow> {
-    let monitor = &app.packets;
+    let monitor = &app.dev.packets;
     let visible = monitor.visible();
     let table = monitor.table();
     range
@@ -537,11 +542,11 @@ fn widget_rows(inspector: &crate::widgets::Inspector, open: &HashSet<(i32, i32)>
 
 impl LoaderApp {
     fn dev_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Inputs {
-        if let Some((inputs, _)) = &self.dev_ui.inputs {
+        if let Some((inputs, _)) = &self.dev.ui.inputs {
             return inputs.clone();
         }
         let (inputs, subscriptions) = Inputs::new(self, window, cx);
-        self.dev_ui.inputs = Some((inputs.clone(), subscriptions));
+        self.dev.ui.inputs = Some((inputs.clone(), subscriptions));
         inputs
     }
 
@@ -552,31 +557,37 @@ impl LoaderApp {
             filter,
             name_search,
         } = inputs;
-        if varp.read(cx).value().trim().parse::<usize>().ok() != Some(self.varp) {
-            sync_input(varp, &self.varp.to_string(), window, cx);
+        if varp.read(cx).value().trim().parse::<usize>().ok() != Some(self.dev.varp) {
+            sync_input(varp, &self.dev.varp.to_string(), window, cx);
         }
-        sync_input(blacklist, &self.script_inspector.blacklist, window, cx);
-        sync_input(filter, &self.packets.filter, window, cx);
-        sync_input(name_search, &self.packets.name_search, window, cx);
+        sync_input(blacklist, &self.dev.script_inspector.blacklist, window, cx);
+        sync_input(filter, &self.dev.packets.filter, window, cx);
+        sync_input(name_search, &self.dev.packets.name_search, window, cx);
+    }
+
+    pub(super) fn dev_target(&self) -> Option<&Target> {
+        loaded_in(&self.targets, self.dev.pid)
     }
 
     pub(super) fn render_development(
         &mut self,
+        pid: u32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.show_dev(pid);
         let inputs = self.dev_inputs(window, cx);
         self.sync_dev_inputs(&inputs, window, cx);
         let tabs = wrapped_row().children(DevTab::ALL.into_iter().map(|(tab, label)| {
-            selectable(("dev-tab", tab as usize), label, self.dev_tab == tab).on_click(cx.listener(
+            selectable(("dev-tab", tab as usize), label, self.dev.tab == tab).on_click(cx.listener(
                 move |app, _: &ClickEvent, _, cx| {
-                    app.dev_tab = tab;
+                    app.dev.tab = tab;
                     app.wake.wake();
                     cx.notify();
                 },
             ))
         }));
-        let body = match self.dev_tab {
+        let body = match self.dev.tab {
             DevTab::Tools => div()
                 .flex()
                 .flex_col()
@@ -617,15 +628,15 @@ impl LoaderApp {
             selectable(
                 ("inspector-tab", tab as usize),
                 label,
-                self.inspector_tab == tab,
+                self.dev.inspector_tab == tab,
             )
             .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
-                app.inspector_tab = tab;
+                app.dev.inspector_tab = tab;
                 app.wake.wake();
                 cx.notify();
             }))
         }));
-        let body = match self.inspector_tab {
+        let body = match self.dev.inspector_tab {
             InspectorTab::Widget => self.render_widgets(window, cx),
             InspectorTab::Var => self.render_vars(inputs, cx),
             InspectorTab::Script => self.render_script_log(inputs, cx),
@@ -668,9 +679,9 @@ impl LoaderApp {
                         check(
                             ("dev-toggle", index),
                             DEV_TOGGLES[index],
-                            self.dev_toggles[index],
+                            self.dev.toggles[index],
                             cx,
-                            move |app, on| app.dev_toggles[index] = on,
+                            move |app, on| app.dev.toggles[index] = on,
                         )
                         .disabled(!enabled)
                         .when(!enabled, |this| this.tooltip("Not ported yet."))
@@ -724,17 +735,17 @@ impl LoaderApp {
     }
 
     fn render_loaded_target(&self) -> (Div, Option<Target>) {
-        let target = self.selected_loaded_target();
+        let target = self.dev_target();
         let label = match target {
             Some(target) => format!("Client {}.", target.client.pid),
-            None => "Select a client with agent loaded in the Clients tab.".to_owned(),
+            None => "Load the agent into this client first.".to_owned(),
         };
         (div().pb(px(6.0)).child(label), target.cloned())
     }
 
     fn render_state(&mut self, cx: &mut Context<Self>) -> Div {
         let (label, target) = self.render_loaded_target();
-        let enabled = self.busy.is_none() && target.is_some();
+        let enabled = !self.busy && target.is_some();
         let buttons = [
             ("Game state", Read::GameState),
             ("Position", Read::Position),
@@ -769,7 +780,7 @@ impl LoaderApp {
 
     fn render_varps(&mut self, inputs: &Inputs, cx: &mut Context<Self>) -> Div {
         let (label, target) = self.render_loaded_target();
-        let enabled = self.busy.is_none() && target.is_some();
+        let enabled = !self.busy && target.is_some();
         let read_button =
             |id: ElementId, label: &'static str, read: Read, cx: &mut Context<Self>| {
                 let target = target.clone();
@@ -795,7 +806,7 @@ impl LoaderApp {
                     .w(px(120.0))
                     .child(NumberInput::new(&inputs.varp).small()),
             )
-            .child(read_button("varp-read".into(), "Read", Read::Varp(self.varp), cx))
+            .child(read_button("varp-read".into(), "Read", Read::Varp(self.dev.varp), cx))
             .child(div().w(px(1.0)).h(theme::INTERACT_HEIGHT).bg(theme::BORDER))
             .child(read_button(
                 "varp-known".into(),
@@ -823,7 +834,7 @@ impl LoaderApp {
                     .map(|(title, width)| widgets::strong(title).w(width).px(CELL_PAD)),
             );
         let rows = KNOWN_VARPS.iter().enumerate().map(|(index, &(name, id))| {
-            let value = match self.varps.as_ref().and_then(|varps| varps.get(id)) {
+            let value = match self.dev.varps.as_ref().and_then(|varps| varps.get(id)) {
                 Some(&value) => match describe_varp(id, value) {
                     Some(text) => format!("{value} ({text})"),
                     None => value.to_string(),
@@ -876,7 +887,7 @@ impl LoaderApp {
         build: fn(&LoaderApp, Range<usize>) -> Vec<LogRow>,
         cx: &mut Context<Self>,
     ) -> Div {
-        let state = self.dev_ui.table(table);
+        let state = self.dev.ui.table(table);
         let (widths, scroll) = (state.widths.clone(), state.scroll.clone());
         if follow && scroll.is_scrolled_to_end().unwrap_or(true) {
             scroll.scroll_to_bottom();
@@ -912,7 +923,7 @@ impl LoaderApp {
             ("log-table", table as usize),
             rows,
             cx.processor(move |app, range: Range<usize>, _, cx| {
-                let widths = app.dev_ui.table(table).widths.clone();
+                let widths = app.dev.ui.table(table).widths.clone();
                 let start = range.start;
                 build(app, range)
                     .into_iter()
@@ -936,8 +947,8 @@ impl LoaderApp {
                                 this.cursor_pointer()
                                     .hover(|style| style.bg(theme::BG_HL))
                                     .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
-                                        app.packets.selected = Some(sequence);
-                                        app.packets.follow = false;
+                                        app.dev.packets.selected = Some(sequence);
+                                        app.dev.packets.follow = false;
                                         cx.notify();
                                     }))
                             })
@@ -962,7 +973,7 @@ impl LoaderApp {
                     if drag.table != table {
                         return;
                     }
-                    let state = app.dev_ui.table_mut(table);
+                    let state = app.dev.ui.table_mut(table);
                     let left = event.bounds.left()
                         + state.widths[..drag.column]
                             .iter()
@@ -983,15 +994,15 @@ impl LoaderApp {
     }
 
     fn render_widgets(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let pid = self.selected_loaded_target().map(|t| t.client.pid);
-        let busy = self.widgets.reading();
+        let pid = self.dev_target().map(|t| t.client.pid);
+        let busy = self.dev.widgets.reading();
         let controls = wrapped_row()
             .child(widgets::button(
                 "widgets-refresh",
                 "Refresh",
                 pid.is_some() && !busy,
                 cx.listener(|app, _: &ClickEvent, _, cx| {
-                    if let Some(target) = app.selected_loaded_target().cloned() {
+                    if let Some(target) = app.dev_target().cloned() {
                         app.refresh_widgets(target);
                     }
                     cx.notify();
@@ -1000,30 +1011,30 @@ impl LoaderApp {
             .child(check(
                 "widgets-hide-hidden",
                 "Hide hidden",
-                self.widgets.hide_hidden,
+                self.dev.widgets.hide_hidden,
                 cx,
-                |app, on| app.widgets.hide_hidden = on,
+                |app, on| app.dev.widgets.hide_hidden = on,
             ))
             .child(
                 check(
                     "widgets-follow-mouse",
                     "Follow mouse",
-                    self.widgets.follow_mouse,
+                    self.dev.widgets.follow_mouse,
                     cx,
-                    |app, on| app.widgets.follow_mouse = on,
+                    |app, on| app.dev.widgets.follow_mouse = on,
                 )
                 .tooltip("Selects the widget under the client's mouse, looking about ten times a second. Move the mouse over the client and the tree follows; untick it to keep the selection."),
             );
-        if !self.widgets.has_read()
-            && !self.widgets.reading()
-            && self.widgets.error.is_none()
-            && let Some(target) = self.selected_loaded_target().cloned()
+        if !self.dev.widgets.has_read()
+            && !self.dev.widgets.reading()
+            && self.dev.widgets.error.is_none()
+            && let Some(target) = self.dev_target().cloned()
         {
             self.refresh_widgets(target);
         }
-        let reveal = std::mem::take(&mut self.widgets.reveal);
-        let inspector = &self.widgets;
-        let ui = &mut self.dev_ui;
+        let reveal = std::mem::take(&mut self.dev.widgets.reveal);
+        let inspector = &self.dev.widgets;
+        let ui = &mut self.dev.ui;
         if reveal {
             let built = inspector.built();
             ui.widget_open
@@ -1058,8 +1069,8 @@ impl LoaderApp {
             "widget-tree",
             ui.widget_rows.len(),
             cx.processor(move |app, range: Range<usize>, _, cx| {
-                let inspector = &app.widgets;
-                let rows = &app.dev_ui.widget_rows;
+                let inspector = &app.dev.widgets;
+                let rows = &app.dev.ui.widget_rows;
                 range
                     .filter_map(|index| {
                         let row = *rows.get(index)?;
@@ -1091,9 +1102,9 @@ impl LoaderApp {
                             .cursor_pointer()
                             .children(guides)
                             .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
-                                app.widgets.selected = Some(key);
+                                app.dev.widgets.selected = Some(key);
                                 if row.open.is_some() {
-                                    let open = &mut app.dev_ui.widget_open;
+                                    let open = &mut app.dev.ui.widget_open;
                                     if !open.remove(&key) {
                                         open.insert(key);
                                     }
@@ -1168,7 +1179,7 @@ impl LoaderApp {
             .min_h_0()
             .child(controls.flex_none())
             .child(client_caption(pid).flex_none())
-            .when_some(self.widgets.error.clone(), |this, error| {
+            .when_some(self.dev.widgets.error.clone(), |this, error| {
                 this.child(error_label(error).flex_none())
             })
             .child(widgets::separator().flex_none())
@@ -1196,22 +1207,22 @@ impl LoaderApp {
     }
 
     fn render_inventory(&mut self, cx: &mut Context<Self>) -> Div {
-        let pid = self.selected_loaded_target().map(|t| t.client.pid);
+        let pid = self.dev_target().map(|t| t.client.pid);
         let controls = wrapped_row()
             .child(check(
                 "inventory-enable",
                 "Enable",
-                self.inventory.enabled,
+                self.dev.inventory.enabled,
                 cx,
-                |app, on| app.inventory.enabled = on,
+                |app, on| app.dev.inventory.enabled = on,
             ))
             .child(
                 widgets::button(
                     "inventory-refresh",
-                    format!("Refresh ({})", self.inventory.pending()),
+                    format!("Refresh ({})", self.dev.inventory.pending()),
                     true,
                     cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.inventory.refresh();
+                        app.dev.inventory.refresh();
                         cx.notify();
                     }),
                 )
@@ -1224,22 +1235,23 @@ impl LoaderApp {
                 "Clear",
                 true,
                 cx.listener(|app, _: &ClickEvent, _, cx| {
-                    app.inventory.clear();
+                    app.dev.inventory.clear();
                     cx.notify();
                 }),
             ));
         let error = self
+            .dev
             .inventory
             .error
             .iter()
             .chain(&self.icons.error)
             .next()
             .cloned();
-        let open = &self.dev_ui.containers_open;
+        let open = &self.dev.ui.containers_open;
         let tree = div()
             .flex()
             .flex_col()
-            .children(self.inventory.logs().iter().map(|(&id, log)| {
+            .children(self.dev.inventory.logs().iter().map(|(&id, log)| {
                 let opened = open.contains(&id);
                 let header = div()
                     .id(("inventory-container", id as usize))
@@ -1249,9 +1261,9 @@ impl LoaderApp {
                     .cursor_pointer()
                     .hover(|style| style.text_color(theme::BLUE))
                     .child(caret(opened))
-                    .child(self.inventory.container_label(id))
+                    .child(self.dev.inventory.container_label(id))
                     .on_click(cx.listener(move |app, _: &ClickEvent, _, cx| {
-                        let open = &mut app.dev_ui.containers_open;
+                        let open = &mut app.dev.ui.containers_open;
                         if !open.remove(&id) {
                             open.insert(id);
                         }
@@ -1267,11 +1279,11 @@ impl LoaderApp {
                             selectable(
                                 ElementId::Name(format!("inventory-{id}-{index}").into()),
                                 label,
-                                self.inventory.selected == Some((id, index)),
+                                self.dev.inventory.selected == Some((id, index)),
                             )
                             .on_click(cx.listener(
                                 move |app, _: &ClickEvent, _, cx| {
-                                    app.inventory.selected = Some((id, index));
+                                    app.dev.inventory.selected = Some((id, index));
                                     cx.notify();
                                 },
                             ))
@@ -1279,9 +1291,9 @@ impl LoaderApp {
                     ))
                 })
             }));
-        let items = match self.inventory.picked() {
+        let items = match self.dev.inventory.picked() {
             Some((snapshot, before)) => {
-                inventory_items(&self.inventory, &mut self.icons, snapshot, before)
+                inventory_items(&self.dev.inventory, &mut self.icons, snapshot, before)
             }
             None => widgets::weak("Pick a tick to see the items."),
         };
@@ -1400,8 +1412,8 @@ fn inventory_items(
 
 impl LoaderApp {
     fn render_script_log(&mut self, inputs: &Inputs, cx: &mut Context<Self>) -> Div {
-        let pid = self.selected_loaded_target().map(|t| t.client.pid);
-        let inspector = &self.script_inspector;
+        let pid = self.dev_target().map(|t| t.client.pid);
+        let inspector = &self.dev.script_inspector;
         let loading = inspector.loading_names;
         let buttons = rows_buttons(
             "script-log",
@@ -1409,12 +1421,12 @@ impl LoaderApp {
             inspector.pipe.as_ref(),
             "script runs",
             "scripts.txt",
-            |app| &mut app.script_inspector,
+            |app| &mut app.dev.script_inspector,
             cx,
         );
         let controls = wrapped_row()
             .child(check("script-enable", "Enable", inspector.enabled, cx, |app, on| {
-                app.script_inspector.enabled = on
+                app.dev.script_inspector.enabled = on
             }))
             .child(
                 check(
@@ -1422,12 +1434,12 @@ impl LoaderApp {
                     "Trigger events",
                     inspector.triggers,
                     cx,
-                    |app, on| app.script_inspector.triggers = on,
+                    |app, on| app.dev.script_inspector.triggers = on,
                 )
                 .tooltip("Component and menu events, which find their script by trigger so their script id isn't known."),
             )
             .child(check("script-follow", "Follow", inspector.follow, cx, |app, on| {
-                app.script_inspector.follow = on
+                app.dev.script_inspector.follow = on
             }))
             .child("Blacklist")
             .child(
@@ -1443,8 +1455,8 @@ impl LoaderApp {
                     if loading { "Loading names…" } else { "Load names" },
                     !loading,
                     cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.script_inspector.loading_names = true;
-                        app.script_inspector.names_error = None;
+                        app.dev.script_inspector.loading_names = true;
+                        app.dev.script_inspector.names_error = None;
                         app.background(|_| {
                             Event::ScriptNames(crate::script_names::Names::download())
                         });
@@ -1460,12 +1472,12 @@ impl LoaderApp {
                 "Clear",
                 true,
                 cx.listener(|app, _: &ClickEvent, _, cx| {
-                    app.script_inspector.clear();
+                    app.dev.script_inspector.clear();
                     cx.notify();
                 }),
             ))
             .children(buttons);
-        let inspector = &self.script_inspector;
+        let inspector = &self.dev.script_inspector;
         let shown = inspector.visible().len();
         let names = &inspector.names;
         let summary = div()
@@ -1511,7 +1523,7 @@ impl LoaderApp {
     }
 
     fn render_vars(&mut self, inputs: &Inputs, cx: &mut Context<Self>) -> Div {
-        let varps_open = self.dev_ui.varps_open;
+        let varps_open = self.dev.ui.varps_open;
         let varps = div()
             .flex()
             .flex_col()
@@ -1526,22 +1538,22 @@ impl LoaderApp {
                     .child(caret(varps_open))
                     .child("Varps")
                     .on_click(cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.dev_ui.varps_open = !app.dev_ui.varps_open;
+                        app.dev.ui.varps_open = !app.dev.ui.varps_open;
                         cx.notify();
                     })),
             )
             .when(varps_open, |this| {
                 this.child(div().pl(INDENT).child(self.render_varps(inputs, cx)))
             });
-        let pid = self.selected_loaded_target().map(|t| t.client.pid);
-        let inspector = &self.vars;
+        let pid = self.dev_target().map(|t| t.client.pid);
+        let inspector = &self.dev.vars;
         let buttons = rows_buttons(
             "vars",
             inspector.kept() == 0,
             inspector.pipe.as_ref(),
             "var changes",
             "vars.txt",
-            |app| &mut app.vars,
+            |app| &mut app.dev.vars,
             cx,
         );
         let controls = wrapped_row()
@@ -1550,54 +1562,54 @@ impl LoaderApp {
                 "Enable",
                 inspector.enabled,
                 cx,
-                |app, on| app.vars.enabled = on,
+                |app, on| app.dev.vars.enabled = on,
             ))
             .child(check(
                 "vars-varbits",
                 "Varbit",
                 inspector.varbits,
                 cx,
-                |app, on| app.vars.varbits = on,
+                |app, on| app.dev.vars.varbits = on,
             ))
             .child(check(
                 "vars-varps",
                 "VarPlayer",
                 inspector.varps,
                 cx,
-                |app, on| app.vars.varps = on,
+                |app, on| app.dev.vars.varps = on,
             ))
             .child(check(
                 "vars-varc-ints",
                 "VarClientInt",
                 inspector.varc_ints,
                 cx,
-                |app, on| app.vars.varc_ints = on,
+                |app, on| app.dev.vars.varc_ints = on,
             ))
             .child(check(
                 "vars-varc-strings",
                 "VarClientStr",
                 inspector.varc_strings,
                 cx,
-                |app, on| app.vars.varc_strings = on,
+                |app, on| app.dev.vars.varc_strings = on,
             ))
             .child(check(
                 "vars-follow",
                 "Follow",
                 inspector.follow,
                 cx,
-                |app, on| app.vars.follow = on,
+                |app, on| app.dev.vars.follow = on,
             ))
             .child(widgets::button(
                 "vars-clear",
                 "Clear",
                 true,
                 cx.listener(|app, _: &ClickEvent, _, cx| {
-                    app.vars.clear();
+                    app.dev.vars.clear();
                     cx.notify();
                 }),
             ))
             .children(buttons);
-        let inspector = &self.vars;
+        let inspector = &self.dev.vars;
         let shown = inspector.visible().len();
         let summary = div()
             .flex()
@@ -1629,7 +1641,7 @@ impl LoaderApp {
     }
 
     fn render_names_menu(&self, inputs: &Inputs, cx: &mut Context<Self>) -> Popover {
-        let monitor = &self.packets;
+        let monitor = &self.dev.packets;
         let active = crate::packets::named_words(&monitor.filter, monitor.table())
             + usize::from(name_state(&monitor.filter, UNKNOWN) != NameState::Off);
         let title = if active > 0 {
@@ -1645,15 +1657,15 @@ impl LoaderApp {
     }
 
     fn render_packets(&mut self, inputs: &Inputs, cx: &mut Context<Self>) -> Div {
-        let pid = self.selected_loaded_target().map(|t| t.client.pid);
-        let monitor = &self.packets;
+        let pid = self.dev_target().map(|t| t.client.pid);
+        let monitor = &self.dev.packets;
         let buttons = rows_buttons(
             "packets",
             monitor.kept() == 0,
             monitor.pipe.as_ref(),
             "packets",
             "packets.txt",
-            |app| &mut app.packets,
+            |app| &mut app.dev.packets,
             cx,
         );
         let controls = wrapped_row()
@@ -1662,28 +1674,28 @@ impl LoaderApp {
                 "Enable",
                 monitor.capture,
                 cx,
-                |app, on| app.packets.capture = on,
+                |app, on| app.dev.packets.capture = on,
             ))
             .child(check(
                 "packets-received",
                 "Received",
                 monitor.received,
                 cx,
-                |app, on| app.packets.received = on,
+                |app, on| app.dev.packets.received = on,
             ))
             .child(check(
                 "packets-sent",
                 "Sent",
                 monitor.sent,
                 cx,
-                |app, on| app.packets.sent = on,
+                |app, on| app.dev.packets.sent = on,
             ))
             .child(check(
                 "packets-follow",
                 "Follow",
                 monitor.follow,
                 cx,
-                |app, on| app.packets.follow = on,
+                |app, on| app.dev.packets.follow = on,
             ))
             .child(
                 widgets::button(
@@ -1691,7 +1703,7 @@ impl LoaderApp {
                     "Clear",
                     true,
                     cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.packets.clear();
+                        app.dev.packets.clear();
                         cx.notify();
                     }),
                 )
@@ -1719,13 +1731,13 @@ impl LoaderApp {
                     "✖",
                     filtered,
                     cx.listener(|app, _: &ClickEvent, _, cx| {
-                        app.packets.filter.clear();
+                        app.dev.packets.filter.clear();
                         cx.notify();
                     }),
                 )
                 .when(filtered, |this| this.tooltip(widgets::tooltip("Clear the filter"))),
             );
-        let monitor = &self.packets;
+        let monitor = &self.dev.packets;
         let shown = monitor.visible().len();
         let summary = div()
             .flex()
@@ -1764,7 +1776,7 @@ impl LoaderApp {
     }
 
     fn render_packet_detail(&self, cx: &mut Context<Self>) -> Div {
-        let monitor = &self.packets;
+        let monitor = &self.dev.packets;
         let detail = div().flex().flex_col().flex_none().h(DETAIL_HEIGHT);
         let Some(packet) = monitor.selected_packet() else {
             return detail.child(widgets::weak("Select a packet to see it in full."));
@@ -1866,7 +1878,7 @@ fn names_menu(
     let Some(entity) = app.upgrade() else {
         return Empty.into_any_element();
     };
-    let monitor = &entity.read(cx).packets;
+    let monitor = &entity.read(cx).dev.packets;
     let query = monitor.name_search.trim().to_ascii_lowercase();
     let unknown_matches = UNKNOWN.to_ascii_lowercase().contains(&query);
     let mut named: Vec<(bool, u16, String)> = monitor
@@ -1924,7 +1936,8 @@ fn names_menu(
             .child(widgets::weak(detail).flex_none())
             .on_click(move |_: &ClickEvent, _, cx: &mut App| {
                 app.update(cx, |loader, cx| {
-                    loader.packets.filter = with_name(&loader.packets.filter, &target, next);
+                    loader.dev.packets.filter =
+                        with_name(&loader.dev.packets.filter, &target, next);
                     cx.notify();
                 })
                 .ok();
@@ -1949,7 +1962,7 @@ fn names_menu(
             filtered,
             move |_: &ClickEvent, _, cx: &mut App| {
                 app.update(cx, |loader, cx| {
-                    loader.packets.filter.clear();
+                    loader.dev.packets.filter.clear();
                     cx.notify();
                 })
                 .ok();
@@ -1990,18 +2003,15 @@ fn names_menu(
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("development-tools", |app| app.tab = Tab::Development),
         ("development-tools-client", |app| {
             fake_client(app);
-            app.tab = Tab::Development;
-            app.dev_toggles[0] = true;
-            app.dev_toggles[5] = true;
+            app.dev.toggles[0] = true;
+            app.dev.toggles[5] = true;
             app.settings.script_debugging = true;
         }),
         ("development-tools-busy", |app| {
             fake_client(app);
-            app.tab = Tab::Development;
-            app.busy = Some("Reading…");
+            app.busy = true;
         }),
         ("development-widget-empty", |app| {
             inspector(app, InspectorTab::Widget)
@@ -2013,8 +2023,9 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         }),
         ("development-widget-error", |app| {
             fake_client(app);
-            app.widgets.start(PID);
-            app.widgets
+            app.dev.widgets.start(PID);
+            app.dev
+                .widgets
                 .finish(PID, Err("The agent didn't answer.".into()));
             inspector(app, InspectorTab::Widget);
         }),
@@ -2026,7 +2037,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         ("development-var-varps", |app| {
             fake_client(app);
             fake_vars(app);
-            app.dev_ui.varps_open = true;
+            app.dev.ui.varps_open = true;
             inspector(app, InspectorTab::Var);
         }),
         ("development-var-empty", |app| {
@@ -2038,7 +2049,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             inspector(app, InspectorTab::Script);
         }),
         ("development-script-empty", |app| {
-            app.script_inspector.loading_names = true;
+            app.dev.script_inspector.loading_names = true;
             inspector(app, InspectorTab::Script);
         }),
         ("development-inventory", |app| {
@@ -2065,9 +2076,9 @@ const PID: u32 = 4242;
 
 #[cfg(test)]
 fn inspector(app: &mut LoaderApp, tab: InspectorTab) {
-    app.tab = Tab::Development;
-    app.dev_tab = DevTab::Inspectors;
-    app.inspector_tab = tab;
+    fake_client(app);
+    app.dev.tab = DevTab::Inspectors;
+    app.dev.inspector_tab = tab;
 }
 
 #[cfg(test)]
@@ -2083,8 +2094,9 @@ fn fake_client(app: &mut LoaderApp) {
         "location": { "prefix": "/nonexistent", "wine": "/nonexistent/wine", "env": [] },
     }))
     .expect("a fake client target");
-    app.selected = Some(target.key());
     app.targets = vec![target];
+    app.dev.pid = Some(PID);
+    app.page = Page::Development(PID);
 }
 
 #[cfg(test)]
@@ -2140,16 +2152,16 @@ fn fake_widgets(app: &mut LoaderApp) {
             widget(149, 2, id(149, 0), -1, false),
         ],
     };
-    app.widgets.start(PID);
-    app.widgets.finish(
+    app.dev.widgets.start(PID);
+    app.dev.widgets.finish(
         PID,
         Ok(crate::widgets::Poll {
             tree,
             names: vec![(161, "toplevel".into()), (149, "inventory".into())],
         }),
     );
-    app.widgets.selected = Some((id(149, 0), 1));
-    app.widgets.reveal = true;
+    app.dev.widgets.selected = Some((id(149, 0), 1));
+    app.dev.widgets.reveal = true;
 }
 
 #[cfg(test)]
@@ -2174,9 +2186,9 @@ fn fake_vars(app: &mut LoaderApp) {
         old: Some(old.to_owned()),
         new: new.to_owned(),
     };
-    app.vars.enabled = true;
-    app.vars.start(PID);
-    app.vars.finish(
+    app.dev.vars.enabled = true;
+    app.dev.vars.start(PID);
+    app.dev.vars.finish(
         PID,
         Instant::now(),
         Ok(poll(vec![0; 400], 100, Vec::new())),
@@ -2185,8 +2197,8 @@ fn fake_vars(app: &mut LoaderApp) {
     let mut varps = vec![0; 400];
     varps[varp::RUN] = 1;
     varps[281] = 1000;
-    app.vars.start(PID);
-    app.vars.finish(
+    app.dev.vars.start(PID);
+    app.dev.vars.finish(
         PID,
         Instant::now(),
         Ok(poll(
@@ -2196,8 +2208,8 @@ fn fake_vars(app: &mut LoaderApp) {
         )),
         |id| known_varp(id).map(str::to_owned),
     );
-    app.vars.varc_error = Some("the client's varc table moved".into());
-    app.varps = Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    app.dev.vars.varc_error = Some("the client's varc table moved".into());
+    app.dev.varps = Some(vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 }
 
 #[cfg(test)]
@@ -2221,9 +2233,9 @@ fn fake_scripts(app: &mut LoaderApp) {
         runs.push(run(base + 2, 5000 + tick, 3174, 1, true));
         runs.push(run(base + 3, 5000 + tick, 2046, 0, true));
     }
-    app.script_inspector.enabled = true;
-    app.script_inspector.start(PID);
-    app.script_inspector.finish(
+    app.dev.script_inspector.enabled = true;
+    app.dev.script_inspector.start(PID);
+    app.dev.script_inspector.finish(
         PID,
         Instant::now(),
         Ok(crate::script_log::Poll {
@@ -2234,7 +2246,7 @@ fn fake_scripts(app: &mut LoaderApp) {
             },
         }),
     );
-    app.script_inspector.names = crate::script_names::names_for_test(&[
+    app.dev.script_inspector.names = crate::script_names::names_for_test(&[
         (2046, "chatbox_keyinput_matched"),
         (3174, "script3174"),
     ]);
@@ -2277,15 +2289,15 @@ fn fake_inventory(app: &mut LoaderApp) {
             new_item,
             new_quantity,
         };
-    app.inventory.enabled = true;
-    app.inventory.start(PID);
-    app.inventory.finish(
+    app.dev.inventory.enabled = true;
+    app.dev.inventory.start(PID);
+    app.dev.inventory.finish(
         PID,
         Instant::now(),
         Ok(poll(page(Vec::new(), 0), Some(vec![(93, items)]))),
     );
-    app.inventory.start(PID);
-    app.inventory.finish(
+    app.dev.inventory.start(PID);
+    app.dev.inventory.finish(
         PID,
         Instant::now(),
         Ok(poll(
@@ -2300,9 +2312,9 @@ fn fake_inventory(app: &mut LoaderApp) {
             None,
         )),
     );
-    app.inventory.refresh();
-    app.inventory.selected = Some((93, 1));
-    app.dev_ui.containers_open.insert(93);
+    app.dev.inventory.refresh();
+    app.dev.inventory.selected = Some((93, 1));
+    app.dev.ui.containers_open.insert(93);
 }
 
 #[cfg(test)]
@@ -2318,9 +2330,9 @@ fn fake_packets(app: &mut LoaderApp) {
             payload: format!("{:02x}01ff00{:02x}2a", sequence, sequence * 3 % 256),
         })
         .collect();
-    app.packets.capture = true;
-    app.packets.start(PID);
-    app.packets.finish(
+    app.dev.packets.capture = true;
+    app.dev.packets.start(PID);
+    app.dev.packets.finish(
         PID,
         Instant::now(),
         Ok(PacketPage {
@@ -2329,7 +2341,7 @@ fn fake_packets(app: &mut LoaderApp) {
             dropped: 0,
         }),
     );
-    app.packets.selected = Some(70);
-    app.packets.follow = false;
-    app.packets.filter = "!5".into();
+    app.dev.packets.selected = Some(70);
+    app.dev.packets.follow = false;
+    app.dev.packets.filter = "!5".into();
 }

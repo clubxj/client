@@ -219,13 +219,14 @@ pub fn take_resume() -> Option<BreakPlan> {
         .take()
 }
 
-pub const KINDS: [&str; 9] = [
+pub const KINDS: [&str; 10] = [
     "label",
     "check",
     "number",
     "text",
     "choice",
     "list",
+    "grid",
     "equipment",
     "inventory",
     "prayer",
@@ -415,6 +416,200 @@ pub fn items(field: &Value) -> Vec<(String, String, bool)> {
         .unwrap_or_default()
 }
 
+pub const GRID_COLUMNS: std::ops::RangeInclusive<usize> = 2..=5;
+pub const GRID_COLORS: [u32; 5] = [0x9ece6a, 0xe0af68, 0xf7768e, 0x7aa2f7, 0xbb9af7];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GridColumn {
+    pub id: String,
+    pub label: String,
+    pub summary: String,
+    pub color: Option<u32>,
+    pub max: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GridItem {
+    pub id: String,
+    pub label: String,
+    pub detail: Option<String>,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grid {
+    pub columns: Vec<GridColumn>,
+    pub items: Vec<GridItem>,
+    pub search: String,
+    pub note: Option<String>,
+}
+
+fn text_of<'a>(row: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match row.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(_) => Err(format!("`{key}` is not text")),
+    }
+}
+
+fn parse_color(text: &str) -> Option<u32> {
+    let digits = text.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok()
+}
+
+impl Grid {
+    pub fn parse(field: &Value) -> Result<Self, String> {
+        let colored = match field.get("colors") {
+            None | Some(Value::Null) => true,
+            Some(Value::Bool(on)) => *on,
+            Some(_) => return Err("`colors` is true or false".into()),
+        };
+        let Some(columns) = field.get("columns").and_then(Value::as_array) else {
+            return Err("a grid needs `columns`".into());
+        };
+        if !GRID_COLUMNS.contains(&columns.len()) {
+            return Err(format!(
+                "a grid has {} to {} columns",
+                GRID_COLUMNS.start(),
+                GRID_COLUMNS.end()
+            ));
+        }
+        let columns = columns
+            .iter()
+            .enumerate()
+            .map(|(i, column)| {
+                Self::parse_column(column, colored, GRID_COLORS[i])
+                    .map_err(|e| format!("column {}: {e}", i + 1))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if has_repeats(columns.iter().map(|c| &c.id).collect()) {
+            return Err("two columns share an id".into());
+        }
+        let column_of = |id: &str| columns.iter().position(|c| c.id == id);
+        let fallback = match text_of(field, "default")? {
+            None => 0,
+            Some(id) => {
+                column_of(id).ok_or_else(|| format!("`default` \"{id}\" is not a column"))?
+            }
+        };
+        let Some(items) = field.get("items").and_then(Value::as_array) else {
+            return Err("a grid needs `items`, each with an id".into());
+        };
+        let items = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let parsed = || -> Result<GridItem, String> {
+                    let id = text_of(item, "id")?.ok_or("needs an id")?;
+                    let column = match text_of(item, "default")? {
+                        None => fallback,
+                        Some(c) => column_of(c)
+                            .ok_or_else(|| format!("`default` \"{c}\" is not a column"))?,
+                    };
+                    Ok(GridItem {
+                        id: id.to_owned(),
+                        label: text_of(item, "label")?.unwrap_or(id).to_owned(),
+                        detail: text_of(item, "detail")?.map(str::to_owned),
+                        column,
+                    })
+                };
+                parsed().map_err(|e| format!("item {}: {e}", i + 1))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if items.is_empty() {
+            return Err("a grid needs `items`, each with an id".into());
+        }
+        if has_repeats(items.iter().map(|item| &item.id).collect()) {
+            return Err("two items share an id".into());
+        }
+        let grid = Self {
+            columns,
+            items,
+            search: text_of(field, "search")?.unwrap_or("Search").to_owned(),
+            note: text_of(field, "note")?.map(str::to_owned),
+        };
+        if !grid.fits(&grid.defaults()) {
+            return Err("the defaults put more items in a column than its `max`".into());
+        }
+        Ok(grid)
+    }
+
+    fn parse_column(column: &Value, colored: bool, color: u32) -> Result<GridColumn, String> {
+        let id = text_of(column, "id")?.ok_or("needs an id")?;
+        let label = text_of(column, "label")?.unwrap_or(id);
+        let color = match (colored, text_of(column, "color")?) {
+            (false, Some(_)) => return Err("`color` on a grid with `colors = false`".into()),
+            (false, None) => None,
+            (true, None) => Some(color),
+            (true, Some(text)) => Some(
+                parse_color(text).ok_or_else(|| format!("`color` \"{text}\" is not #rrggbb"))?,
+            ),
+        };
+        let max = match column.get("max") {
+            None | Some(Value::Null) => None,
+            Some(max) => Some(
+                max.as_u64()
+                    .filter(|&m| m >= 1)
+                    .ok_or("`max` is a whole number from 1")? as usize,
+            ),
+        };
+        Ok(GridColumn {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            summary: text_of(column, "summary")?.unwrap_or(label).to_owned(),
+            color,
+            max,
+        })
+    }
+
+    pub fn defaults(&self) -> Vec<usize> {
+        self.items.iter().map(|item| item.column).collect()
+    }
+
+    pub fn count(&self, picked: &[usize], column: usize) -> usize {
+        picked.iter().filter(|&&c| c == column).count()
+    }
+
+    pub fn fits(&self, picked: &[usize]) -> bool {
+        self.columns
+            .iter()
+            .enumerate()
+            .all(|(c, column)| column.max.is_none_or(|max| self.count(picked, c) <= max))
+    }
+
+    pub fn picked(&self, saved: Option<&Value>) -> Vec<usize> {
+        let picked: Vec<usize> = self
+            .items
+            .iter()
+            .map(|item| {
+                saved
+                    .and_then(|s| s.get(&item.id))
+                    .and_then(Value::as_str)
+                    .and_then(|id| self.columns.iter().position(|c| c.id == id))
+                    .unwrap_or(item.column)
+            })
+            .collect();
+        if self.fits(&picked) {
+            picked
+        } else {
+            self.defaults()
+        }
+    }
+
+    pub fn value(&self, picked: &[usize]) -> Value {
+        Value::Object(
+            self.items
+                .iter()
+                .zip(picked)
+                .map(|(item, &c)| (item.id.clone(), json!(self.columns[c].id)))
+                .collect(),
+        )
+    }
+}
+
 pub fn enabled_by(field: &Value) -> Option<&str> {
     field.get("enabled_by").and_then(Value::as_str)
 }
@@ -520,6 +715,9 @@ pub fn validate(spec: &Value) -> Result<(), String> {
                 "field \"{id}\": a list needs items, each with an id"
             ));
         }
+        if kind == "grid" {
+            Grid::parse(field).map_err(|e| format!("field \"{id}\": {e}"))?;
+        }
         if field.get("required").is_some() && !matches!(kind, "equipment" | "inventory") {
             return Err(format!(
                 "field \"{id}\": only equipment and inventory fields take `required`"
@@ -557,6 +755,9 @@ pub fn default_value(field: &Value) -> Option<Value> {
                     .unwrap_or_default()
             ))
         }
+        "grid" => Grid::parse(field)
+            .ok()
+            .map(|grid| grid.value(&grid.defaults())),
         "list" => Some(Value::Object(
             items(field)
                 .into_iter()
@@ -799,6 +1000,77 @@ mod tests {
         );
         assert_eq!(validate(&prayer), Ok(()));
         assert_eq!(locked(&fields(&prayer)[0]), ["protect_from_melee", "piety"]);
+    }
+
+    #[test]
+    fn checks_grids_and_keeps_picks_within_max() {
+        let grid = |extra: Value| {
+            let mut field = json!({
+                "id": "tasks",
+                "kind": "grid",
+                "default": "do",
+                "columns": [
+                    { "id": "do", "label": "Do" },
+                    { "id": "skip", "color": "#112233" },
+                    { "id": "block", "label": "Block", "summary": "blocked", "max": 1 }
+                ],
+                "items": [
+                    { "id": "a", "label": "A", "detail": "7" },
+                    { "id": "b", "default": "block" }
+                ]
+            });
+            field
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            field
+        };
+        let field = grid(json!({}));
+        assert_eq!(validate(&json!({ "fields": [field.clone()] })), Ok(()));
+        let parsed = Grid::parse(&field).unwrap();
+        assert_eq!(
+            parsed.columns.iter().map(|c| c.color).collect::<Vec<_>>(),
+            [Some(GRID_COLORS[0]), Some(0x112233), Some(GRID_COLORS[2])]
+        );
+        assert_eq!(parsed.columns[1].summary, "skip");
+        assert_eq!(parsed.columns[2].summary, "blocked");
+        assert_eq!(parsed.items[1].label, "b");
+        assert_eq!(
+            default_value(&field),
+            Some(json!({ "a": "do", "b": "block" }))
+        );
+        assert_eq!(
+            parsed.picked(Some(&json!({ "a": "skip", "b": "gone" }))),
+            [1, 2]
+        );
+        assert_eq!(
+            parsed.picked(Some(&json!({ "a": "block", "b": "block" }))),
+            [0, 2]
+        );
+        let plain = Grid::parse(&grid(json!({
+            "colors": false,
+            "columns": [{ "id": "yes" }, { "id": "no" }],
+            "default": "no",
+            "items": [{ "id": "a" }]
+        })))
+        .unwrap();
+        assert!(plain.columns.iter().all(|c| c.color.is_none()));
+        for bad in [
+            json!({ "columns": [{ "id": "only" }] }),
+            json!({ "columns": [{ "id": "a" }, { "id": "a" }] }),
+            json!({ "columns": [{ "id": "a", "color": "green" }, { "id": "b" }] }),
+            json!({ "colors": false, "columns": [{ "id": "a", "color": "#000000" }, { "id": "b" }] }),
+            json!({ "default": "maybe" }),
+            json!({ "items": [] }),
+            json!({ "items": [{ "id": "a" }, { "id": "a" }] }),
+            json!({ "items": [{ "id": "a", "default": "block" }, { "id": "b", "default": "block" }] }),
+            json!({ "columns": [{ "id": "do", "max": 0 }, { "id": "b" }] }),
+        ] {
+            assert!(
+                validate(&json!({ "fields": [grid(bad.clone())] })).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

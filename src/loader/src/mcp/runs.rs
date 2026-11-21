@@ -11,6 +11,7 @@ use std::{
 
 use loader::backend::{Settings, Target};
 
+use crate::agent_runs::{Entry, Record};
 use crate::api::{AgentSession, Api};
 use crate::script::{Host, Launch, Process, Script, ScriptEvent, lock};
 
@@ -49,6 +50,7 @@ pub struct Run {
     pub pid: u32,
     process: Process,
     log: Mutex<Log>,
+    record: Mutex<Record>,
     changed: Condvar,
 }
 
@@ -96,11 +98,19 @@ impl Run {
             log.lines.pop_front();
             log.first += 1;
         }
+        lock(&self.record).write(&Entry::Line { text: line.clone() });
         log.lines.push_back(line);
         self.changed.notify_all();
     }
 
     fn finish(&self, status: Status) {
+        lock(&self.record).write(&Entry::End {
+            error: match &status {
+                Status::Failed(error) => Some(error.clone()),
+                _ => None,
+            },
+            stopped: status == Status::Stopped,
+        });
         lock(&self.log).status = status;
         self.changed.notify_all();
     }
@@ -161,6 +171,7 @@ pub struct Runs {
 }
 
 pub struct Start<'a> {
+    pub title: &'a str,
     pub api: &'a Api,
     pub host: &'a Host,
     pub source: &'a str,
@@ -192,15 +203,20 @@ impl Runs {
                 return Err(error);
             }
         };
+        let (id, pid) = (
+            self.next.fetch_add(1, Ordering::Relaxed) + 1,
+            start.target.client.pid,
+        );
         let run = Arc::new(Run {
-            id: self.next.fetch_add(1, Ordering::Relaxed) + 1,
-            pid: start.target.client.pid,
+            id,
+            pid,
             process: script.process(),
             log: Mutex::new(Log {
                 first: 0,
                 lines: VecDeque::new(),
                 status: Status::Running,
             }),
+            record: Mutex::new(Record::create(id, pid, start.title)),
             changed: Condvar::new(),
         });
         {

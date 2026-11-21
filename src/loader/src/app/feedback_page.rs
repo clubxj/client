@@ -193,7 +193,7 @@ fn session(
 
 #[cfg(test)]
 fn fake_sessions(app: &mut LoaderApp) {
-    app.tab = Tab::Feedback;
+    app.page = Page::Feedback;
     app.feedback.finish(
         Ok(vec![
             session("a", "Firemaking", Some(8), 0),
@@ -207,7 +207,7 @@ fn fake_sessions(app: &mut LoaderApp) {
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("feedback", |app| app.tab = Tab::Feedback),
+        ("feedback", |app| app.page = Page::Feedback),
         ("feedback-sessions", |app| {
             fake_sessions(app);
             app.feedback.scored("a", Ok(8));

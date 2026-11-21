@@ -7,18 +7,67 @@ const SIDEBAR_FONT_SIZE: Pixels = px(15.0);
 const SIDEBAR_INSET: Pixels = px(8.0);
 const LOGO_SIZE: Pixels = px(32.0);
 
-const SIDEBAR_ITEMS: [(Tab, &str, &str); 10] = [
-    (Tab::Clients, "\u{f108}", "client"),
-    (Tab::Store, "\u{f489}", "scripts"),
-    (Tab::Scripts, "\u{f044}", "editor"),
-    (Tab::Sessions, "\u{f04b}", "sessions"),
-    (Tab::Queue, "\u{f0cb}", "queue"),
-    (Tab::Development, "\u{f188}", "development"),
-    (Tab::Terminal, "\u{f120}", "terminal"),
-    (Tab::Accounts, "\u{f007}", "accounts"),
-    (Tab::Feedback, "\u{f075}", "feedback"),
-    (Tab::Settings, "\u{f013}", "settings"),
+const GLOBAL_ITEMS: [(Page, &str, &str); 5] = [
+    (Page::Terminal, "\u{f120}", "terminal"),
+    (Page::Editor(None), "\u{f044}", "editor"),
+    (Page::Accounts, "\u{f007}", "accounts"),
+    (Page::Feedback, "\u{f075}", "feedback"),
+    (Page::Settings, "\u{f013}", "settings"),
 ];
+
+pub(super) type Pick = (Page, Option<u64>);
+
+pub(super) struct Node {
+    pub(super) pick: Pick,
+    pub(super) name: String,
+    label: String,
+    color: Option<Rgba>,
+    dim: bool,
+    pub(super) children: Vec<Node>,
+}
+
+impl Node {
+    fn new(pick: Pick, name: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            pick,
+            name: name.into(),
+            label: label.into(),
+            color: None,
+            dim: false,
+            children: Vec::new(),
+        }
+    }
+
+    fn page(pick: Pick, label: &str) -> Self {
+        let mut name = label.to_owned();
+        if let Some(first) = name.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        Self::new(pick, name, format!("{label}/"))
+    }
+
+    fn contains(&self, pick: Pick) -> bool {
+        self.pick == pick || self.children.iter().any(|child| child.contains(pick))
+    }
+}
+
+fn flatten(nodes: Vec<Node>, guide: &str, current: Pick, rows: &mut Vec<(String, Node)>) {
+    let count = nodes.len();
+    for (i, mut node) in nodes.into_iter().enumerate() {
+        let last = i + 1 == count;
+        let open = node.contains(current);
+        let children = std::mem::take(&mut node.children);
+        rows.push((format!("{guide}{}", if last { "└╴" } else { "├╴" }), node));
+        if open {
+            flatten(
+                children,
+                &format!("{guide}{}", if last { "  " } else { "│ " }),
+                current,
+                rows,
+            );
+        }
+    }
+}
 
 pub(super) struct Chrome {
     pub(super) focus: FocusHandle,
@@ -39,11 +88,10 @@ impl Chrome {
     }
 }
 
-pub(super) fn sidebar_pick(tab: Tab, active_run: Option<u64>) -> (Tab, Option<u64>) {
-    if tab == Tab::Run {
-        (Tab::Run, active_run)
-    } else {
-        (tab, None)
+pub(super) fn sidebar_pick(page: Page, active_run: Option<u64>) -> Pick {
+    match page {
+        Page::Run(_) => (page, active_run),
+        _ => (page, None),
     }
 }
 
@@ -51,7 +99,8 @@ fn sidebar_row(
     id: impl Into<ElementId>,
     selected: bool,
     dim: bool,
-    pieces: Vec<(String, Option<Rgba>)>,
+    guide: String,
+    label: (String, Option<Rgba>),
 ) -> Stateful<Div> {
     let text = if selected {
         theme::BLUE
@@ -87,14 +136,14 @@ fn sidebar_row(
                 .min_w_0()
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .children(pieces.into_iter().enumerate().map(|(i, (piece, color))| {
-                    let last = i > 0;
+                .child(div().flex_none().text_color(theme::COMMENT).child(guide))
+                .child(
                     div()
-                        .when_some(color, |this, color| this.text_color(color))
-                        .when(last, |this| this.min_w_0().truncate())
-                        .when(!last, |this| this.flex_none())
-                        .child(piece)
-                })),
+                        .min_w_0()
+                        .truncate()
+                        .when_some(label.1, |this, color| this.text_color(color))
+                        .child(label.0),
+                ),
         )
 }
 
@@ -197,73 +246,106 @@ impl LoaderApp {
     }
 
     fn pick_page(
-        pick: (Tab, Option<u64>),
+        pick: Pick,
         cx: &mut Context<Self>,
     ) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
         cx.listener(move |app: &mut Self, _: &ClickEvent, _, cx| {
-            if sidebar_pick(app.tab, app.active_run) != pick {
-                app.tab = pick.0;
-                if pick.1.is_some() {
-                    app.active_run = pick.1;
-                }
-            }
-            app.sidebar_open = false;
+            app.go(pick.0, pick.1);
             cx.notify();
         })
     }
 
+    fn run_node(&self, run: &Run) -> Node {
+        let mut node = Node::new(
+            (Page::Run(RunPage::Overview), Some(run.id)),
+            run.title.clone(),
+            format!("{}/", sidebar_name(&run.title)),
+        );
+        node.dim = !run.is_live();
+        let page = |sub: RunPage, label: &str| Node::page((Page::Run(sub), Some(run.id)), label);
+        node.children.push(page(RunPage::Settings, "settings"));
+        node.children.push(page(RunPage::Trackers, "trackers"));
+        if run.store.is_some() {
+            node.children.push(page(RunPage::Feedback, "feedback"));
+        }
+        node
+    }
+
+    pub(super) fn client_node(&self, pid: u32) -> Node {
+        let mut node = Node::new(
+            (Page::Client(pid), None),
+            format!("Client {pid}"),
+            format!("client {pid}/"),
+        );
+        match self.client_state(pid) {
+            nav::ClientState::Unloaded => node.dim = true,
+            nav::ClientState::Running => node.color = Some(theme::GREEN),
+            nav::ClientState::Failed => node.color = Some(theme::RED),
+            nav::ClientState::Idle => {}
+        }
+        let loaded = self.client_loaded(pid);
+        let page = |page: Page, label: &str| Node::page((page, None), label);
+        if self.queue_on(pid).is_some() {
+            node.children.push(page(Page::Queue(pid), "queue"));
+        }
+        if let Some(run) = self.live_run_on(pid) {
+            node.children.push(self.run_node(run));
+        } else if loaded && self.queue_on(pid).is_none() {
+            node.children.push(page(Page::Store(pid), "scripts"));
+            node.children.push(page(Page::Queue(pid), "queue"));
+            node.children.push(page(Page::Editor(Some(pid)), "editor"));
+        }
+        if loaded {
+            node.children
+                .push(page(Page::Development(pid), "development"));
+        }
+        let mut history = page(Page::History(pid), "history");
+        history.children = self
+            .ended_runs_on(pid)
+            .map(|run| self.run_node(run))
+            .collect();
+        if !history.children.is_empty() {
+            node.children.push(history);
+        }
+        node
+    }
+
+    fn sidebar_nodes(&self) -> Vec<Node> {
+        let mut sessions = Node::new((Page::Sessions, None), "Sessions", "\u{f04b} sessions/");
+        sessions.children = self
+            .listed_clients()
+            .into_iter()
+            .map(|pid| self.client_node(pid))
+            .collect();
+        std::iter::once(sessions)
+            .chain(GLOBAL_ITEMS.iter().map(|(page, icon, name)| {
+                Node::new((*page, None), *name, format!("{icon} {name}/"))
+            }))
+            .collect()
+    }
+
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let current = sidebar_pick(self.tab, self.active_run);
+        let current = sidebar_pick(self.page, self.active_run);
         let site_url = self.api.config().site_url.clone();
         let link = !site_url.is_empty();
-        let runs: Vec<(u64, String, bool)> = self
-            .runs
-            .iter()
-            .map(|r| (r.id, sidebar_name(&r.title), !r.is_running()))
-            .collect();
-        let mut rows: Vec<AnyElement> = Vec::new();
-        for (i, (tab, icon, name)) in SIDEBAR_ITEMS.iter().enumerate() {
-            let branch = if i == SIDEBAR_ITEMS.len() - 1 {
-                "└─ "
-            } else {
-                "├─ "
-            };
-            rows.push(
+        let mut flat = Vec::new();
+        flatten(self.sidebar_nodes(), "", current, &mut flat);
+        let rows: Vec<AnyElement> = flat
+            .into_iter()
+            .enumerate()
+            .map(|(i, (guide, node))| {
+                let pick = node.pick;
                 sidebar_row(
-                    ElementId::Name(format!("sidebar-{name}").into()),
-                    current == (*tab, None),
-                    false,
-                    vec![
-                        (branch.to_owned(), Some(theme::COMMENT)),
-                        (format!("{icon} {name}/"), None),
-                    ],
+                    ("sidebar-row", i),
+                    current == pick,
+                    node.dim,
+                    guide,
+                    (node.label, node.color),
                 )
-                .on_click(Self::pick_page((*tab, None), cx))
-                .into_any_element(),
-            );
-            if *tab == Tab::Sessions {
-                for (j, (id, name, ended)) in runs.iter().enumerate() {
-                    let branch = if j == runs.len() - 1 {
-                        "└─ "
-                    } else {
-                        "├─ "
-                    };
-                    rows.push(
-                        sidebar_row(
-                            ElementId::NamedInteger("sidebar-run".into(), *id),
-                            current == (Tab::Run, Some(*id)),
-                            *ended,
-                            vec![
-                                (format!("│  {branch}"), Some(theme::COMMENT)),
-                                (name.clone(), None),
-                            ],
-                        )
-                        .on_click(Self::pick_page((Tab::Run, Some(*id)), cx))
-                        .into_any_element(),
-                    );
-                }
-            }
-        }
+                .on_click(Self::pick_page(pick, cx))
+                .into_any_element()
+            })
+            .collect();
         div()
             .id("sidebar")
             .size_full()
@@ -675,36 +757,37 @@ impl LoaderApp {
     }
 
     fn follow_tab(&mut self) {
-        if self.tab == Tab::Run && self.run().is_none() {
-            self.tab = Tab::Sessions;
+        self.repair_page();
+        if let Some(pid) = self.page_client() {
+            self.focus_client = Some(pid);
         }
         self.repair_log_tab();
-        let followed = (self.tab, self.active_run);
+        let followed = (self.page, self.context_run());
         if followed != self.followed_tab {
+            if self.page == Page::Sessions && self.followed_tab.0 != Page::Sessions && !self.scanning {
+                self.scan();
+            }
             self.followed_tab = followed;
-            self.log_collapsed = matches!(self.tab, Tab::Accounts | Tab::Settings | Tab::Feedback);
-            self.log_tab = match self.tab {
-                Tab::Run | Tab::Sessions | Tab::Scripts | Tab::Store => {
-                    self.active_run.map_or(LogTab::Loader, LogTab::Run)
-                }
-                _ => LogTab::Loader,
-            };
+            self.log_collapsed =
+                matches!(self.page, Page::Accounts | Page::Settings | Page::Feedback);
+            self.log_tab = followed.1.map_or(LogTab::Loader, LogTab::Run);
         }
     }
 
     fn render_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        match self.tab {
-            Tab::Clients => self.render_clients(window, cx),
-            Tab::Store => self.render_store(window, cx),
-            Tab::Sessions => self.render_sessions(window, cx),
-            Tab::Queue => self.render_queue(window, cx),
-            Tab::Run => self.render_run(window, cx),
-            Tab::Scripts => self.render_editor(window, cx),
-            Tab::Development => self.render_development(window, cx),
-            Tab::Terminal => self.render_terminal(window, cx),
-            Tab::Accounts => self.render_accounts(window, cx),
-            Tab::Feedback => self.render_feedback(window, cx),
-            Tab::Settings => self.render_settings(window, cx),
+        match self.page {
+            Page::Sessions => self.render_sessions(window, cx),
+            Page::Client(pid) => self.render_client(pid, window, cx),
+            Page::Store(pid) => self.render_store(pid, window, cx),
+            Page::Queue(pid) => self.render_queue(pid, window, cx),
+            Page::Editor(owner) => self.render_editor(owner, window, cx),
+            Page::Development(pid) => self.render_development(pid, window, cx),
+            Page::History(pid) => self.render_history(pid, window, cx),
+            Page::Run(sub) => self.render_run(sub, window, cx),
+            Page::Terminal => self.render_terminal(window, cx),
+            Page::Accounts => self.render_accounts(window, cx),
+            Page::Feedback => self.render_feedback(window, cx),
+            Page::Settings => self.render_settings(window, cx),
         }
     }
 
@@ -712,7 +795,6 @@ impl LoaderApp {
         let width = window.viewport_size().width;
         let margin = (width * 0.02).clamp(px(8.0), px(16.0));
         self.follow_tab();
-        let busy = self.busy;
         let page = self.render_page(window, cx);
         div()
             .flex()
@@ -722,18 +804,6 @@ impl LoaderApp {
             .min_h_0()
             .relative()
             .p(margin)
-            .when_some(busy, |this, label| {
-                this.child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(theme::ITEM_GAP)
-                        .child(Spinner::new())
-                        .child(label),
-                )
-                .child(widgets::separator())
-            })
             .child(div().flex().flex_col().flex_1().min_h_0().child(page))
     }
 
@@ -868,6 +938,13 @@ impl Render for LoaderApp {
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("signed-out", |app| app.auth = Auth::SignedOut),
-        ("clients-empty", |app| app.tab = Tab::Clients),
+        ("sidebar-tree", sidebar_tree),
     ]
+}
+
+#[cfg(test)]
+fn sidebar_tree(app: &mut LoaderApp) {
+    super::sessions::populated(app);
+    app.page = Page::Run(RunPage::Settings);
+    app.active_run = app.runs.iter().find(|r| r.is_running()).map(|r| r.id);
 }

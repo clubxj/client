@@ -859,9 +859,9 @@ fn dialog<V: 'static>(
         }),
     )
     .tooltip(widgets::tooltip(if can_read {
-        "Fill in the name of the account logged in on the selected client"
+        "Fill in the name of the account logged in on the client you opened last"
     } else {
-        "Select a client with the agent loaded, and log in"
+        "Open a client with the agent loaded in the sidebar, and log in"
     }));
     let decide = div()
         .flex()

@@ -653,7 +653,7 @@ const PIPE: usize = 3;
 impl LoaderApp {
     fn shown_log_tab(&self) -> LogTab {
         match self.log_tab {
-            LogTab::Run(id) if self.run_by_id(id).is_some() => LogTab::Run(id),
+            LogTab::Run(id) if self.context_run() == Some(id) => LogTab::Run(id),
             _ => LogTab::Loader,
         }
     }
@@ -1083,7 +1083,16 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         );
     }
     fn run_with_log(app: &mut LoaderApp) {
-        let mut run = Run::new(7, "Agility course".into(), None, None, None, &app.settings);
+        let target = super::store_page::fake_target(4120);
+        app.targets = vec![target.clone()];
+        let mut run = Run::new(
+            7,
+            "Agility course".into(),
+            None,
+            Some(target),
+            None,
+            &app.settings,
+        );
         for i in 0..120 {
             let (tone, text) = match i % 5 {
                 0 => (Tone::Normal, format!("[walker] Walking to obstacle {i}")),
@@ -1105,16 +1114,16 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
         }
         app.runs.push(run);
         app.active_run = Some(7);
-        app.tab = Tab::Sessions;
+        app.page = Page::Run(RunPage::Overview);
     }
     vec![
         ("output-collapsed", |app| {
             mixed_loader_log(app);
-            app.tab = Tab::Settings;
+            app.page = Page::Settings;
         }),
         ("output-collapsed-run", |app| {
             run_with_log(app);
-            app.tab = Tab::Accounts;
+            app.page = Page::Accounts;
         }),
         ("output-loader-long", |app| {
             mixed_loader_log(app);
