@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::component::{Theme, ThemeMode, ThemeTokens};
 use gpui_kit::{App, FontFallbacks, Hsla, Pixels, Rgba, SharedString, px};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -112,10 +112,10 @@ pub fn install(cx: &mut App, ui_font: UiFont) {
     c.link = BLUE.into();
     c.link_hover = BLUE.into();
     c.link_active = BLUE.into();
-    c.primary = BLUE.into();
-    c.primary_hover = BLUE.into();
-    c.primary_active = BLUE.into();
-    c.primary_foreground = BG_DARK.into();
+    c.primary = BG_HL.into();
+    c.primary_hover = SEL.into();
+    c.primary_active = SEL.into();
+    c.primary_foreground = FG.into();
     c.secondary = BG_HL.into();
     c.secondary_hover = SEL.into();
     c.secondary_active = SEL.into();
@@ -191,6 +191,7 @@ pub fn install(cx: &mut App, ui_font: UiFont) {
     c.yellow = YELLOW.into();
     c.magenta = PURPLE.into();
     c.cyan = CYAN.into();
+    theme.tokens = ThemeTokens::from(&theme.colors);
     set_ui_font(cx, ui_font);
 }
 
