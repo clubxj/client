@@ -2,11 +2,17 @@ use std::{
     collections::{BTreeSet, HashMap},
     io::{Read, Write},
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use eframe::egui;
+use gpui_kit::{
+    Div, ImageSource, ObjectFit, ParentElement, RenderImage, Size, Styled, StyledImage, div, img,
+    px,
+};
 use injector::{Image, ItemIconRequest};
+
+use crate::ui::theme;
 
 const FILE_NAME: &str = "icons.bin";
 const MAGIC: &[u8; 4] = b"VICN";
@@ -33,7 +39,7 @@ impl Key {
 }
 
 enum Entry {
-    Texture(egui::TextureHandle),
+    Image(Arc<RenderImage>),
     Missing,
 }
 
@@ -57,27 +63,13 @@ fn path() -> Option<PathBuf> {
     crate::paths::project_dirs().map(|dirs| dirs.data_dir().join(FILE_NAME))
 }
 
-fn texture(
-    ctx: &egui::Context,
-    key: Key,
-    width: u32,
-    height: u32,
-    rgba: &[u8],
-) -> egui::TextureHandle {
-    let name = match key {
-        Key::Item(item) => format!(
-            "item-{}-{}-{}",
-            item.id,
-            item.quantity,
-            u8::from(item.show_count)
-        ),
-        Key::Sprite(id) => format!("sprite-{id}"),
-    };
-    ctx.load_texture(
-        name,
-        egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba),
-        egui::TextureOptions::NEAREST,
-    )
+fn render_image(width: u32, height: u32, rgba: &[u8]) -> Option<Arc<RenderImage>> {
+    let mut bgra = rgba.to_vec();
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let buffer = image::RgbaImage::from_raw(width, height, bgra)?;
+    Some(Arc::new(RenderImage::new([image::Frame::new(buffer)])))
 }
 
 fn parse(bytes: &[u8]) -> Vec<(Key, u32, u32, Vec<u8>)> {
@@ -136,7 +128,7 @@ fn record(key: Key, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
 }
 
 impl Icons {
-    fn load_file(&mut self, ctx: &egui::Context) {
+    fn load_file(&mut self) {
         if self.loaded_file {
             return;
         }
@@ -148,8 +140,9 @@ impl Icons {
             return;
         };
         for (key, width, height, rgba) in parse(&bytes) {
-            self.known
-                .insert(key, Entry::Texture(texture(ctx, key, width, height, &rgba)));
+            if let Some(image) = render_image(width, height, &rgba) {
+                self.known.insert(key, Entry::Image(image));
+            }
         }
     }
 
@@ -186,13 +179,13 @@ impl Icons {
         }
     }
 
-    pub fn texture(&mut self, ctx: &egui::Context, key: Key) -> Option<&egui::TextureHandle> {
-        self.load_file(ctx);
+    pub fn image(&mut self, key: Key) -> Option<Arc<RenderImage>> {
+        self.load_file();
         if !self.known.contains_key(&key) && !self.in_flight.contains(&key) {
             self.wanted.insert(key);
         }
         match self.known.get(&key) {
-            Some(Entry::Texture(texture)) => Some(texture),
+            Some(Entry::Image(image)) => Some(image.clone()),
             _ => None,
         }
     }
@@ -224,7 +217,6 @@ impl Icons {
 
     pub fn finish(
         &mut self,
-        ctx: &egui::Context,
         now: Instant,
         pictures: Vec<(Key, Option<Image>)>,
         error: Option<String>,
@@ -239,11 +231,12 @@ impl Icons {
                         && (1..=u32::from(u16::MAX)).contains(&image.height)
                 })
                 .and_then(|image| Some((image, image.pixels()?)))
-            {
-                Some((image, rgba)) => {
+                .and_then(|(image, rgba)| {
+                    let picture = render_image(image.width, image.height, &rgba)?;
                     records.push(record(key, image.width, image.height, &rgba));
-                    Entry::Texture(texture(ctx, key, image.width, image.height, &rgba))
-                }
+                    Some(picture)
+                }) {
+                Some(picture) => Entry::Image(picture),
                 None => Entry::Missing,
             };
             self.known.insert(key, entry);
@@ -261,39 +254,37 @@ impl Icons {
     }
 }
 
-pub const SLOT_SIZE: egui::Vec2 = egui::vec2(36.0, 32.0);
-pub const SLOT_CELL: egui::Vec2 = egui::vec2(SLOT_SIZE.x + 8.0, SLOT_SIZE.y + 8.0);
+pub const SLOT_SIZE: Size<f32> = Size {
+    width: 36.0,
+    height: 32.0,
+};
+pub const SLOT_CELL: Size<f32> = Size {
+    width: SLOT_SIZE.width + 8.0,
+    height: SLOT_SIZE.height + 8.0,
+};
 
-pub fn slot(
-    ui: &mut egui::Ui,
-    texture: Option<&egui::TextureHandle>,
-    fallback: &str,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(SLOT_SIZE, egui::Sense::hover());
-    if ui.is_rect_visible(rect) {
-        match texture {
-            Some(texture) => {
-                egui::Image::from_texture(texture).paint_at(ui, rect);
-            }
-            None => {
-                ui.painter().rect_stroke(
-                    rect,
-                    2.0,
-                    ui.visuals().widgets.noninteractive.bg_stroke,
-                    egui::StrokeKind::Inside,
-                );
-                let text = fallback.chars().take(4).collect::<String>();
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    text,
-                    egui::TextStyle::Small.resolve(ui.style()),
-                    ui.visuals().weak_text_color(),
-                );
-            }
-        }
+pub fn slot(picture: Option<Arc<RenderImage>>, fallback: &str) -> Div {
+    let frame = div()
+        .flex_none()
+        .w(px(SLOT_SIZE.width))
+        .h(px(SLOT_SIZE.height))
+        .flex()
+        .items_center()
+        .justify_center();
+    match picture {
+        Some(picture) => frame.child(
+            img(ImageSource::Render(picture))
+                .size_full()
+                .object_fit(ObjectFit::ScaleDown),
+        ),
+        None => frame
+            .border_1()
+            .border_color(theme::BORDER)
+            .rounded(px(2.0))
+            .text_size(theme::SMALL)
+            .text_color(theme::COMMENT)
+            .child(fallback.chars().take(4).collect::<String>()),
     }
-    response
 }
 
 #[cfg(test)]
@@ -337,7 +328,6 @@ mod tests {
 
     #[test]
     fn a_failed_read_waits_before_the_next_and_keeps_what_came() {
-        let ctx = egui::Context::default();
         let mut icons = Icons {
             loaded_file: true,
             ..Default::default()
@@ -347,17 +337,17 @@ mod tests {
         icons.wanted.insert(sprite);
         let now = Instant::now();
         icons.start();
-        icons.finish(&ctx, now, vec![(item, None)], Some("no answer".into()));
+        icons.finish(now, vec![(item, None)], Some("no answer".into()));
         assert!(icons.known.contains_key(&item));
         assert!(!icons.known.contains_key(&sprite), "it is asked for again");
 
-        icons.texture(&ctx, sprite);
+        icons.image(sprite);
         assert!(!icons.due(now));
         assert_eq!(icons.retry_in(now), Some(RETRY_AFTER));
         assert!(icons.due(now + RETRY_AFTER));
 
         icons.start();
-        icons.finish(&ctx, now + RETRY_AFTER, vec![(sprite, None)], None);
+        icons.finish(now + RETRY_AFTER, vec![(sprite, None)], None);
         assert_eq!(icons.retry_in(now + RETRY_AFTER), None);
         assert!(icons.error.is_none());
     }

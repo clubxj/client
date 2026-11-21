@@ -8,7 +8,7 @@ impl LoaderApp {
             ui.label("Sign in to score scripts and report bugs.");
             return;
         }
-        self.fetch_sessions_if_stale(&ctx);
+        self.fetch_sessions_if_stale();
         let running: Vec<String> = self.store_runs().map(|s| s.session_id.clone()).collect();
         let actions = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -17,6 +17,19 @@ impl LoaderApp {
                     .ui(ui, &mut self.settings.include_system_info, &running)
             })
             .inner;
-        self.apply_feedback_actions(&ctx, actions);
+        self.apply_feedback_actions(actions);
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_feedback(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Feedback")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("feedback", |app| app.tab = Tab::Feedback),
+    ]
 }

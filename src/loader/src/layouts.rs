@@ -6,7 +6,16 @@ use serde_json::{Value, json};
 
 use loader::backend::{self, Settings, Target};
 
-use crate::icons::{Icons, Key, SLOT_CELL, SLOT_SIZE};
+use crate::icons::{Icons, Key};
+
+const SLOT_SIZE: egui::Vec2 = egui::vec2(
+    crate::icons::SLOT_SIZE.width,
+    crate::icons::SLOT_SIZE.height,
+);
+const SLOT_CELL: egui::Vec2 = egui::vec2(
+    crate::icons::SLOT_CELL.width,
+    crate::icons::SLOT_CELL.height,
+);
 use crate::theme;
 
 pub const EQUIPMENT_SLOTS: [(usize, &str); 12] = [
@@ -743,14 +752,14 @@ pub struct ScriptLayouts {
 pub type AllLayouts = HashMap<String, ScriptLayouts>;
 
 pub fn load(
-    storage: Option<&dyn eframe::Storage>,
+    storage: &crate::storage::Storage,
     key: &str,
     backup_dir: Option<&std::path::Path>,
 ) -> (AllLayouts, Option<String>) {
-    let Some(text) = storage.and_then(|s| s.get_string(key)) else {
+    let Some(text) = storage.get_string(key) else {
         return (AllLayouts::default(), None);
     };
-    if let Some(layouts) = storage.and_then(|s| eframe::get_value(s, key)) {
+    if let Some(layouts) = storage.get(key) {
         return (layouts, None);
     }
     let kept = backup_dir
@@ -1284,7 +1293,7 @@ fn slot_ui(
         let inner = egui::Rect::from_center_size(rect.center(), SLOT_SIZE);
         match item {
             Some(item) => {
-                match icons.texture(ui.ctx(), item.icon_key()) {
+                match icons.image(item.icon_key()).and(None::<&egui::TextureHandle>) {
                     Some(texture) => {
                         egui::Image::from_texture(texture).paint_at(ui, inner);
                     }
@@ -1377,7 +1386,7 @@ fn paint_sprite(
     tint: egui::Color32,
     name: &str,
 ) {
-    match icons.texture(ui.ctx(), Key::Sprite(sprite)) {
+    match icons.image(Key::Sprite(sprite)).and(None::<&egui::TextureHandle>) {
         Some(texture) => {
             let size = texture
                 .size_vec2()
@@ -2224,27 +2233,11 @@ pub fn picker_ui(
 mod tests {
     use super::*;
 
-    #[derive(Default)]
-    struct Storage(HashMap<String, String>);
-
-    impl eframe::Storage for Storage {
-        fn get_string(&self, key: &str) -> Option<String> {
-            self.0.get(key).cloned()
-        }
-        fn set_string(&mut self, key: &str, value: String) {
-            self.0.insert(key.to_owned(), value);
-        }
-        fn remove_string(&mut self, key: &str) {
-            self.0.remove(key);
-        }
-        fn flush(&mut self) {}
-    }
-
     #[test]
     fn unreadable_layouts_are_kept_and_copied() {
         let dir = std::env::temp_dir().join(format!("volcren-layouts-{}", std::process::id()));
-        let mut storage = Storage::default();
-        let (none, message) = load(Some(&storage), "layouts", Some(&dir));
+        let mut storage = crate::storage::Storage::at(None);
+        let (none, message) = load(&storage, "layouts", Some(&dir));
         assert!(none.is_empty() && message.is_none());
 
         let mut saved = AllLayouts::default();
@@ -2273,15 +2266,16 @@ mod tests {
             spell: None,
             autocast: false,
         });
-        eframe::set_value(&mut storage, "layouts", &saved);
-        let (read, message) = load(Some(&storage), "layouts", Some(&dir));
+        storage.set("layouts", &saved);
+        let (read, message) = load(&storage, "layouts", Some(&dir));
         assert_eq!(read, saved);
         assert!(message.is_none());
 
-        let text = storage.0["layouts"].replace("prayers:[", "prayers:5,old:[");
-        assert_ne!(text, storage.0["layouts"]);
-        storage.0.insert("layouts".into(), text.clone());
-        let (read, message) = load(Some(&storage), "layouts", Some(&dir));
+        let saved_text = storage.get_string("layouts").unwrap().to_owned();
+        let text = saved_text.replace("prayers:[", "prayers:5,old:[");
+        assert_ne!(text, saved_text);
+        storage.set_string("layouts", text.clone());
+        let (read, message) = load(&storage, "layouts", Some(&dir));
         assert!(read.is_empty());
         assert!(message.unwrap().contains("left as they were"));
         let copies: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();

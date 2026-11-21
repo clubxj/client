@@ -325,3 +325,20 @@ impl LoaderApp {
             });
     }
 }
+
+impl LoaderApp {
+    pub(super) fn render_output(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .flex_none()
+            .h(px(24.0))
+            .border_t_1()
+            .border_color(crate::ui::theme::BORDER)
+            .child(not_ported("Output"))
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    Vec::new()
+}

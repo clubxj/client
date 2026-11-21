@@ -5,7 +5,8 @@ use eframe::egui;
 use injector::manifest::Manifest;
 use serde_json::Value;
 
-use super::{Event, LoaderApp, PendingStart, Run};
+use super::{Event, LoaderApp, PendingStart, Run, Tab, not_ported};
+use gpui_kit::{AnyElement, Context, Window};
 use crate::api::models::ScriptManifest;
 use crate::api::{Api, ApiError, Me, StoreScript};
 use crate::libs::Lib;
@@ -159,7 +160,7 @@ impl LoaderApp {
         self.queue_page.selected = index;
     }
 
-    fn entry_form(&mut self, ctx: &egui::Context) {
+    fn entry_form(&mut self) {
         let Some(index) = self.queue_page.selected else {
             return;
         };
@@ -189,7 +190,7 @@ impl LoaderApp {
             }
             None if !self.queue_page.fetching.contains(&script_id) => {
                 self.queue_page.fetching.insert(script_id.clone());
-                self.api_job(ctx, move |api| Event::QueueManifest {
+                self.api_job(move |api| Event::QueueManifest {
                     result: api.manifest(&script_id),
                     script_id,
                 });
@@ -236,7 +237,7 @@ impl LoaderApp {
             return;
         }
         if !self.store.loaded && !self.store.loading && self.store.error.is_none() {
-            self.fetch_scripts(&ctx);
+            self.fetch_scripts();
         }
         self.running_queues_ui(ui);
         ui.add_space(8.0);
@@ -246,7 +247,7 @@ impl LoaderApp {
         ui.add_space(8.0);
         self.add_entry_ui(ui);
         ui.separator();
-        self.entry_form(&ctx);
+        self.entry_form();
         egui::ScrollArea::vertical()
             .id_salt("queue")
             .auto_shrink([false, false])
@@ -449,7 +450,7 @@ impl LoaderApp {
             self.select_entry(Some(last));
         }
         if let Some(target) = start {
-            self.check_queue(&ctx, target.client.pid);
+            self.check_queue(target.client.pid);
         }
     }
 
@@ -589,7 +590,7 @@ impl LoaderApp {
         }
     }
 
-    fn check_queue(&mut self, ctx: &egui::Context, pid: u32) {
+    fn check_queue(&mut self, pid: u32) {
         self.sync_queue_form();
         self.queue_page.checking = Some(pid);
         let ids: Vec<String> = self
@@ -599,7 +600,7 @@ impl LoaderApp {
             .iter()
             .map(|e| e.script_id.clone())
             .collect();
-        self.api_job(ctx, move |api| Event::QueueChecked {
+        self.api_job(move |api| Event::QueueChecked {
             pid,
             entry: false,
             result: check(&api, &ids),
@@ -608,7 +609,6 @@ impl LoaderApp {
 
     pub(super) fn queue_checked(
         &mut self,
-        ctx: &egui::Context,
         pid: u32,
         entry: bool,
         result: Result<Box<Check>, ApiError>,
@@ -635,7 +635,7 @@ impl LoaderApp {
             }
         }
         if entry {
-            self.start_checked_entry(ctx, pid, &check);
+            self.start_checked_entry(pid, &check);
         } else {
             self.queue_page.checking = None;
             self.prompt_queue(pid, &check);
@@ -729,7 +729,7 @@ impl LoaderApp {
                     self.queue_runners
                         .push(Runner::new(prompt.queue, pid, prompt.approved));
                     self.script_info("Queue started.");
-                    self.start_queue_entry(ctx, pid);
+                    self.start_queue_entry(pid);
                 }
             }
             Some(false) => self.queue_page.prompt = None,
@@ -737,7 +737,7 @@ impl LoaderApp {
         }
     }
 
-    fn start_queue_entry(&mut self, ctx: &egui::Context, pid: u32) {
+    fn start_queue_entry(&mut self, pid: u32) {
         let Some(runner) = self.queue_runners.iter_mut().find(|r| r.pid == pid) else {
             return;
         };
@@ -746,14 +746,14 @@ impl LoaderApp {
             return;
         };
         let ids = vec![entry.script_id.clone()];
-        self.api_job(ctx, move |api| Event::QueueChecked {
+        self.api_job(move |api| Event::QueueChecked {
             pid,
             entry: true,
             result: check(&api, &ids),
         });
     }
 
-    fn start_checked_entry(&mut self, ctx: &egui::Context, pid: u32, check: &Check) {
+    fn start_checked_entry(&mut self, pid: u32, check: &Check) {
         let Some(runner) = self
             .queue_runners
             .iter()
@@ -785,7 +785,7 @@ impl LoaderApp {
                 return match on_change {
                     OnChange::Skip => {
                         self.script_info(format!("Skipping it: {change}"));
-                        self.next_queue_entry(ctx, pid);
+                        self.next_queue_entry(pid);
                     }
                     OnChange::Stop => self.end_queue(pid, format!("Queue stopped: {change}")),
                 };
@@ -827,9 +827,7 @@ impl LoaderApp {
             crate::form::Outcome::Submitted(values) => values,
             _ => Value::Object(Default::default()),
         };
-        self.start_store_script(
-            ctx,
-            PendingStart {
+        self.start_store_script(PendingStart {
                 script: ready.script,
                 target,
                 replaces: None,
@@ -863,25 +861,25 @@ impl LoaderApp {
         }
     }
 
-    fn next_queue_entry(&mut self, ctx: &egui::Context, pid: u32) {
+    fn next_queue_entry(&mut self, pid: u32) {
         let Some(runner) = self.queue_runners.iter_mut().find(|r| r.pid == pid) else {
             return;
         };
         if !runner.finishing && runner.advance() {
-            self.start_queue_entry(ctx, pid);
+            self.start_queue_entry(pid);
         } else {
-            self.finish_queue(ctx, pid, "Queue finished.".into());
+            self.finish_queue(pid, "Queue finished.".into());
         }
     }
 
-    fn finish_queue(&mut self, ctx: &egui::Context, pid: u32, message: String) {
+    fn finish_queue(&mut self, pid: u32, message: String) {
         let Some(runner) = self.queue_runners.iter().find(|r| r.pid == pid) else {
             return;
         };
         if runner.queue.when_finished == WhenFinished::StayLoggedIn {
             return self.end_queue_info(pid, message);
         }
-        match self.start_logout(ctx, pid) {
+        match self.start_logout(pid) {
             Ok(run) => {
                 self.script_info(format!("{message} Logging out."));
                 if let Some(runner) = self.queue_runners.iter_mut().find(|r| r.pid == pid) {
@@ -892,7 +890,7 @@ impl LoaderApp {
         }
     }
 
-    fn start_logout(&mut self, ctx: &egui::Context, pid: u32) -> Result<u64, String> {
+    fn start_logout(&mut self, pid: u32) -> Result<u64, String> {
         let target = self
             .targets
             .iter()
@@ -901,7 +899,7 @@ impl LoaderApp {
             .ok_or("its client is gone")?;
         let root = session::cache_root().ok_or("no cache folder")?;
         let script = Script::start(
-            &self.script_host(ctx),
+            &self.script_host(),
             LOGOUT_SOURCE,
             Some(&root.join("queue-logout.luau")),
             Some(&root.join("lib")),
@@ -933,18 +931,18 @@ impl LoaderApp {
         self.script_error(message);
     }
 
-    pub(super) fn drive_queues(&mut self, ctx: &egui::Context) {
+    pub(super) fn drive_queues(&mut self) {
         if self.queue_runners.is_empty() {
             return;
         }
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        self.wake.wake_after(std::time::Duration::from_secs(1));
         let pids: Vec<u32> = self.queue_runners.iter().map(|r| r.pid).collect();
         for pid in pids {
-            self.drive_queue(ctx, pid);
+            self.drive_queue(pid);
         }
     }
 
-    fn drive_queue(&mut self, ctx: &egui::Context, pid: u32) {
+    fn drive_queue(&mut self, pid: u32) {
         let Some(runner) = self.queue_runners.iter().find(|r| r.pid == pid) else {
             return;
         };
@@ -977,15 +975,15 @@ impl LoaderApp {
                         runner.resume = breaks.or(runner.resume.take());
                     }
                     return match outcome {
-                        Outcome::Done => self.next_queue_entry(ctx, pid),
+                        Outcome::Done => self.next_queue_entry(pid),
                         Outcome::Blocked => {
                             self.script_info(format!(
                                 "{title} couldn't go on, so the queue moves on."
                             ));
-                            self.next_queue_entry(ctx, pid);
+                            self.next_queue_entry(pid);
                         }
                         Outcome::Failed => {
-                            self.finish_queue(ctx, pid, format!("Queue stopped: {title} failed."))
+                            self.finish_queue(pid, format!("Queue stopped: {title} failed."))
                         }
                         Outcome::Stopped => {
                             self.end_queue(pid, format!("Queue stopped: {title} was stopped."))
@@ -1187,4 +1185,17 @@ mod tests {
                 .contains("no longer available")
         );
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_queue(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Queue")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("queue", |app| app.tab = Tab::Queue),
+    ]
 }

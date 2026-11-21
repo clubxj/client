@@ -35,7 +35,7 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[derive(Clone)]
 pub struct Host {
-    pub ctx: egui::Context,
+    pub wake: crate::wake::Wake,
     pub accounts: Arc<RwLock<Accounts>>,
     pub whitelist: Arc<RwLock<Whitelist>>,
     pub prices_url: String,
@@ -287,7 +287,7 @@ impl Script {
         let process = Process::new(child);
         let stdin = Arc::new(Mutex::new(stdin));
         let (tx, output) = channel();
-        let repaint_ctx = host.ctx.clone();
+        let wake = host.wake.clone();
         let stats = process.stats.clone();
         let (host, requests) = (host.clone(), stdin.clone());
         thread::spawn(move || {
@@ -316,16 +316,16 @@ impl Script {
                 if let Some((answer, what)) = host.lookup(&line) {
                     if let Err(error) = reply(&requests, &answer, what) {
                         let _ = tx.send(format!("{}{error}", injector::form::WARN_PREFIX));
-                        repaint_ctx.request_repaint();
+                        wake.wake();
                     }
                     continue;
                 }
                 if tx.send(line).is_err() {
                     break;
                 }
-                repaint_ctx.request_repaint();
+                wake.wake();
             }
-            repaint_ctx.request_repaint();
+            wake.wake();
         });
 
         let stderr = Arc::new(Mutex::new(Vec::new()));
@@ -555,7 +555,7 @@ mod tests {
 
     fn host(whitelist: Vec<String>, accounts: Vec<crate::accounts::Entry>) -> Host {
         Host {
-            ctx: egui::Context::default(),
+            wake: crate::wake::Wake::default(),
             accounts: Arc::new(RwLock::new(Accounts::with_entries(accounts))),
             whitelist: Arc::new(RwLock::new(Whitelist::new(
                 whitelist,

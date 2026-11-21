@@ -16,3 +16,16 @@ impl LoaderApp {
         }
     }
 }
+
+impl LoaderApp {
+    pub(super) fn render_terminal(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Terminal")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("terminal", |app| app.tab = Tab::Terminal),
+    ]
+}

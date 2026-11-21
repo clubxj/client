@@ -59,3 +59,11 @@ impl LoaderApp {
         self.run_target_client()
     }
 }
+
+pub(super) fn not_ported(name: &str) -> AnyElement {
+    div()
+        .p(px(8.0))
+        .text_color(crate::ui::theme::COMMENT)
+        .child(format!("{name}: not ported to GPUI yet"))
+        .into_any_element()
+}

@@ -124,7 +124,7 @@ impl LoaderApp {
             ui.add_space(8.0);
         });
         match decision {
-            Some(true) => self.confirm_store_script(ctx, prompt.start),
+            Some(true) => self.confirm_store_script(prompt.start),
             Some(false) => {}
             None => self.start_prompt = Some(prompt),
         }
@@ -157,10 +157,25 @@ impl LoaderApp {
                 if let Some(revision) = script.revision {
                     self.confirmed.confirm(&script.id, revision);
                 }
-                self.start_store_script(ctx, start);
+                self.start_store_script(start);
             }
             Some(false) => {}
             None => self.warning = Some(start),
         }
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_start_prompt(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
+
+    pub(super) fn render_warning(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    Vec::new()
 }

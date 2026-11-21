@@ -49,19 +49,15 @@ struct Saved {
 }
 
 fn saved() -> Saved {
-    let map: HashMap<String, String> = eframe::storage_dir(crate::APP_ID)
-        .and_then(|dir| std::fs::read_to_string(dir.join("app.ron")).ok())
-        .and_then(|text| ron::from_str(&text).ok())
-        .unwrap_or_default();
-    fn value<T: DeserializeOwned>(map: &HashMap<String, String>, key: &str) -> Option<T> {
-        map.get(key).and_then(|text| ron::from_str(text).ok())
-    }
-    let mut settings: Settings = value(&map, eframe::APP_KEY).unwrap_or_default();
+    let storage = crate::storage::Storage::open();
+    let mut settings: Settings = storage.get(crate::storage::SETTINGS_KEY).unwrap_or_default();
     settings.fill_missing(crate::update::is_dev_install());
     Saved {
         settings,
-        cursor: value(&map, crate::app::CURSOR_KEY).unwrap_or(crate::app::DEFAULT_CURSOR),
-        whitelist: value(&map, crate::app::HTTP_WHITELIST_KEY).unwrap_or_default(),
+        cursor: storage
+            .get(crate::app::CURSOR_KEY)
+            .unwrap_or(crate::app::DEFAULT_CURSOR),
+        whitelist: storage.get(crate::app::HTTP_WHITELIST_KEY).unwrap_or_default(),
     }
 }
 
@@ -487,7 +483,7 @@ fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
     let lib = context.lib(&saved.settings)?;
     let config = api.config();
     let host = Host {
-        ctx: eframe::egui::Context::default(),
+        wake: crate::wake::Wake::default(),
         accounts: Arc::new(RwLock::new(crate::accounts::Accounts::load())),
         whitelist: Arc::new(RwLock::new(crate::whitelist::Whitelist::new(
             saved.whitelist,

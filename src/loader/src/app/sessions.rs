@@ -165,7 +165,20 @@ impl LoaderApp {
         }
         if let Some(id) = restart {
             let ctx = ui.ctx().clone();
-            self.restart_run(&ctx, id);
+            self.restart_run(id);
         }
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_sessions(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Sessions")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("sessions", |app| app.tab = Tab::Sessions),
+    ]
 }

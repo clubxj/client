@@ -130,7 +130,7 @@ impl LoaderApp {
                         restart: None,
                     })
                 }
-                None => self.run_file(ui.ctx(), self.script_file.clone(), target, None, None),
+                None => self.run_file(self.script_file.clone(), target, None, None),
             }
         }
         let (pause_icon, pause_text) = run_pause_label(paused);
@@ -620,12 +620,29 @@ impl LoaderApp {
             file.text = disk;
         }
         match restart {
-            Some(id) => self.rerun_file(ctx, id, file),
+            Some(id) => self.rerun_file(id, file),
             None => {
                 self.script_file = file.clone();
                 let target = self.run_target_client();
-                self.run_file(ctx, file, target.as_ref(), None, None);
+                self.run_file(file, target.as_ref(), None, None);
             }
         }
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_editor(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Editor")
+    }
+
+    pub(super) fn render_reload_prompt(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<AnyElement> {
+        None
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("editor", |app| app.tab = Tab::Scripts),
+    ]
 }

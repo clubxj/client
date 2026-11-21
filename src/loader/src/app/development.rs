@@ -219,8 +219,8 @@ pub(super) fn inventory_items_ui(
 ) {
     let mut icon = |ui: &mut egui::Ui, id: i32, quantity: i32| {
         let key = crate::icons::Key::item(id, quantity, inspector.is_stackable(id));
-        let texture = icons.texture(ui.ctx(), key);
-        crate::icons::slot(ui, texture, inspector.item_name(id))
+        icons.image(key);
+        ui.label(inspector.item_name(id))
     };
     let mut line = |ui: &mut egui::Ui, id: i32, quantity: i32, color: egui::Color32| {
         ui.horizontal(|ui| {
@@ -252,14 +252,14 @@ pub(super) fn inventory_items_ui(
     let columns = if snapshot.items.len() == 28 {
         4
     } else {
-        ((ui.available_width() / (crate::icons::SLOT_SIZE.x + 8.0)) as usize).max(1)
+        ((ui.available_width() / crate::icons::SLOT_CELL.width) as usize).max(1)
     };
     egui::Grid::new("inventory_slots")
         .spacing(egui::vec2(8.0, 6.0))
         .show(ui, |ui| {
             for (i, item) in snapshot.items.iter().enumerate() {
                 if item.id < 0 {
-                    crate::icons::slot(ui, None, "")
+                    ui.label("")
                         .on_hover_text(format!("Slot {}: empty", item.slot));
                 } else {
                     icon(ui, item.id, item.quantity).on_hover_text(format!(
@@ -448,7 +448,7 @@ impl LoaderApp {
                 if ui.add_enabled(enabled, egui::Button::new(label)).clicked()
                     && let Some(target) = target.clone()
                 {
-                    self.read_state(&ctx, target, read);
+                    self.read_state(target, read);
                 }
             }
         });
@@ -511,7 +511,7 @@ impl LoaderApp {
             });
 
         if let (Some(read), Some(target)) = (read, target) {
-            self.read_state(&ctx, target, read);
+            self.read_state(target, read);
         }
     }
 
@@ -530,7 +530,7 @@ impl LoaderApp {
         refresh |=
             !self.widgets.has_read() && !self.widgets.reading() && self.widgets.error.is_none();
         if refresh && let Some(target) = self.selected_loaded_target().cloned() {
-            self.refresh_widgets(&ctx, target);
+            self.refresh_widgets(target);
         }
         if let Some(error) = &self.widgets.error {
             error_label(ui, error);
@@ -653,7 +653,7 @@ impl LoaderApp {
             }
             action = rows_buttons(ui, inspector.kept() == 0, inspector.pipe.as_ref());
         });
-        self.rows_action(ui.ctx(), action, "script runs", "scripts.txt", |app| {
+        self.rows_action(action, "script runs", "scripts.txt", |app| {
             &mut app.script_inspector
         });
         let inspector = &mut self.script_inspector;
@@ -721,7 +721,7 @@ impl LoaderApp {
         if load_names {
             inspector.loading_names = true;
             inspector.names_error = None;
-            self.background(ui.ctx(), |_| {
+            self.background(|_| {
                 Event::ScriptNames(crate::script_names::Names::download())
             });
         }
@@ -747,7 +747,7 @@ impl LoaderApp {
             }
             action = rows_buttons(ui, inspector.kept() == 0, inspector.pipe.as_ref());
         });
-        self.rows_action(ui.ctx(), action, "var changes", "vars.txt", |app| {
+        self.rows_action(action, "var changes", "vars.txt", |app| {
             &mut app.vars
         });
         let inspector = &mut self.vars;
@@ -829,7 +829,7 @@ impl LoaderApp {
             }
             action = rows_buttons(ui, monitor.kept() == 0, monitor.pipe.as_ref());
         });
-        self.rows_action(ui.ctx(), action, "packets", "packets.txt", |app| {
+        self.rows_action(action, "packets", "packets.txt", |app| {
             &mut app.packets
         });
         let monitor = &mut self.packets;
@@ -996,4 +996,17 @@ impl LoaderApp {
         ui.add_space(6.0);
         target.cloned()
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_development(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Development")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("development", |app| app.tab = Tab::Development),
+    ]
 }

@@ -30,7 +30,7 @@ impl LoaderApp {
                     .add_enabled(self.busy.is_none(), egui::Button::new("Refresh"))
                     .clicked()
                 {
-                    self.scan(&ctx);
+                    self.scan();
                 }
             });
         });
@@ -333,10 +333,10 @@ impl LoaderApp {
             && let Some(target) = self.selected_target().cloned()
         {
             if set_name {
-                self.set_display_name(&ctx, target.clone());
+                self.set_display_name(target.clone());
             }
             if changed {
-                self.set_cursor(&ctx, target);
+                self.set_cursor(target);
             }
         }
     }
@@ -388,9 +388,9 @@ impl LoaderApp {
             }
         });
         match (action, target) {
-            (Some(ClientAction::Load), Some(target)) => self.load(&ctx, target),
-            (Some(ClientAction::Unload), Some(target)) => self.unload(&ctx, target),
-            (Some(ClientAction::Console), Some(target)) => self.console(&ctx, target),
+            (Some(ClientAction::Load), Some(target)) => self.load(target),
+            (Some(ClientAction::Unload), Some(target)) => self.unload(target),
+            (Some(ClientAction::Console), Some(target)) => self.console(target),
             _ => {}
         }
     }
@@ -427,4 +427,17 @@ impl LoaderApp {
         self.selected = Some(keys[next].clone());
         self.run_target.clone_from(&self.selected);
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_clients(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Clients")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("clients", |app| app.tab = Tab::Clients),
+    ]
 }

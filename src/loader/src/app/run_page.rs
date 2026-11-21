@@ -131,13 +131,13 @@ impl LoaderApp {
             crate::theme::status_dot(ui, state.color());
             ui.label(egui::RichText::new(state.label()).color(state.color()));
         });
-        self.answer_form(ui.ctx(), run_id, outcome);
+        self.answer_form(run_id, outcome);
         if update {
             self.push_form_update();
         }
         if restart {
             let ctx = ui.ctx().clone();
-            self.restart_run(&ctx, run_id);
+            self.restart_run(run_id);
             return;
         }
         ui.add_space(16.0);
@@ -282,10 +282,10 @@ impl LoaderApp {
                 })
             });
         if let Some((kind, quick)) = read {
-            self.read_layout(ui.ctx(), kind, quick);
+            self.read_layout(kind, quick);
         }
         if !unknown.is_empty() {
-            self.describe_items(ui.ctx(), unknown);
+            self.describe_items(unknown);
         }
     }
 
@@ -484,7 +484,7 @@ impl LoaderApp {
         let Some(session_id) = self.run().and_then(|r| r.session_id().map(str::to_owned)) else {
             return;
         };
-        self.fetch_sessions_if_stale(&ctx);
+        self.fetch_sessions_if_stale();
         let Some(session) = self
             .feedback
             .sessions
@@ -508,6 +508,17 @@ impl LoaderApp {
         let draft = self.feedback.draft(&session_id);
         let actions =
             feedback::session_ui(ui, &session, draft, &mut self.settings.include_system_info);
-        self.apply_feedback_actions(&ctx, actions);
+        self.apply_feedback_actions(actions);
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_run(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Run")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    Vec::new()
 }

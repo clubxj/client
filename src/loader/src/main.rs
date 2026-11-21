@@ -34,46 +34,39 @@ mod session;
 mod store;
 mod terminal;
 mod theme;
+mod ui;
 mod transports;
 mod update;
 mod vars;
 mod whitelist;
 mod widgets;
+mod storage;
+mod wake;
 mod workspace;
 mod xp;
 
-use eframe::egui;
-
 pub const APP_ID: &str = "Loader";
 
-fn main() -> eframe::Result {
+fn main() {
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         let _instance = update::Instance::hold();
         mcp::serve();
-        return Ok(());
+        return;
     }
     #[cfg(windows)]
     if update::finish_if_asked() {
-        return Ok(());
+        return;
     }
     let instance = update::Instance::hold();
     if instance.alone() {
         update::cleanup();
     }
     transports::start();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_app_id(APP_ID)
-            .with_inner_size([900.0, 640.0])
-            .with_min_inner_size([520.0, 300.0]),
-        ..Default::default()
-    };
-    let result = eframe::run_native(
-        "Volcren",
-        options,
-        Box::new(|cc| Ok(Box::new(app::LoaderApp::new(cc, instance)))),
-    );
+    let storage = storage::Storage::open();
+    gpui_kit::application().run(move |cx| {
+        gpui_kit::init(cx);
+        app::LoaderApp::open_window(cx, storage, instance).expect("the window opens");
+    });
     #[cfg(not(windows))]
     update::relaunch_after_exit();
-    result
 }

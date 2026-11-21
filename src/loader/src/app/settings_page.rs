@@ -127,3 +127,16 @@ impl LoaderApp {
         }
     }
 }
+
+impl LoaderApp {
+    pub(super) fn render_settings(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Settings")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("settings", |app| app.tab = Tab::Settings),
+    ]
+}

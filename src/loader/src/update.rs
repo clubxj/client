@@ -114,6 +114,11 @@ impl Progress {
 pub struct Instance(Option<fs::File>);
 
 impl Instance {
+    #[cfg(test)]
+    pub fn none() -> Self {
+        Self(None)
+    }
+
     pub fn hold() -> Self {
         let path = crate::paths::project_dirs().map(|dirs| dirs.data_dir().join("loader.lock"));
         path.map_or(Self(None), |path| Self::at(&path))

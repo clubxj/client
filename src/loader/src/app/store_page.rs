@@ -14,14 +14,14 @@ impl LoaderApp {
                 _ => {
                     ui.label("Sign in with Discord to browse and run scripts.");
                     if ui.button("Sign in").clicked() {
-                        self.start_sign_in(&ctx);
+                        self.start_sign_in();
                     }
                 }
             }
             return;
         }
         if !self.store.loaded && !self.store.loading && self.store.error.is_none() {
-            self.fetch_scripts(&ctx);
+            self.fetch_scripts();
         }
         let target = self.run_target_ui(ui);
         let block = self.run_block(target.as_ref());
@@ -32,22 +32,22 @@ impl LoaderApp {
         match self.store.ui(ui, me, block.as_deref(), has_site) {
             Some(store::Action::OpenSite(path)) => open_site(&self.api.config().site_url, &path),
             Some(store::Action::Refresh) => {
-                self.fetch_scripts(&ctx);
-                self.api_job(&ctx, |api| Event::Me(api.me()));
+                self.fetch_scripts();
+                self.api_job(|api| Event::Me(api.me()));
             }
             Some(store::Action::Run(script)) => {
                 if let Some(target) = target {
-                    self.open_store_script(&ctx, *script, target);
+                    self.open_store_script(*script, target);
                 }
             }
             Some(store::Action::Redeem(code)) => {
                 self.store.redeeming = true;
                 self.store.redeem_result = None;
-                self.api_job(&ctx, move |api| Event::Redeemed(api.redeem(&code)));
+                self.api_job(move |api| Event::Redeemed(api.redeem(&code)));
             }
             Some(store::Action::RemoveGrant(script)) => {
                 let id = script.id.clone();
-                self.api_job(&ctx, move |api| Event::GrantRemoved {
+                self.api_job(move |api| Event::GrantRemoved {
                     result: api.remove_grant(&id),
                     id,
                 });
@@ -55,4 +55,17 @@ impl LoaderApp {
             None => {}
         }
     }
+}
+
+impl LoaderApp {
+    pub(super) fn render_store(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
+        not_ported("Scripts")
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("store", |app| app.tab = Tab::Store),
+    ]
 }
