@@ -71,6 +71,12 @@ jobs:
                   sudo dpkg -i ~/mingw-debs/*.deb
                   x86_64-w64-mingw32-g++ --version | head -1
 
+            - name: Install GPUI libraries
+              if: matrix.name == 'linux'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y --no-install-recommends libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-x11-dev libx11-xcb-dev
+
             - name: Install Rust
               id: rust
               run: |
