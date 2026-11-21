@@ -3,9 +3,15 @@ name = "injector"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "injector"
+path = "src/main.rs"
+required-features = ["agent"]
+
 [features]
-default = ["embedded-lib"]
+default = ["embedded-lib", "agent"]
 embedded-lib = []
+agent = []
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }

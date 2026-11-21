@@ -19,8 +19,8 @@ To bump: set `LUAU_VERSION` in `release.yml` to the new tag, then set `LUAU_UBUN
 
 ## Bucket layout (public `client`)
 
-- `<version>/volcren-windows-<version>.msi`, `<version>/volcren-linux-<version>.tar.gz` (folder `volcren/` with `loader`, `injector`, `injector.exe`, `agent.dll`, `luau-analyze`); cached a year.
-- The tarball must hold exactly the files in `FILES` (`src/loader/src/update/archive.rs`): a Linux loader rejects an update with a file it doesn't know, so adding one strands older installs on a manual install.
+- `<version>/volcren-windows-<version>.msi`, `<version>/volcren-linux-<version>.tar.gz` (folder `volcren/` with `loader`, `injector.exe`, `luau-analyze`); cached a year.
+- The tarball must hold exactly the files in `FILES` (`src/loader/src/update/archive.rs`): a Linux loader rejects an update with a file it doesn't know or without one it expects, so adding or removing one strands older installs on a manual install.
 - `latest.signed.json` `{manifest, signature}`: what the loader reads. One object so a signature can't pair with another manifest. Uploaded after the packages.
 - `latest.json`: same manifest unsigned, for the webapp's install page; nothing installs from it. Uploaded last.
 - Manifest: `version`, `build`, `api_version` (from `API_VERSION` in `src/loader/src/api/models.rs`), and per-OS `name`, `path`, `sha256`. One signature covers all packages through the hashes.

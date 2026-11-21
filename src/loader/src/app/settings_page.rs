@@ -15,7 +15,6 @@ const LOG_LINES_STEP: f64 = 50.0;
 
 #[derive(Clone, Copy)]
 enum PathField {
-    Dll,
     LibDir,
     Helper,
 }
@@ -23,7 +22,6 @@ enum PathField {
 impl PathField {
     fn label(self) -> &'static str {
         match self {
-            Self::Dll => "agent DLL",
             Self::LibDir => "lib folder",
             Self::Helper => "injector.exe",
         }
@@ -34,20 +32,19 @@ impl PathField {
             Self::LibDir => Some(
                 "Optional. Scripts you run from a file read require(\"../lib/...\") from this folder, e.g. your lib checkout. Store scripts always use the downloaded lib.",
             ),
-            Self::Dll | Self::Helper => None,
+            Self::Helper => None,
         }
     }
 
     fn placeholder(self) -> &'static str {
         match self {
             Self::LibDir => "empty: the lib beside the script, or the built-in one",
-            Self::Dll | Self::Helper => "",
+            Self::Helper => "",
         }
     }
 
     fn of(self, settings: &mut Settings) -> &mut String {
         match self {
-            Self::Dll => &mut settings.dll,
             Self::LibDir => &mut settings.lib_dir,
             Self::Helper => &mut settings.helper,
         }
@@ -55,7 +52,6 @@ impl PathField {
 
     fn browse(self, path: &mut String) {
         match self {
-            Self::Dll => pick_file(path, "DLL", "dll"),
             Self::LibDir => pick_folder(path),
             Self::Helper => pick_file(path, "Executable", "exe"),
         }
@@ -63,9 +59,9 @@ impl PathField {
 
     fn shown() -> Vec<Self> {
         if cfg!(windows) {
-            vec![Self::Dll, Self::LibDir]
+            vec![Self::LibDir]
         } else {
-            vec![Self::Dll, Self::LibDir, Self::Helper]
+            vec![Self::LibDir, Self::Helper]
         }
     }
 }
@@ -75,7 +71,6 @@ const UI_FONT_TOOLTIP: &str = "The font of the pages, buttons and labels. The ou
 
 #[derive(Clone)]
 struct Inputs {
-    dll: Entity<InputState>,
     lib_dir: Entity<InputState>,
     helper: Entity<InputState>,
     log_lines: Entity<InputState>,
@@ -85,7 +80,6 @@ struct Inputs {
 impl Inputs {
     fn path(&self, field: PathField) -> &Entity<InputState> {
         match field {
-            PathField::Dll => &self.dll,
             PathField::LibDir => &self.lib_dir,
             PathField::Helper => &self.helper,
         }
@@ -124,7 +118,6 @@ impl LoaderApp {
             .detach();
             input
         };
-        let dll = path(PathField::Dll, window, cx);
         let lib_dir = path(PathField::LibDir, window, cx);
         let helper = path(PathField::Helper, window, cx);
         let log_lines = cx.new(|cx| {
@@ -168,7 +161,6 @@ impl LoaderApp {
         )
         .detach();
         let inputs = Inputs {
-            dll,
             lib_dir,
             helper,
             log_lines,

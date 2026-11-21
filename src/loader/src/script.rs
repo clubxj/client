@@ -1,7 +1,7 @@
 use std::{
     io::{BufRead, BufReader, Write},
     path::Path,
-    process::{Child, ChildStdin, ExitStatus, Stdio},
+    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -223,7 +223,7 @@ impl Script {
         source: &str,
         path: Option<&Path>,
         lib: Option<&Path>,
-        target: Option<&Target>,
+        target: &Target,
         settings: &Settings,
         launch: &Launch,
     ) -> Result<Self, String> {
@@ -237,12 +237,32 @@ impl Script {
         modules: &[(String, String)],
         path: Option<&Path>,
         lib: Option<&Path>,
-        target: Option<&Target>,
+        target: &Target,
         settings: &Settings,
         launch: &Launch,
     ) -> Result<Self, String> {
-        let client = target.map(hold_client).transpose()?;
-        let mut command = backend::script_command(target, settings, path, lib)?;
+        let client = hold_client(target)?;
+        let command = backend::script_command(target, settings, path, lib)?;
+        Self::spawn(
+            command,
+            Some(client),
+            host,
+            source,
+            modules,
+            settings,
+            launch,
+        )
+    }
+
+    fn spawn(
+        mut command: Command,
+        client: Option<std::fs::File>,
+        host: &Host,
+        source: &str,
+        modules: &[(String, String)],
+        settings: &Settings,
+        launch: &Launch,
+    ) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -577,11 +597,11 @@ fn suspend_process(_pid: u32, _suspend: bool) {}
 mod tests {
     use super::*;
 
-    fn ensure_runner_built() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
+    fn offline_run(host: &Host, source: &str, launch: &Launch) -> Script {
+        static BUILT: std::sync::Once = std::sync::Once::new();
+        BUILT.call_once(|| {
             let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-            let status = std::process::Command::new(cargo)
+            let status = Command::new(cargo)
                 .args(["build", "-p", "injector", "--bin", "injector"])
                 .current_dir(env!("CARGO_MANIFEST_DIR"))
                 .status();
@@ -590,6 +610,21 @@ mod tests {
                 "couldn't build injector for tests"
             );
         });
+        let test_exe = std::env::current_exe().unwrap();
+        let profile_dir = test_exe.parent().and_then(Path::parent).unwrap();
+        let mut command =
+            Command::new(profile_dir.join(format!("injector{}", std::env::consts::EXE_SUFFIX)));
+        command.arg("run");
+        Script::spawn(
+            command,
+            None,
+            host,
+            source,
+            &[],
+            &Settings::default(),
+            launch,
+        )
+        .unwrap()
     }
 
     type Run = (Vec<String>, Option<(Result<(), String>, bool)>);
@@ -631,17 +666,7 @@ mod tests {
     }
 
     fn start_on(host: &Host, source: &str) -> Script {
-        ensure_runner_built();
-        Script::start(
-            host,
-            source,
-            None,
-            None,
-            None,
-            &Settings::default(),
-            &Launch::default(),
-        )
-        .unwrap()
+        offline_run(host, source, &Launch::default())
     }
 
     fn start(source: &str) -> Script {
@@ -700,7 +725,6 @@ mod tests {
 
     #[test]
     fn settings_resume_and_finish_reach_the_script_and_exits_come_back() {
-        ensure_runner_built();
         let launch = Launch {
             values: serde_json::json!({ "spot": "Cage", "hours": 3 }),
             resume: Some(injector::form::BreakPlan {
@@ -713,19 +737,14 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let mut script = Script::start(
+        let mut script = offline_run(
             &host(Vec::new(), Vec::new()),
             "local s = settings() print(s.spot, s.hours)\n\
              print(antiban_resume().breaks[1].remaining)\n\
              while not finish_requested() do sleep(10) end\n\
              report_exit('blocked', 'out of bait')",
-            None,
-            None,
-            None,
-            &Settings::default(),
             &launch,
-        )
-        .unwrap();
+        );
         let start = Instant::now();
         let mut lines = Vec::new();
         while lines.len() < 2 && start.elapsed() < Duration::from_secs(5) {
@@ -1011,7 +1030,7 @@ mod tests {
             source,
             None,
             None,
-            Some(&client.0),
+            &client.0,
             &client.1,
             &Launch::default(),
         )

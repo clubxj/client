@@ -2,7 +2,8 @@
 
 Library and CLI for everything outside the client: find clients, inject the agent, read what it publishes, send input, run Luau scripts. Script-facing globals are documented in `lib/docs/host.md`; this doc covers the Rust side.
 
-- Real code only on Windows. Elsewhere `sandbox.rs`'s `offline` module stubs every call with "clients can only be reached from Windows or Wine", so the loader builds natively. On Linux the real work is `injector.exe` under Wine.
+- Real code only on Windows. Elsewhere `sandbox.rs`'s `offline` module stubs every call with "clients can only be reached from Windows or Wine", so the loader builds natively. On Linux the real work is `injector.exe` under Wine. The native binary is never shipped: it only exists so the loader's tests in `script.rs` can run Luau with no client.
+- **The agent is embedded.** With the `agent` feature (default on) and a Windows target, `build.rs` runs a nested `cargo build -p agent` with the outer profile and `main.rs` `include_bytes!`s the result, so `injector.exe` can only load the agent it was built with. Stable Cargo can't depend on a built cdylib (artifact dependencies are nightly-only). The nested build uses its own target dir, `target/embedded-agent`, because the outer build holds the lock on `target`. The binary requires the feature; the loader links the library without it, so the Windows loader's MSVC build never needs the MinGW agent and always injects through `injector.exe load`.
 - Pure logic (`async_input`, `nav`, `prices`, `bank_pin`, `devtools`, `form`, `http`, `antiban`) is kept free of Win32 so it is tested natively; Win32 data gathering lives in `win.rs`.
 
 ## Map

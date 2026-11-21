@@ -14,6 +14,9 @@ use {
 };
 
 #[cfg(windows)]
+static AGENT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/agent.dll"));
+
+#[cfg(windows)]
 const STACK_BYTES: usize = 256 << 20;
 
 #[cfg(windows)]
@@ -106,7 +109,8 @@ fn dispatch(args: &[&str]) -> String {
     }
     match args {
         ["list"] => json(Ok(injector::list_clients())),
-        ["load", pid, dll, cursor @ ..] => with_pid(pid, |pid| {
+        ["agent-version"] => json(Ok(injector::dll_version(AGENT))),
+        ["load", pid, cursor @ ..] => with_pid(pid, |pid| {
             let cursor = match cursor {
                 [] => Ok(None),
                 rest => {
@@ -117,7 +121,7 @@ fn dispatch(args: &[&str]) -> String {
                         .map(|c| c.map(|(_, cursor)| cursor))
                 }
             };
-            cursor.and_then(|cursor| injector::load(pid, Path::new(dll), cursor.as_ref()))
+            cursor.and_then(|cursor| injector::load(pid, AGENT, cursor.as_ref()))
         }),
         ["unload", pid] => with_pid(pid, injector::unload),
         ["status", pid] => with_pid(pid, |pid| Ok(injector::connection(pid))),
@@ -456,7 +460,7 @@ fn run() -> ExitCode {
 
     if args.is_empty() {
         eprintln!(
-            "Usage: injector list | load <pid> <dll> [<style> <r> <g> <b> <size>] | unload <pid> | status <pid> | state <pid> | console <pid>"
+            "Usage: injector list | agent-version | load <pid> [<style> <r> <g> <b> <size>] | unload <pid> | status <pid> | state <pid> | console <pid>"
         );
         eprintln!(
             "       injector widget <pid> <group> <child> | children <pid> <group> <child> | interfaces <pid> | screenshot <pid> <file.bmp>"

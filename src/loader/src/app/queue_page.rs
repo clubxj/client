@@ -483,7 +483,7 @@ impl LoaderApp {
             LOGOUT_SOURCE,
             Some(&root.join("queue-logout.luau")),
             Some(&root.join("lib")),
-            Some(&target),
+            &target,
             &self.settings,
             &Launch::default(),
         )?;

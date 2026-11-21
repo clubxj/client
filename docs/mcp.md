@@ -10,7 +10,7 @@ The loader binary doubles as a stdio MCP server, so any agent CLI (Claude Code, 
 
 ## Invariants
 
-- **One script per client, across processes.** `Script::start` takes an exclusive lock on `<data>/clients/<sha256(target key)[..16]>.lock` for any run with a client, and releases it when the process exits. The window and every `loader mcp` share it. Lock files are never deleted: deleting one would let two holders race.
+- **One script per client, across processes.** `Script::start` takes an exclusive lock on `<data>/clients/<sha256(target key)[..16]>.lock` for the run's client, and releases it when the process exits. The window and every `loader mcp` share it. Lock files are never deleted: deleting one would let two holders race.
 - **Shared refresh token.** Supabase rotates refresh tokens, so `Api::refresh` uses the keyring's token when there is one (another process may have rotated it) and clears the keyring on rejection only if it still holds the rejected token.
 - **Sign-in gates the client tools.** `load_agent`, `game_state` and `run_luau` need the loader's saved sign-in; `clients`, `lib_docs` and `check_luau` don't.
 - **Agent sessions meter every run** (free, `/launcher/agent-sessions` in the API README). A run starts its agent session before spawning and is refused if that fails, heartbeats every `heartbeat_seconds` (clamped 10 to 120) and ends it on exit; `ended: true` on a heartbeat starts a new one.

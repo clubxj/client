@@ -9,10 +9,9 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [alias]
 fast-loader = "run --profile fast -p loader --bin loader"
-fast-win = "build --profile fast --target x86_64-pc-windows-gnu -p agent -p injector"
+fast-win = "build --profile fast --target x86_64-pc-windows-gnu -p injector"
 
 b-loader = "build --release -p loader --target-dir target/loader"
-b-agent = "build --release --target x86_64-pc-windows-gnu -p agent --target-dir target/agent"
 b-ipc = "build --release -p ipc --target-dir target/ipc"
 b-injector ="build --release --target x86_64-pc-windows-gnu -p injector --target-dir target/injector"
 

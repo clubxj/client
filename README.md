@@ -40,10 +40,10 @@ the Windows binaries run under Wine.
 ### Build
 
 ```sh
-# Windows binaries: the agent DLL (agent.dll) and the injector helper (injector.exe)
-cargo build --release --target x86_64-pc-windows-gnu -p agent -p injector
+# The injector helper (injector.exe), which builds and embeds the agent DLL
+cargo build --release --target x86_64-pc-windows-gnu -p injector
 
-# Native loader (and the native injector it uses to run scripts when no game client is selected)
+# Native loader
 cargo build --release
 ```
 
@@ -53,13 +53,12 @@ On Windows you can build everything for the same target with
 For development you might want to use the fast profile:
 
 ```sh
-cargo build --profile fast --target x86_64-pc-windows-gnu -p agent -p injector
+cargo build --profile fast --target x86_64-pc-windows-gnu -p injector
 cargo build --profile fast
 ```
 
 Outputs:
 
-- `target/x86_64-pc-windows-gnu/release/agent.dll`
 - `target/x86_64-pc-windows-gnu/release/injector.exe`
 - `target/release/loader` (`loader.exe` on Windows)
 
@@ -70,8 +69,8 @@ Outputs:
    ```sh
    cargo run --release -p loader
    ```
-3. In the loader, select the game client, check that the DLL and helper paths point at the files built
-   above (they are filled in automatically when they are in `target/`), and load the agent.
+3. In the loader, select the game client, check that the helper path points at the `injector.exe` built
+   above (it is filled in automatically when it is in `target/`), and load the agent.
 4. Press **Sign in with Discord** (in your browser); the loader needs a signed-in account. Then either pick a
    script in the **Scripts** tab and press **Run**, or open a local Luau script in the **Editor** tab and run it.
 
@@ -92,7 +91,7 @@ A DLL (`agent.dll`) loaded inside the game client process. It hooks the client's
 input, finds the game's internal data (player state, skills, varps, widgets, menus, scene
 models, ...) and publishes it into shared memory every frame. It also takes input requests (mouse
 moves, clicks, keys) and overlay drawings from the shared memory and applies them in the game.
-The injector loads it and talks to it only through shared memory, named events and window messages.
+It ships embedded in `injector.exe`, which loads it and talks to it only through shared memory, named events and window messages.
 
 ### injector (`src/injector`)
 

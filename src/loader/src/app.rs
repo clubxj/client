@@ -1191,7 +1191,7 @@ pub struct LoaderApp {
     instance: update::Instance,
     starting: Option<u32>,
     targets: Vec<Target>,
-    dll_version: Option<String>,
+    agent_version: Option<String>,
     scanning: bool,
     last_scan: Instant,
     scan_errors: Vec<String>,
@@ -1324,7 +1324,7 @@ impl LoaderApp {
             instance,
             starting: None,
             targets: Vec::new(),
-            dll_version: None,
+            agent_version: None,
             scanning: false,
             last_scan: Instant::now(),
             scan_errors: Vec::new(),
@@ -2002,7 +2002,7 @@ impl LoaderApp {
             agent: run
                 .and_then(|r| r.target.as_ref())
                 .and_then(|t| t.client.version.clone())
-                .or_else(|| self.dll_version.clone()),
+                .or_else(|| self.agent_version.clone()),
             lib: run
                 .and_then(|r| r.store.as_ref())
                 .map(|s| s.lib_version.clone()),
@@ -2544,13 +2544,7 @@ impl LoaderApp {
         self.scanning = true;
         self.last_scan = Instant::now();
         self.background(|settings| {
-            let mut scan = backend::scan(&settings);
-            match settings.dll_version() {
-                Ok(version) => scan.dll_version = Some(version),
-                Err(error) if !settings.dll.is_empty() => scan.errors.push(error),
-                Err(_) => {}
-            }
-            Event::Scanned(scan)
+            Event::Scanned(backend::scan(&settings))
         });
     }
 
@@ -2656,7 +2650,7 @@ impl LoaderApp {
                 Event::Scanned(scan) => {
                     self.scanning = false;
                     self.targets = scan.targets;
-                    self.dll_version = scan.dll_version;
+                    self.agent_version = scan.agent_version;
                     for error in &scan.errors {
                         if !self.scan_errors.contains(error) {
                             self.error(error.clone());
@@ -3232,14 +3226,15 @@ impl LoaderApp {
         let Some(run) = self.run_by_id(id).filter(|r| r.is_configuring()) else {
             return;
         };
-        let target = run.target.clone();
-        match run.source.clone() {
-            Some(Source::File(file)) => self.start_file(id, &file, target.as_ref(), values),
-            Some(Source::Store(script)) => match target {
-                Some(target) => self.quote_store_script(script, target, Some(id), values),
-                None => self.script_error("Pick a client to run the script on."),
-            },
-            Some(Source::Agent) | None => {}
+        match (run.source.clone(), run.target.clone()) {
+            (Some(Source::File(file)), Some(target)) => self.start_file(id, &file, &target, values),
+            (Some(Source::Store(script)), Some(target)) => {
+                self.quote_store_script(script, target, Some(id), values)
+            }
+            (Some(Source::File(_) | Source::Store(_)), None) => {
+                self.script_error("Pick a client to run the script on.")
+            }
+            (Some(Source::Agent) | None, _) => {}
         }
     }
 
@@ -3559,7 +3554,7 @@ impl LoaderApp {
             &prepared.modules,
             Some(&prepared.entry),
             None,
-            Some(&target),
+            &target,
             &self.settings,
             &launch,
         ) {
@@ -3643,28 +3638,27 @@ impl LoaderApp {
         let Some(run) = self.run_by_id(id) else {
             return;
         };
-        let target = match &run.target {
-            Some(old) => match self.free_client(old.client.pid) {
-                Some(target) => Some(target.clone()),
-                None => {
-                    self.script_error(format!(
-                        "Couldn't restart {}: its client is gone or busy.",
-                        file.name()
-                    ));
-                    return;
-                }
-            },
-            None => None,
+        let Some(target) = run
+            .target
+            .as_ref()
+            .and_then(|old| self.free_client(old.client.pid))
+            .cloned()
+        else {
+            self.script_error(format!(
+                "Couldn't restart {}: its client is gone or busy.",
+                file.name()
+            ));
+            return;
         };
         self.remember_form(id);
         let previous = self.form_values(id);
-        self.run_file(file, target.as_ref(), Some(id), previous);
+        self.run_file(file, &target, Some(id), previous);
     }
 
     fn run_file(
         &mut self,
         file: ScriptFile,
-        target: Option<&Target>,
+        target: &Target,
         replaces: Option<u64>,
         previous: Option<(serde_json::Value, serde_json::Value)>,
     ) {
@@ -3685,7 +3679,7 @@ impl LoaderApp {
             id,
             name.clone(),
             None,
-            target.cloned(),
+            Some(target.clone()),
             None,
             &self.settings,
         );
@@ -3715,7 +3709,7 @@ impl LoaderApp {
         &mut self,
         id: u64,
         file: &ScriptFile,
-        target: Option<&Target>,
+        target: &Target,
         values: serde_json::Value,
     ) {
         let name = file.name();

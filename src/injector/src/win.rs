@@ -348,16 +348,15 @@ fn remote_load_library(
     Ok(unsafe { transmute::<usize, unsafe extern "system" fn(*mut c_void) -> u32>(address) })
 }
 
-fn versioned_copy(dll: &Path, bytes: &[u8], version: &str) -> Result<PathBuf, String> {
+fn versioned_copy(bytes: &[u8], version: &str) -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join("agent");
     fs::create_dir_all(&dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
-    let stem = dll.file_stem().unwrap_or_default().to_string_lossy();
-    let copy = dir.join(format!("{stem}-{version}.dll"));
+    let copy = dir.join(format!("{MODULE_PREFIX}-{version}.dll"));
     if copy.is_file() {
         return Ok(copy);
     }
 
-    let partial = dir.join(format!("{stem}-{version}.{}.tmp", std::process::id()));
+    let partial = dir.join(format!("{MODULE_PREFIX}-{version}.{}.tmp", std::process::id()));
     fs::write(&partial, bytes).map_err(|e| format!("Cannot write {}: {e}", partial.display()))?;
     if let Err(error) = fs::rename(&partial, &copy) {
         let _ = fs::remove_file(&partial);
@@ -410,12 +409,10 @@ fn seed_cursor(pid: u32, cursor: &crate::Cursor) -> Option<View> {
     Some(view)
 }
 
-pub fn load(pid: u32, dll: &Path, cursor: Option<&crate::Cursor>) -> Result<LoadReport, String> {
+pub fn load(pid: u32, agent: &[u8], cursor: Option<&crate::Cursor>) -> Result<LoadReport, String> {
     forget(pid);
-    let dll = std::path::absolute(dll).map_err(|e| format!("Invalid DLL path: {e}"))?;
-    let bytes = fs::read(&dll).map_err(|e| format!("Cannot read {}: {e}", dll.display()))?;
-    let version = dll_version(&bytes);
-    let dll = versioned_copy(&dll, &bytes, &version)?;
+    let version = dll_version(agent);
+    let dll = versioned_copy(agent, &version)?;
     let dll_name = dll
         .file_name()
         .unwrap_or_default()

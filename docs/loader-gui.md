@@ -80,7 +80,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - Under a cargo `target/` dir it never installs (`Kind::Dev`); the header's version hover names the newer version.
 - Linux: unpack into `<install>/.update/`, rename each file in `FILES` (`update/archive.rs`) in with hard links for rollback, start the new loader after this one closes (so `save()`/`on_exit` run). Unwritable install dir falls back to browser download.
 - Windows: MSI to `<data>/update/`, sha256 checked; loader copies itself there and runs the copy with `--finish-update`, which waits, runs `msiexec /passive` with the install's own mode and folder (read from Windows Installer; upgrades don't cross modes), and restarts the installed loader unelevated, with `--update-failed <msg>` on failure (declined UAC counts). Non-MSI installs get browser download.
-- `Settings::fill_missing` makes every loader use the `agent.dll` and `injector` it detects over the saved paths, so a saved path can't pair versions; a saved path is used only when nothing is detected. An install finds them next to the executable. A build under `target/` takes the newest of `target/x86_64-pc-windows-gnu/{its profile,fast,release,debug}`, so a `cargo fast-win` build is picked up on the next start.
+- `Settings::fill_missing` makes every loader use the `injector.exe` it detects over the saved path, so a saved path can't pair versions; a saved path is used only when nothing is detected. An install finds it next to the executable. A build under `target/` takes the newest of `target/x86_64-pc-windows-gnu/{its profile,fast,release,debug}`, so a `cargo fast-win` build is picked up on the next start.
 - Versions: `YYYY.MM.DD-<7 char commit>`, or `dev` outside git.
 
 ## Navigation
@@ -119,8 +119,9 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - Lines written to the script's stdin before start: antiban config (`injector::antiban::line`), transports (`TRANSPORT_SETTINGS`), Script debugging (`DEBUG`), `prices_url` (`injector::prices::line`), `SETTINGS` (the form's values, `script::Launch`) and, for a queue entry, `RESUME` (the previous entry's break plan). Live: `UPDATE` (settings changed while running, read by `Host.form_update()`), antiban push, transport push, Script debugging push, skip-next, `FINISH` (queue only).
 - Settings come from the script's `manifest.json` (`injector::manifest`): the store's live revision through `GET /launcher/scripts/:id/manifest`, cached in memory by script and revision, or the file beside an editor script. A script with settings opens a **configuring** run (`Run::is_configuring`: no process, no session) whose Start quotes, starts the session and launches it, so nothing is billed while the form is open. Without settings it starts at once. Values are remembered per script title; layouts resolve to their contents when Start is pressed.
 - Script requests on stdout: `LAMPREQ`, PIN, `HTTPREQ`. The layout JSON a script gets is documented in the lib's `host.luau`.
-- Settings persisted: `dll`, `helper`, `lib_dir`, `antiban`, `transports`, `include_system_info`, `log_lines`. `dll` and `helper` are replaced by detected files on start (see Update flow).
+- Settings persisted: `helper`, `lib_dir`, `antiban`, `transports`, `include_system_info`, `log_lines`. `helper` is replaced by the detected file on start (see Update flow).
 - Cursor preference is passed to `injector load`; the injector leaves it in an `AGENT_CURSOR_<pid>` mapping the agent reads.
+- The agent exists only inside `injector.exe`, so every load runs `injector.exe load`, on Windows too, and the outdated check compares clients against `injector.exe agent-version` (cached per file size and mtime on Windows). Under Wine the long-lived `serve` processes are restarted when `injector.exe` changes on disk; otherwise a rebuilt injector would keep loading the old agent from the process still running.
 
 ## HTTP whitelist
 

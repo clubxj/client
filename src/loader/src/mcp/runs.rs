@@ -193,7 +193,7 @@ impl Runs {
             start.source,
             Some(start.path),
             Some(start.lib),
-            Some(start.target),
+            start.target,
             start.settings,
             start.launch,
         ) {

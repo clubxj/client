@@ -1,7 +1,12 @@
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Mutex,
+    time::SystemTime,
+};
 
 use injector::{Connection, Cursor, DisplayName, GameState, Item, LoadReport, Overlay, PacketPage};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use super::{Scan, Settings, Target};
 
@@ -14,7 +19,11 @@ impl Location {
     }
 }
 
-pub fn scan(_settings: &Settings) -> Scan {
+pub fn scan(settings: &Settings) -> Scan {
+    let (agent_version, errors) = match agent_version(settings) {
+        Ok(version) => (Some(version), Vec::new()),
+        Err(error) => (None, vec![error]),
+    };
     Scan {
         targets: injector::list_clients()
             .into_iter()
@@ -23,13 +32,62 @@ pub fn scan(_settings: &Settings) -> Scan {
                 location: Location,
             })
             .collect(),
-        errors: Vec::new(),
-        dll_version: None,
+        errors,
+        agent_version,
     }
 }
 
+type HelperStamp = (PathBuf, SystemTime, u64);
+
+static AGENT_VERSION: Mutex<Option<(HelperStamp, String)>> = Mutex::new(None);
+
+fn agent_version(settings: &Settings) -> Result<String, String> {
+    let helper = PathBuf::from(&settings.helper);
+    let metadata = helper
+        .metadata()
+        .map_err(|e| format!("Cannot read {}: {e}", helper.display()))?;
+    let stamp = (
+        helper,
+        metadata.modified().map_err(|e| e.to_string())?,
+        metadata.len(),
+    );
+    let mut cached = AGENT_VERSION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((seen, version)) = cached.as_ref()
+        && *seen == stamp
+    {
+        return Ok(version.clone());
+    }
+    let version: String = helper_call(settings, &["agent-version"])?;
+    *cached = Some((stamp, version.clone()));
+    Ok(version)
+}
+
+fn helper_call<T: DeserializeOwned>(settings: &Settings, args: &[&str]) -> Result<T, String> {
+    if !Path::new(&settings.helper).is_file() {
+        return Err("Set the path to injector.exe, it loads the agent.".into());
+    }
+    let mut command = Command::new(&settings.helper);
+    super::no_window(&mut command);
+    let output = command
+        .args(args)
+        .output()
+        .map_err(|e| format!("Couldn't run {}: {e}", settings.helper))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<Result<T, String>>(stdout.trim()).map_err(|e| {
+        format!(
+            "Unexpected output from injector.exe ({e}): {}{}",
+            stdout.trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })?
+}
+
 pub fn load(target: &Target, settings: &Settings, cursor: &Cursor) -> Result<LoadReport, String> {
-    injector::load(target.client.pid, Path::new(&settings.dll), Some(cursor))
+    let cursor = cursor.args(target.client.pid);
+    let pid = target.client.pid.to_string();
+    let mut args = vec!["load", pid.as_str()];
+    args.extend(cursor[2..].iter().map(String::as_str));
+    helper_call(settings, &args)
 }
 
 pub fn unload(target: &Target, _settings: &Settings) -> Result<(), String> {
@@ -214,7 +272,7 @@ pub fn connection(target: &Target, _settings: &Settings) -> Result<Option<Connec
 }
 
 pub fn script_command(
-    target: Option<&Target>,
+    target: &Target,
     settings: &Settings,
     script: Option<&Path>,
     lib: Option<&Path>,
@@ -225,9 +283,7 @@ pub fn script_command(
     let mut command = Command::new(&settings.helper);
     super::no_window(&mut command);
     super::run_args(&mut command, script, lib);
-    if let Some(target) = target {
-        command.arg(target.client.pid.to_string());
-    }
+    command.arg(target.client.pid.to_string());
     Ok(command)
 }
 

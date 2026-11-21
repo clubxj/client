@@ -367,15 +367,14 @@ fn pretty(value: &impl serde::Serialize) -> Result<String, String> {
 fn clients(context: &Context) -> Result<String, String> {
     let saved = saved();
     let scan = backend::scan(&saved.settings);
-    let dll = saved.settings.dll_version().ok();
     let clients: Vec<Value> = scan
         .targets
         .iter()
         .map(|t| {
             let client = &t.client;
-            let agent = match (&client.loaded, &client.version, &dll) {
+            let agent = match (&client.loaded, &client.version, &scan.agent_version) {
                 (None, _, _) => "not loaded",
-                (Some(_), Some(version), Some(dll)) if version != dll => "outdated",
+                (Some(_), Some(version), Some(embedded)) if version != embedded => "outdated",
                 (Some(_), _, _) => "loaded",
             };
             json!({

@@ -30,7 +30,6 @@ pub const LOG_LINES: std::ops::RangeInclusive<usize> = 2000..=10_000;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub dll: String,
     pub helper: String,
     pub lib_dir: String,
     pub antiban: injector::antiban::Config,
@@ -47,7 +46,6 @@ impl Default for Settings {
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_default();
         Self {
-            dll: detect(&exe_dir, "agent.dll"),
             helper: detect(&exe_dir, "injector.exe"),
             lib_dir: String::new(),
             antiban: Default::default(),
@@ -86,18 +84,9 @@ impl Settings {
     }
 
     fn resolve_paths(&mut self, detected: Self) {
-        if !detected.dll.is_empty() {
-            self.dll = detected.dll;
-        }
         if !detected.helper.is_empty() {
             self.helper = detected.helper;
         }
-    }
-
-    pub fn dll_version(&self) -> Result<String, String> {
-        std::fs::read(&self.dll)
-            .map(|dll| injector::dll_version(&dll))
-            .map_err(|e| format!("Cannot read {}: {e}", self.dll))
     }
 }
 
@@ -133,7 +122,7 @@ pub fn no_window(command: &mut std::process::Command) -> &mut std::process::Comm
 pub struct Scan {
     pub targets: Vec<Target>,
     pub errors: Vec<String>,
-    pub dll_version: Option<String>,
+    pub agent_version: Option<String>,
 }
 
 #[cfg(test)]
@@ -142,17 +131,16 @@ mod tests {
 
     #[test]
     fn detected_files_replace_saved_paths_which_stay_only_when_nothing_is_found() {
-        let with = |dll: &str| Settings {
-            dll: dll.into(),
-            helper: String::new(),
+        let with = |helper: &str| Settings {
+            helper: helper.into(),
             ..Default::default()
         };
-        let mut saved = with("saved.dll");
-        saved.resolve_paths(with("detected.dll"));
-        assert_eq!(saved.dll, "detected.dll");
-        let mut saved = with("saved.dll");
+        let mut saved = with("saved.exe");
+        saved.resolve_paths(with("detected.exe"));
+        assert_eq!(saved.helper, "detected.exe");
+        let mut saved = with("saved.exe");
         saved.resolve_paths(with(""));
-        assert_eq!(saved.dll, "saved.dll");
+        assert_eq!(saved.helper, "saved.exe");
     }
 
     #[test]
@@ -163,13 +151,13 @@ mod tests {
         for dir in [&exe_dir, &cross.join("release"), &cross.join("fast")] {
             std::fs::create_dir_all(dir).unwrap();
         }
-        std::fs::write(cross.join("release/agent.dll"), b"").unwrap();
+        std::fs::write(cross.join("release/injector.exe"), b"").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(cross.join("fast/agent.dll"), b"").unwrap();
-        assert!(detect(&exe_dir, "agent.dll").ends_with("fast/agent.dll"));
+        std::fs::write(cross.join("fast/injector.exe"), b"").unwrap();
+        assert!(detect(&exe_dir, "injector.exe").ends_with("fast/injector.exe"));
         std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(cross.join("release/agent.dll"), b"").unwrap();
-        assert!(detect(&exe_dir, "agent.dll").ends_with("release/agent.dll"));
+        std::fs::write(cross.join("release/injector.exe"), b"").unwrap();
+        assert!(detect(&exe_dir, "injector.exe").ends_with("release/injector.exe"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -177,11 +165,9 @@ mod tests {
     fn an_installed_release_finds_its_files_next_to_the_executable() {
         let dir = std::env::temp_dir().join(format!("volcren-detect-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("agent.dll"), b"").unwrap();
         std::fs::write(dir.join("injector.exe"), b"").unwrap();
-        assert!(detect(&dir, "agent.dll").ends_with("agent.dll"));
         assert!(detect(&dir, "injector.exe").ends_with("injector.exe"));
-        assert_eq!(detect(&dir, "missing.dll"), "");
+        assert_eq!(detect(&dir, "missing.exe"), "");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

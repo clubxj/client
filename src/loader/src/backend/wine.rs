@@ -6,7 +6,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex, OnceLock, mpsc::Receiver},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use injector::{
@@ -34,10 +34,19 @@ struct Server {
     child: Child,
     stdin: ChildStdin,
     lines: Receiver<String>,
+    build: Option<Build>,
+}
+
+type Build = (SystemTime, u64);
+
+fn build_of(helper: &Path) -> Option<Build> {
+    let metadata = helper.metadata().ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 impl Server {
     fn spawn(location: &Location, helper: &Path) -> Result<Self, String> {
+        let build = build_of(helper);
         let mut child = wine_command(location, helper)
             .arg("serve")
             .stdin(Stdio::piped())
@@ -66,11 +75,12 @@ impl Server {
             child,
             stdin,
             lines,
+            build,
         })
     }
 
-    fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+    fn current(&mut self, helper: &Path) -> bool {
+        matches!(self.child.try_wait(), Ok(None)) && self.build == build_of(helper)
     }
 
     fn send(&mut self, args: &[&str]) -> Result<String, String> {
@@ -120,7 +130,7 @@ fn ensure_connection(
     let key = (location.prefix.clone(), lane);
     let existing = lock_registry()?.get(&key).cloned();
     if let Some(server) = &existing
-        && server.lock().is_ok_and(|mut server| server.alive())
+        && server.lock().is_ok_and(|mut server| server.current(helper))
     {
         return Ok(server.clone());
     }
@@ -195,6 +205,14 @@ pub fn scan(settings: &Settings) -> Scan {
     };
 
     for location in locations {
+        if scan.agent_version.is_none() {
+            match run_on::<String>(Lane::Main, &location, &helper, &["agent-version"]) {
+                Ok(version) => scan.agent_version = Some(version),
+                Err(error) => scan
+                    .errors
+                    .push(format!("{}: {error}", location.prefix.display())),
+            }
+        }
         match run_on::<Vec<Client>>(Lane::Main, &location, &helper, &["list"]) {
             Ok(clients) => scan
                 .targets
@@ -212,10 +230,9 @@ pub fn scan(settings: &Settings) -> Scan {
 
 pub fn load(target: &Target, settings: &Settings, cursor: &Cursor) -> Result<LoadReport, String> {
     let helper = helper(settings)?;
-    let dll = windows_path(&target.location.prefix, Path::new(&settings.dll))?;
     let pid = target.client.pid.to_string();
     let cursor = cursor.args(target.client.pid);
-    let mut args = vec!["load", pid.as_str(), dll.as_str()];
+    let mut args = vec!["load", pid.as_str()];
     args.extend(cursor[2..].iter().map(String::as_str));
     run_on(Lane::Main, &target.location, &helper, &args)
 }
@@ -423,16 +440,11 @@ pub fn varc_changes(
 }
 
 pub fn script_command(
-    target: Option<&Target>,
+    target: &Target,
     settings: &Settings,
     script: Option<&Path>,
     lib: Option<&Path>,
 ) -> Result<Command, String> {
-    let Some(target) = target else {
-        let mut command = Command::new(native_helper()?);
-        super::run_args(&mut command, script, lib);
-        return Ok(command);
-    };
     let mut command = wine_command(&target.location, &helper(settings)?);
     let prefix = &target.location.prefix;
     let script = script.and_then(|s| windows_path(prefix, s).ok());
@@ -440,16 +452,6 @@ pub fn script_command(
     super::run_args(&mut command, script.as_deref(), lib.as_deref());
     command.arg(target.client.pid.to_string());
     Ok(command)
-}
-
-fn native_helper() -> Result<PathBuf, String> {
-    let exe = env::current_exe().map_err(|e| format!("Can't find the loader's own path: {e}"))?;
-    [exe.parent(), exe.parent().and_then(Path::parent)]
-        .into_iter()
-        .flatten()
-        .map(|dir| dir.join("injector"))
-        .find(|path| path.is_file())
-        .ok_or_else(|| "injector not found next to the loader, select a client or build it (cargo build -p injector).".into())
 }
 
 fn helper(settings: &Settings) -> Result<PathBuf, String> {

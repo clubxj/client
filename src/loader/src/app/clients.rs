@@ -140,7 +140,7 @@ impl Ui {
     }
 }
 
-fn status_of(client: &injector::Client, dll_version: Option<&str>) -> (String, Rgba, String) {
+fn status_of(client: &injector::Client, agent_version: Option<&str>) -> (String, Rgba, String) {
     if client.foreign_bot.is_some() {
         return (
             "Unsupported".to_owned(),
@@ -150,7 +150,7 @@ fn status_of(client: &injector::Client, dll_version: Option<&str>) -> (String, R
     }
     if let Some(module) = &client.loaded {
         let version = client.version.as_deref().unwrap_or("unknown version");
-        let (text, color) = if dll_version.is_some_and(|v| v != version) {
+        let (text, color) = if agent_version.is_some_and(|v| v != version) {
             (format!("Loaded {version}, outdated"), theme::YELLOW)
         } else {
             (format!("Loaded {version}"), theme::GREEN)
@@ -205,9 +205,9 @@ impl LoaderApp {
         let idle = !self.busy;
         let loaded = client.is_some_and(|c| c.loaded.is_some());
         let can_load = idle
-            && !self.settings.dll.is_empty()
+            && self.agent_version.is_some()
             && client.is_some_and(|c| {
-                c.is_64bit && (c.loaded.is_none() || c.version != self.dll_version)
+                c.is_64bit && (c.loaded.is_none() || c.version != self.agent_version)
             });
         let can_unload = idle && loaded;
         let (load_icon, load_label) = if loaded {
@@ -430,7 +430,7 @@ impl LoaderApp {
             ));
         };
         let client = &target.client;
-        let (status, color, tip) = status_of(client, self.dll_version.as_deref());
+        let (status, color, tip) = status_of(client, self.agent_version.as_deref());
         let prefix = target.location.label().unwrap_or_default();
         div()
             .flex()
@@ -535,7 +535,7 @@ pub(super) fn target(pid: u32, title: &str, loaded: Option<&str>, foreign: bool)
 
 #[cfg(test)]
 pub(super) fn populated(app: &mut LoaderApp) {
-    app.dll_version = Some("2026.11.20-abc1234".into());
+    app.agent_version = Some("2026.11.20-abc1234".into());
     app.targets = vec![
         target(4120, "Game client", Some("2026.11.20-abc1234"), false),
         target(5388, "Game client - second account", None, false),

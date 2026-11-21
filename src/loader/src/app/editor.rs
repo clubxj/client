@@ -212,7 +212,7 @@ impl LoaderApp {
 
     fn run_editor_on(&mut self, pid: u32, file: ScriptFile) {
         match self.free_client(pid).cloned() {
-            Some(target) => self.run_file(file, Some(&target), None, None),
+            Some(target) => self.run_file(file, &target, None, None),
             None => self.error(format!(
                 "Couldn't run {}: client {pid} needs the agent loaded and no script running.",
                 file.name()

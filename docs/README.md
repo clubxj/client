@@ -26,7 +26,7 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 
 - **No hardcoded addresses.** Offset rules match code shape at runtime; a rule that doesn't match exactly one candidate fails rather than guesses.
 - **`src/ipc` owns the wire format.** Any change bumps `ipc::PROTOCOL_VERSION`, with agent, injector and the lib's `host.luau` updated together.
-- **Agent version = hash of the DLL** (`ipc::build_id`); the DLL hot reloads without restarting the client.
+- **Agent version = hash of the DLL** (`ipc::build_id`); the DLL hot reloads without restarting the client. The DLL is embedded in `injector.exe`, so an injector always loads the agent it was built with.
 - **Windows code is cross-compiled** for `x86_64-pc-windows-gnu`; only the loader and the injector's non-Windows stubs are native. The released Windows loader is built on Windows ([releases.md](releases.md)).
 - **Scripts see only the globals** in `src/injector/src/sandbox.rs`; `lib/host.luau` (separate repo) is their typed wrapper.
 - **`standalone/` is decompiled client code**: read only, keep private.
@@ -34,8 +34,8 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 
 ## Build
 
-- Aliases in `.cargo/config.toml`: `cargo fast-win` (agent + injector, `fast` profile), `cargo fast-loader`, `cargo b-agent`/`b-injector`/`b-loader` (release, separate target dirs so they build in parallel), `cargo lint` (clippy, Windows target).
-- Outputs: `target/x86_64-pc-windows-gnu/<profile>/{agent.dll,injector.exe}`, `target/<profile>/loader`.
+- Aliases in `.cargo/config.toml`: `cargo fast-win` (injector with its embedded agent, `fast` profile), `cargo fast-loader`, `cargo b-injector`/`b-loader` (release, separate target dirs so they build in parallel), `cargo lint` (clippy, Windows target).
+- Outputs: `target/x86_64-pc-windows-gnu/<profile>/injector.exe`, `target/<profile>/loader`. The agent alone lands in `target/embedded-agent/x86_64-pc-windows-gnu/<profile>/agent.dll`.
 - The agent's tests only build for the Windows target.
 - Editions: `agent`, `ipc` 2021; `decode`, `injector`, `loader` 2024.
 

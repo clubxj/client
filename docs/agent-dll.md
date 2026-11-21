@@ -4,7 +4,7 @@
 
 ## Lifecycle
 
-- **Load:** the injector copies the DLL to `%TEMP%\agent\` under a versioned name, so a new build can replace a loaded one, then `LoadLibraryW`s it. Only `DllMain` is exported; everything else goes through shared memory, named events and window messages.
+- **Load:** the DLL ships only inside `injector.exe` (see [injector-and-sandbox.md](injector-and-sandbox.md)). `injector load` writes it to `%TEMP%\agent\agent-<version>.dll`, so a new build can replace a loaded one, then `LoadLibraryW`s it. Only `DllMain` is exported; everything else goes through shared memory, named events and window messages.
 - **Start** (`hooks::start`, own thread): find the `JagRenderView` window, run every offset rule, install `retour` detours, patch `GetFocus` (below), then decode the loc and varbit definitions from the client's disk cache on a thread of its own (`definitions::start`; unload joins it). The cache folder is found once, through the client's open handle to `main_file_cache.dat2`.
 - **Per frame, game thread** (`client/frame.rs`, after the client's draw step): publish the models drawn this frame (below); advance the act job (below); copy the finished menu for the worker (`menu::capture`, see [ipc-protocol.md](ipc-protocol.md)).
   - Some renderer modes (1 and 3 of the client's 0 to 3) present from a render thread of their own, so the swap hook isn't on the game thread there. The frame rule (`offsets/frame.rs`, see [reverse-engineering.md](reverse-engineering.md)) finds the game thread's tick. Its detour reads the draw step from the app object's vtable on the first tick and hooks it, so the work runs on the game thread in every mode.

@@ -17,11 +17,9 @@ const WORK_DIR: &str = ".update";
 const STAGE_DIR: &str = "stage";
 const BACKUP_DIR: &str = "backup";
 const ARCHIVE_ROOT: &str = "volcren/";
-const FILES: [(&str, bool); 5] = [
+const FILES: [(&str, bool); 3] = [
     ("loader", true),
-    ("injector", true),
     ("injector.exe", false),
-    ("agent.dll", false),
     ("luau-analyze", true),
 ];
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
@@ -193,9 +191,7 @@ mod tests {
     fn release_files(loader: &[u8]) -> Vec<(&'static str, Vec<u8>)> {
         vec![
             ("volcren/loader", loader.to_vec()),
-            ("volcren/injector", b"new injector".to_vec()),
             ("volcren/injector.exe", b"new injector.exe".to_vec()),
-            ("volcren/agent.dll", b"new agent".to_vec()),
             ("volcren/luau-analyze", b"new luau-analyze".to_vec()),
         ]
     }
@@ -223,8 +219,8 @@ mod tests {
         let mode =
             |name: &str| fs::metadata(stage.join(name)).unwrap().permissions().mode() & 0o111;
         assert_ne!(mode("loader"), 0);
-        assert_ne!(mode("injector"), 0);
-        assert_eq!(mode("agent.dll"), 0);
+        assert_ne!(mode("luau-analyze"), 0);
+        assert_eq!(mode("injector.exe"), 0);
     }
 
     #[test]
@@ -257,7 +253,7 @@ mod tests {
 
     #[test]
     fn an_incomplete_release_is_rejected() {
-        let bytes = archive(&[("volcren/loader", b"x"), ("volcren/agent.dll", b"")]);
+        let bytes = archive(&[("volcren/loader", b"x"), ("volcren/injector.exe", b"")]);
         assert!(
             unpack_bytes("incomplete", &bytes)
                 .1
@@ -296,7 +292,7 @@ mod tests {
         let install = fake_install("rollback");
         let stage = install.join(WORK_DIR).join(STAGE_DIR);
         fs::create_dir_all(&stage).unwrap();
-        for (file, _) in &FILES[..3] {
+        for (file, _) in &FILES[..FILES.len() - 1] {
             fs::write(stage.join(file), format!("new {file}")).unwrap();
         }
         assert!(swap(&install).unwrap_err().contains("old version stays"));
@@ -346,7 +342,10 @@ mod tests {
             exe: exe.clone(),
         })
         .unwrap();
-        assert_eq!(fs::read(install.join("agent.dll")).unwrap(), b"new agent");
+        assert_eq!(
+            fs::read(install.join("injector.exe")).unwrap(),
+            b"new injector.exe"
+        );
         assert_eq!(fs::read_to_string(&exe).unwrap(), new_loader);
 
         relaunch_after_exit();
