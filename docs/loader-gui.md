@@ -83,8 +83,6 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 - Output tabs are capped (`backend::LOG_LINES`, 2000 to 10 000), trimmed a quarter at a time. A trim or filter change rebuilds the tab's text and re-wraps it, and Copy all and Save copy the whole text.
 - GPUI has no selectable text, so the log view selects by itself: a selection is two (entry, byte) spots, rows hit-test by shaping the one row under the pointer, Ctrl+C copies it. Dragging past the edge keeps scrolling (`LogView::step_past_edge`); speed is relative to room to the window edge since the output sits at the bottom.
 - `theme::icon_button_width` sizes a group from all its possible labels so buttons never resize.
-- Inventory drag and drop uses `DragAndDrop::set_payload` on `drag_started`, not `dnd_drag_source`, whose drag-only sense swallows clicks.
-- Row widths for form rows are remembered in egui temp memory to decide wrapping next frame.
 - The Editor's text element (`app/editor/code.rs`) is the loader's own, not gpui-component's `Editor`: that one keeps its folds private (no way to fold from the app or a snapshot) and its gutter can't select a line. Folds live in `LoaderApp::fold` (`fold.rs`): the element draws the rows it is given and reports cursor moves and fold clicks back, so a fold opens when the cursor enters it. Tabs draw four columns wide, the width `Folds::longest_line` counts.
 
 ## Scripts, settings and stdin contract

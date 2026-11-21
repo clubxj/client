@@ -573,11 +573,8 @@ impl LoaderApp {
         ui.add_space(8.0);
         let title = entry.title.clone();
         match self.queue_page.form.take() {
-            Some((i, id, mut form)) if i == index => {
-                form.show_inline(
-                    ui,
-                    self.layouts.get(&title).unwrap_or(&super::EMPTY_LAYOUTS),
-                );
+            Some((i, id, form)) if i == index => {
+                ui.weak(format!("{title}: settings render on the GPUI Queue page."));
                 self.queue_page.form = Some((i, id, form));
             }
             other => {
