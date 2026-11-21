@@ -26,7 +26,7 @@ jobs:
                 include:
                     - name: windows
                       target: x86_64-pc-windows-gnu
-                      build: cargo build --release --workspace --no-default-features --target x86_64-pc-windows-gnu
+                      build: cargo build --release --workspace --exclude loader --no-default-features --target x86_64-pc-windows-gnu
                       artifact_path: |
                           target/x86_64-pc-windows-gnu/release/*.exe
                           target/x86_64-pc-windows-gnu/release/*.dll
@@ -116,6 +116,67 @@ jobs:
                   path: ${{ matrix.artifact_path }}
                   if-no-files-found: error
 
+    build-loader:
+        name: build (windows loader)
+        runs-on: windows-latest
+        defaults:
+            run:
+                shell: bash
+        env:
+            RUSTFLAGS: "-C target-feature=+crt-static"
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Version
+              run: |
+                  echo "VOLCREN_VERSION=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_ENV"
+                  echo "VOLCREN_BUILD=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+            - name: Install Rust
+              id: rust
+              run: |
+                  rustup toolchain install "$RUST_VERSION" --profile minimal
+                  rustup default "$RUST_VERSION"
+                  echo "rustc=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
+            - name: Cache cargo and target
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      target
+                  key: build-windows-loader-${{ steps.rust.outputs.rustc }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+                  restore-keys: |
+                      build-windows-loader-${{ steps.rust.outputs.rustc }}-${{ hashFiles('Cargo.lock') }}-
+
+            - name: Restore source mtimes
+              run: |
+                  base=$(cat target/.built-commit 2>/dev/null || true)
+                  if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+                      git ls-files -z | xargs -0 touch -c -d '2000-01-01T00:00:00Z'
+                      git diff --name-only -z "$base" HEAD | xargs -0 -r touch -c
+                      echo "Cached build from $base: $(git diff --name-only "$base" HEAD | wc -l) files changed since."
+                  else
+                      git ls-files -z | xargs -0 touch -c
+                      echo "No usable cached build: full rebuild."
+                  fi
+
+            - name: Build release
+              run: cargo build --release -p loader --no-default-features
+
+            - name: Record the built commit
+              run: mkdir -p target && git rev-parse HEAD > target/.built-commit
+
+            - name: Upload binaries
+              uses: actions/upload-artifact@v4
+              with:
+                  name: volcren-windows-loader-release
+                  path: target/release/loader.exe
+                  if-no-files-found: error
+
     package:
         name: package for Linux
         needs: build
@@ -165,7 +226,7 @@ jobs:
 
     msi:
         name: build and test the MSI
-        needs: build
+        needs: [build, build-loader]
         runs-on: windows-latest
         timeout-minutes: 20
         env:
@@ -176,6 +237,11 @@ jobs:
             - uses: actions/download-artifact@v4
               with:
                   name: volcren-windows-release
+                  path: dist
+
+            - uses: actions/download-artifact@v4
+              with:
+                  name: volcren-windows-loader-release
                   path: dist
 
             - name: Version

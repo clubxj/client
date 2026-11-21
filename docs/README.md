@@ -27,7 +27,7 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 - **No hardcoded addresses.** Offset rules match code shape at runtime; a rule that doesn't match exactly one candidate fails rather than guesses.
 - **`src/ipc` owns the wire format.** Any change bumps `ipc::PROTOCOL_VERSION`, with agent, injector and the lib's `host.luau` updated together.
 - **Agent version = hash of the DLL** (`ipc::build_id`); the DLL hot reloads without restarting the client.
-- **Windows code is cross-compiled** for `x86_64-pc-windows-gnu`; only the loader and the injector's non-Windows stubs are native.
+- **Windows code is cross-compiled** for `x86_64-pc-windows-gnu`; only the loader and the injector's non-Windows stubs are native. The released Windows loader is built on Windows ([releases.md](releases.md)).
 - **Scripts see only the globals** in `src/injector/src/sandbox.rs`; `lib/host.luau` (separate repo) is their typed wrapper.
 - **`standalone/` is decompiled client code**: read only, keep private.
 - **The agent runs in a real client**: avoid anything that could crash it.

@@ -2,11 +2,12 @@
 
 ## What a push to `main` does
 
-`.github/workflows/release.yml`: `build` -> `package` (Linux tar) + `msi` -> `sign` -> `publish` -> `release`. Pull requests run build, package and the MSI test only.
+`.github/workflows/release.yml`: `build` + `build-loader` -> `package` (Linux tar) + `msi` -> `sign` -> `publish` -> `release`. Pull requests run build, package and the MSI test only.
 
 - Version `YYYY.MM.DD-<7-char commit>` (commit's UTC date) and build = commit Unix time, identical in every job. Manifest `build` orders releases, so an older signed manifest is never offered.
 - Release builds use `--no-default-features`, so the injector embeds no `lib/`; the loader always runs scripts with `--script`, reading `lib/` from disk.
 - Rust (`RUST_VERSION`) is pinned so the build cache survives. The cache job backdates tracked files and touches only those changed since `target/.built-commit`; don't remove that or every crate rebuilds.
+- The Windows loader is built on a `windows-latest` runner (`build-loader`, MSVC target, static CRT) because GPUI compiles its HLSL shaders with the Windows SDK's `fxc.exe`, and only when the build host is Windows. A release Windows loader therefore can't be built on Linux; agent and injector still cross-compile with MinGW in `build`.
 - MinGW comes from cached `.deb`s keyed on the runner's OS release and `MINGW_PACKAGES`, because the Ubuntu mirror sometimes serves them at under 100 kB/s and stalls the build for half an hour. Only the `-win32` variants are listed: the `gcc-mingw-w64-x86-64` metapackages also pull the unused `-posix` ones.
 - A failing `installer/test-msi.ps1` stops the release before signing.
 
