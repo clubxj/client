@@ -83,8 +83,6 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 - Output tabs are capped (`backend::LOG_LINES`, 2000 to 10 000) because a tab is one `TextEdit` that egui re-lays out on every new line (~6 ms and 13 MB per 1000 lines). Trimmed a quarter at a time.
 - Selection drag past the edge scrolls (`scroll_selection_past_edge`) because egui's `TextEdit` only scrolls to the cursor on key moves. Speed is relative to room to the window edge since the output sits at the bottom.
 - `theme::icon_button_width` sizes a group from all its possible labels so buttons never resize.
-- Inventory drag and drop uses `DragAndDrop::set_payload` on `drag_started`, not `dnd_drag_source`, whose drag-only sense swallows clicks.
-- Row widths for form rows are remembered in egui temp memory to decide wrapping next frame.
 
 ## Scripts, settings and stdin contract
 

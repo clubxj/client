@@ -1160,6 +1160,7 @@ pub struct LoaderApp {
     queues: crate::queue::Saved,
     queue_runners: Vec<crate::queue::Runner>,
     queue_page: queue_page::Page,
+    run_ui: run_page::Ui,
     dev_toggles: [bool; DEV_TOGGLES.len()],
     cursor: Cursor,
     ui_font: crate::theme::UiFont,
@@ -1285,6 +1286,7 @@ impl LoaderApp {
                 .unwrap_or_default(),
             queue_runners: Vec::new(),
             queue_page: queue_page::Page::default(),
+            run_ui: run_page::Ui::default(),
             dev_toggles: [false; DEV_TOGGLES.len()],
             cursor: storage.get(CURSOR_KEY)
                 .unwrap_or(DEFAULT_CURSOR),
@@ -3132,7 +3134,6 @@ impl LoaderApp {
 
     fn answer_form(&mut self, id: u64, outcome: crate::form::Outcome) {
         match outcome {
-            crate::form::Outcome::Open => {}
             crate::form::Outcome::Submitted(values) => {
                 self.remember_form(id);
                 self.launch_run(id, values);

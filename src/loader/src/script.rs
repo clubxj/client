@@ -505,6 +505,34 @@ fn suspend_process(pid: u32, suspend: bool) {
     }
 }
 
+#[cfg(test)]
+impl Script {
+    pub fn idle(paused: bool) -> Self {
+        let mut child = std::process::Command::new("true")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("`true` runs");
+        let stdin = child.stdin.take().expect("piped");
+        Self {
+            process: Process::new(child),
+            client: None,
+            stdin: Arc::new(Mutex::new(stdin)),
+            output: channel().1,
+            stderr: Arc::new(Mutex::new(Vec::new())),
+            finished: false,
+            paused,
+            stop_requested: None,
+            stop_ignored_reported: false,
+        }
+    }
+
+    pub fn finish_now(&mut self) {
+        self.finished = true;
+    }
+}
+
 #[cfg(not(unix))]
 fn suspend_process(_pid: u32, _suspend: bool) {}
 

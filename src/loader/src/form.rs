@@ -1,14 +1,30 @@
 use std::collections::HashMap;
 
-use eframe::egui;
+use std::rc::Rc;
+
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::{
+    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, Styled,
+    Window, div, prelude::FluentBuilder, px,
+};
 use injector::form::{self as spec_form};
 use serde_json::{Map, Value, json};
 
 use crate::layouts::{self, Kind, Known, Rules, ScriptLayouts};
+use crate::ui::fields::{self, NumberField, Range, TextField};
+use crate::ui::{theme, widgets};
 
 const STACK_BELOW: f32 = 420.0;
 
+const COLUMN_GAP: f32 = 8.0;
+
 const FIELD_GAP: f32 = 10.0;
+
+const LIST_HEIGHT: f32 = 240.0;
+
+const NUMBER_WIDTH: f32 = 110.0;
+
+const TEXT_WIDTH: f32 = 200.0;
 
 const ROW_GAP: f32 = 24.0;
 
@@ -65,7 +81,6 @@ pub struct Form {
 }
 
 pub enum Outcome {
-    Open,
     Submitted(Value),
     Cancelled,
 }
@@ -159,130 +174,6 @@ impl Form {
         }
     }
 
-    fn list_ui(ui: &mut egui::Ui, id: &str, rows: &mut [(String, String, bool)]) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt(id)
-                .auto_shrink([false, true])
-                .max_height(240.0)
-                .show(ui, |ui| {
-                    egui::Grid::new(id)
-                        .num_columns(1)
-                        .striped(true)
-                        .min_col_width(ui.available_width())
-                        .spacing(egui::vec2(16.0, 6.0))
-                        .show(ui, |ui| {
-                            for (_, label, on) in rows.iter_mut() {
-                                ui.checkbox(on, label.as_str());
-                                ui.end_row();
-                            }
-                        });
-                });
-        });
-    }
-
-    fn field_ui(
-        ui: &mut egui::Ui,
-        field: &Value,
-        value: Option<&mut FieldValue>,
-        layouts: &ScriptLayouts,
-        rules: &KindRules,
-    ) {
-        let label = field
-            .get("label")
-            .or_else(|| field.get("text"))
-            .and_then(Value::as_str)
-            .or_else(|| spec_form::id(field))
-            .unwrap_or("");
-        let number = |key: &str| field.get(key).and_then(Value::as_f64);
-        match (spec_form::kind(field), value) {
-            ("label", _) => match spec_form::heading(field) {
-                Some(1) => {
-                    ui.heading(label);
-                }
-                Some(_) => {
-                    let style = ui.style();
-                    let size = (egui::TextStyle::Body.resolve(style).size
-                        + egui::TextStyle::Heading.resolve(style).size)
-                        / 2.0;
-                    ui.label(egui::RichText::new(label).strong().size(size));
-                }
-                None => {
-                    ui.label(label);
-                }
-            },
-            ("list", Some(FieldValue::List(rows))) => {
-                if !label.is_empty() {
-                    ui.label(label);
-                }
-                Self::list_ui(ui, spec_form::id(field).unwrap_or("list"), rows);
-            }
-            ("check", Some(FieldValue::Check(b))) => {
-                ui.checkbox(b, label);
-            }
-            ("number", Some(FieldValue::Number(n))) => {
-                ui.horizontal(|ui| {
-                    let box_first = spec_form::box_first(field);
-                    if !box_first {
-                        ui.label(label);
-                    }
-                    let mut drag = egui::DragValue::new(n).range(
-                        number("min").unwrap_or(f64::MIN)..=number("max").unwrap_or(f64::MAX),
-                    );
-                    if field
-                        .get("integer")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        drag = drag.fixed_decimals(0).speed(1.0);
-                    } else if let Some(step) = number("step") {
-                        drag = drag.speed(step);
-                    }
-                    ui.add(drag);
-                    if box_first {
-                        ui.label(label);
-                    }
-                });
-            }
-            ("choice", Some(FieldValue::Text(selected))) => {
-                if !label.is_empty() {
-                    ui.label(with_colon(label));
-                }
-                egui::ComboBox::from_id_salt(spec_form::id(field).unwrap_or(label))
-                    .selected_text(selected.clone())
-                    .show_ui(ui, |ui| {
-                        for option in spec_form::options(field) {
-                            ui.selectable_value(selected, option.clone(), option);
-                        }
-                    });
-            }
-            (_, Some(FieldValue::Text(text))) => {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    ui.text_edit_singleline(text);
-                });
-            }
-            (_, Some(FieldValue::Layout(chosen))) => {
-                if let Some(kind) = layout_kind(field) {
-                    ui.label(with_colon(if label.is_empty() {
-                        kind.label()
-                    } else {
-                        label
-                    }));
-                    layouts::picker_ui(
-                        ui,
-                        kind,
-                        layouts,
-                        chosen,
-                        spec_form::id(field).unwrap_or(""),
-                        rules.of(kind),
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-
     pub fn rules(&self, kind: Kind) -> &Rules {
         self.rules.of(kind)
     }
@@ -323,134 +214,380 @@ impl Form {
         Outcome::Submitted(Value::Object(values))
     }
 
-    pub fn show_inline(&mut self, ui: &mut egui::Ui, layouts: &ScriptLayouts) {
-        ui.spacing_mut().item_spacing.y = FIELD_GAP;
-        let rules = &self.rules;
-        let fields = spec_form::fields(&self.spec);
-        let columns = self
-            .spec
-            .get("columns")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+    pub fn render(
+        &mut self,
+        ui: &mut FormUi,
+        layouts: &ScriptLayouts,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let Self {
+            spec,
+            values,
+            rules,
+            ..
+        } = self;
+        let fields = spec_form::fields(spec);
+        let columns = spec.get("columns").and_then(Value::as_bool).unwrap_or(false);
         let gaps = Gaps {
-            row: spec_form::row_gap(&self.spec).map_or(ROW_GAP, |g| g as f32),
-            heading: spec_form::heading_gap(&self.spec).map_or(HEADING_GAP, |g| g as f32),
+            row: spec_form::row_gap(spec).map_or(ROW_GAP, |g| g as f32),
+            heading: spec_form::heading_gap(spec).map_or(HEADING_GAP, |g| g as f32),
         };
-        let values = &mut self.values;
+        let mut place = Place {
+            ui,
+            layouts,
+            rules,
+            gaps,
+        };
         if !columns {
-            Self::show_fields(ui, fields, gaps, values, layouts, rules);
-            return;
+            return show_fields(fields, values, &mut place, window, cx).into_any_element();
         }
         let (checks, others): (Vec<&Value>, Vec<&Value>) = fields
             .iter()
             .partition(|field| spec_form::kind(field) == "check");
-        if ui.available_width() < STACK_BELOW {
-            Self::show_fields(
-                ui,
-                others.into_iter().chain(checks),
-                gaps,
-                values,
-                layouts,
-                rules,
-            );
-            return;
-        }
-        ui.columns(2, |cols| {
-            Self::show_fields(&mut cols[0], others, gaps, values, layouts, rules);
-            Self::show_fields(&mut cols[1], checks, gaps, values, layouts, rules);
-        });
+        let column = |fields: Div| {
+            fields
+                .flex_1()
+                .min_w(px(STACK_BELOW / 2.0 - COLUMN_GAP / 2.0))
+        };
+        div()
+            .flex()
+            .flex_wrap()
+            .items_start()
+            .gap_x(px(COLUMN_GAP))
+            .gap_y(px(FIELD_GAP))
+            .child(column(show_fields(others, values, &mut place, window, cx)))
+            .child(column(show_fields(checks, values, &mut place, window, cx)))
+            .into_any_element()
     }
+}
 
-    fn show_fields<'a>(
-        ui: &mut egui::Ui,
-        fields: impl IntoIterator<Item = &'a Value>,
-        gaps: Gaps,
-        values: &mut HashMap<String, FieldValue>,
-        layouts: &ScriptLayouts,
-        rules: &KindRules,
-    ) {
-        let shown: Vec<&Value> = fields
-            .into_iter()
-            .filter(|field| Self::visible(field, values))
-            .collect();
-        let mut rest = shown.as_slice();
-        while let Some(first) = rest.first() {
-            let len = spec_form::row(first).map_or(1, |row| {
-                rest.iter()
-                    .take_while(|field| spec_form::row(field) == Some(row))
-                    .count()
-            });
-            let at_top = rest.len() == shown.len();
-            let (line, after) = rest.split_at(len);
-            rest = after;
-            if !at_top && spec_form::kind(first) == "label" && spec_form::heading(first).is_some() {
-                ui.add_space(gaps.heading);
-            }
-            if len == 1 {
-                Self::show_field(ui, first, values, layouts, rules);
-            } else {
-                Self::show_row(ui, line, gaps.row, values, layouts, rules);
-            }
+pub type WithForm = Rc<dyn Fn(&mut App, &mut dyn FnMut(&mut Form))>;
+
+pub struct FormUi {
+    with: WithForm,
+    numbers: HashMap<String, NumberField>,
+    texts: HashMap<String, TextField>,
+}
+
+impl FormUi {
+    pub fn new(with: impl Fn(&mut App, &mut dyn FnMut(&mut Form)) + 'static) -> Self {
+        Self {
+            with: Rc::new(with),
+            numbers: HashMap::new(),
+            texts: HashMap::new(),
         }
     }
 
-    fn show_row(
-        ui: &mut egui::Ui,
-        line: &[&Value],
-        gap: f32,
-        values: &mut HashMap<String, FieldValue>,
-        layouts: &ScriptLayouts,
-        rules: &KindRules,
-    ) {
-        let id = ui
-            .id()
-            .with(("form_row", spec_form::row(line[0]), spec_form::id(line[0])));
-        let width: Option<f32> = ui.data(|d| d.get_temp(id));
-        if width.is_some_and(|w| w > ui.available_width()) {
-            for field in line {
-                Self::show_field(ui, field, values, layouts, rules);
-            }
-            return;
-        }
-        let row = ui.horizontal_top(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            ui.spacing_mut().item_spacing.x = gap;
-            for field in line {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.x = FIELD_GAP;
-                    Self::show_field(ui, field, values, layouts, rules);
-                });
-            }
-        });
-        ui.data_mut(|d| d.insert_temp(id, row.response.rect.width()));
-    }
-
-    fn visible(field: &Value, values: &HashMap<String, FieldValue>) -> bool {
-        spec_form::visible_rules(field)
-            .into_iter()
-            .all(|(id, equals)| {
-                values
-                    .get(id)
-                    .is_some_and(|v| spec_form::matches(&collect_one(v), equals))
+    fn change(&self, id: &str) -> impl Fn(&mut App, &mut dyn FnMut(&mut FieldValue)) + 'static {
+        let (with, id) = (self.with.clone(), id.to_owned());
+        move |cx, change| {
+            with(cx, &mut |form| {
+                if let Some(value) = form.values.get_mut(&id) {
+                    change(value);
+                }
             })
-    }
-
-    fn show_field(
-        ui: &mut egui::Ui,
-        field: &Value,
-        values: &mut HashMap<String, FieldValue>,
-        layouts: &ScriptLayouts,
-        rules: &KindRules,
-    ) {
-        if !Self::visible(field, values) {
-            return;
         }
-        let checked = |id: &str| matches!(values.get(id), Some(FieldValue::Check(true)));
-        let usable = spec_form::enabled_by(field).is_none_or(checked)
-            && !spec_form::disabled_by(field).is_some_and(checked);
-        let value = spec_form::id(field).and_then(|id| values.get_mut(id));
-        ui.add_enabled_ui(usable, |ui| {
-            Self::field_ui(ui, field, value, layouts, rules)
-        });
     }
+}
+
+struct Place<'a> {
+    ui: &'a mut FormUi,
+    layouts: &'a ScriptLayouts,
+    rules: &'a KindRules,
+    gaps: Gaps,
+}
+
+fn visible(field: &Value, values: &HashMap<String, FieldValue>) -> bool {
+    spec_form::visible_rules(field)
+        .into_iter()
+        .all(|(id, equals)| {
+            values
+                .get(id)
+                .is_some_and(|v| spec_form::matches(&collect_one(v), equals))
+        })
+}
+
+fn show_fields<'a>(
+    fields: impl IntoIterator<Item = &'a Value>,
+    values: &mut HashMap<String, FieldValue>,
+    place: &mut Place,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let shown: Vec<&Value> = fields
+        .into_iter()
+        .filter(|field| visible(field, values))
+        .collect();
+    let mut column = div().flex().flex_col().items_start().gap(px(FIELD_GAP));
+    let mut rest = shown.as_slice();
+    while let Some(first) = rest.first() {
+        let len = spec_form::row(first).map_or(1, |row| {
+            rest.iter()
+                .take_while(|field| spec_form::row(field) == Some(row))
+                .count()
+        });
+        let at_top = rest.len() == shown.len();
+        let (line, after) = rest.split_at(len);
+        rest = after;
+        if !at_top && spec_form::kind(first) == "label" && spec_form::heading(first).is_some() {
+            column = column.child(div().h(px(place.gaps.heading - FIELD_GAP).max(px(0.0))));
+        }
+        if len == 1 {
+            column = column.children(show_field(first, values, place, window, cx));
+        } else {
+            let row = line.iter().fold(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_x(px(place.gaps.row))
+                    .gap_y(px(FIELD_GAP)),
+                |row, field| row.children(show_field(field, values, place, window, cx)),
+            );
+            column = column.child(row);
+        }
+    }
+    column
+}
+
+fn show_field(
+    field: &Value,
+    values: &mut HashMap<String, FieldValue>,
+    place: &mut Place,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    if !visible(field, values) {
+        return None;
+    }
+    let checked = |id: &str| matches!(values.get(id), Some(FieldValue::Check(true)));
+    let usable = spec_form::enabled_by(field).is_none_or(checked)
+        && !spec_form::disabled_by(field).is_some_and(checked);
+    let value = spec_form::id(field).and_then(|id| values.get_mut(id));
+    field_ui(field, value, usable, place, window, cx)
+}
+
+fn text(label: &str, usable: bool) -> Div {
+    div()
+        .when(!usable, |this| this.text_color(theme::COMMENT))
+        .child(label.to_owned())
+}
+
+fn field_ui(
+    field: &Value,
+    value: Option<&mut FieldValue>,
+    usable: bool,
+    place: &mut Place,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    let label = field
+        .get("label")
+        .or_else(|| field.get("text"))
+        .and_then(Value::as_str)
+        .or_else(|| spec_form::id(field))
+        .unwrap_or("");
+    let id = spec_form::id(field).unwrap_or(label).to_owned();
+    let number = |key: &str| field.get(key).and_then(Value::as_f64);
+    let element = match (spec_form::kind(field), value) {
+        ("label", _) => match spec_form::heading(field) {
+            Some(1) => widgets::heading(label.to_owned()),
+            Some(_) => widgets::strong(label.to_owned()).text_size((theme::BODY + theme::HEADING) / 2.0),
+            None => text(label, usable),
+        }
+        .into_any_element(),
+        ("list", Some(FieldValue::List(rows))) => {
+            let change = place.ui.change(&id);
+            let change = Rc::new(change);
+            let list = rows.iter().enumerate().fold(
+                div().flex().flex_col(),
+                |list, (i, (_, row_label, on))| {
+                    let change = change.clone();
+                    list.child(
+                        div()
+                            .px(px(4.0))
+                            .py(px(3.0))
+                            .when(i % 2 == 1, |this| this.bg(theme::BG_FLOAT))
+                            .child(fields::checkbox(
+                                ("form-list", i),
+                                row_label.clone(),
+                                *on,
+                                usable,
+                                move |on, cx| {
+                                    change(cx, &mut |value| {
+                                        if let FieldValue::List(rows) = value
+                                            && let Some(row) = rows.get_mut(i)
+                                        {
+                                            row.2 = on;
+                                        }
+                                    })
+                                },
+                            )),
+                    )
+                },
+            );
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .gap(theme::LINE_GAP)
+                .when(!label.is_empty(), |this| this.child(text(label, usable)))
+                .child(
+                    div()
+                        .w_full()
+                        .p(px(6.0))
+                        .border_1()
+                        .border_color(theme::BORDER)
+                        .rounded(px(2.0))
+                        .child(
+                            div()
+                                .id(format!("form-list-scroll-{id}"))
+                                .max_h(px(LIST_HEIGHT))
+                                .overflow_y_scrollbar()
+                                .child(list),
+                        ),
+                )
+                .into_any_element()
+        }
+        ("check", Some(FieldValue::Check(on))) => {
+            let change = place.ui.change(&id);
+            fields::checkbox(
+                format!("form-check-{id}"),
+                label.to_owned(),
+                *on,
+                usable,
+                move |on, cx| {
+                    change(cx, &mut |value| {
+                        if let FieldValue::Check(b) = value {
+                            *b = on;
+                        }
+                    })
+                },
+            )
+            .into_any_element()
+        }
+        ("number", Some(FieldValue::Number(n))) => {
+            let range = Range::new(number("min").unwrap_or(f64::MIN)..=number("max").unwrap_or(f64::MAX));
+            let range = if field.get("integer").and_then(Value::as_bool).unwrap_or(false) {
+                range.integer()
+            } else {
+                number("step").map_or(range, |step| range.step(step))
+            };
+            let change = place.ui.change(&id);
+            let input = place.ui.numbers.entry(id.clone()).or_insert_with(|| {
+                NumberField::new(
+                    range,
+                    false,
+                    move |shown, cx| {
+                        change(cx, &mut |value| {
+                            if let FieldValue::Number(n) = value {
+                                *n = shown;
+                            }
+                        })
+                    },
+                    window,
+                    cx,
+                )
+            });
+            input.sync(*n, window, cx);
+            let input = input.input(usable).w(px(NUMBER_WIDTH));
+            let label = text(label, usable);
+            let row = div().flex().items_center().gap(theme::ITEM_GAP);
+            if spec_form::box_first(field) {
+                row.child(input).child(label)
+            } else {
+                row.child(label).child(input)
+            }
+            .into_any_element()
+        }
+        ("choice", Some(FieldValue::Text(selected))) => {
+            let change = Rc::new(place.ui.change(&id));
+            let picks = spec_form::options(field)
+                .into_iter()
+                .map(|option| {
+                    let change = change.clone();
+                    let chosen = option.clone();
+                    fields::Pick::new(option.clone(), *selected == option, move |cx| {
+                        change(cx, &mut |value| {
+                            if let FieldValue::Text(text) = value {
+                                text.clone_from(&chosen);
+                            }
+                        })
+                    })
+                })
+                .collect();
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(theme::LINE_GAP)
+                .when(!label.is_empty(), |this| this.child(text(&with_colon(label), usable)))
+                .child(fields::select(
+                    format!("form-choice-{id}"),
+                    selected.clone(),
+                    picks,
+                    usable,
+                    None,
+                ))
+                .into_any_element()
+        }
+        (_, Some(FieldValue::Text(value))) => {
+            let change = place.ui.change(&id);
+            let input = place.ui.texts.entry(id.clone()).or_insert_with(|| {
+                TextField::new(
+                    "",
+                    move |typed, cx| {
+                        change(cx, &mut |value| {
+                            if let FieldValue::Text(text) = value {
+                                text.clone_from(&typed);
+                            }
+                        })
+                    },
+                    window,
+                    cx,
+                )
+            });
+            input.sync(value, window, cx);
+            div()
+                .flex()
+                .items_center()
+                .gap(theme::ITEM_GAP)
+                .child(text(label, usable))
+                .child(input.input(usable).w(px(TEXT_WIDTH)))
+                .into_any_element()
+        }
+        (_, Some(FieldValue::Layout(chosen))) => {
+            let kind = layout_kind(field)?;
+            let change = Rc::new(place.ui.change(&id));
+            let picker = layouts::picker(
+                kind,
+                place.layouts,
+                chosen,
+                &id,
+                place.rules.of(kind),
+                usable,
+                move |name, cx| {
+                    change(cx, &mut |value| {
+                        if let FieldValue::Layout(chosen) = value {
+                            chosen.clone_from(&name);
+                        }
+                    })
+                },
+            );
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(theme::LINE_GAP)
+                .child(text(
+                    &with_colon(if label.is_empty() { kind.label() } else { label }),
+                    usable,
+                ))
+                .child(picker)
+                .into_any_element()
+        }
+        _ => return None,
+    };
+    Some(element)
 }

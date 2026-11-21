@@ -1,22 +1,24 @@
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use eframe::egui;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::{
+    App, AppContext, ClickEvent, Context, Div, ElementId, Hsla, ImageSource, InteractiveElement,
+    IntoElement, ObjectFit, ParentElement, Point, Render, RenderImage, Stateful,
+    StatefulInteractiveElement, Styled, StyledImage, Window, div, img, prelude::FluentBuilder, px,
+    rgb, rgba,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use loader::backend::{self, Settings, Target};
 
-use crate::icons::{Icons, Key};
-
-const SLOT_SIZE: egui::Vec2 = egui::vec2(
-    crate::icons::SLOT_SIZE.width,
-    crate::icons::SLOT_SIZE.height,
-);
-const SLOT_CELL: egui::Vec2 = egui::vec2(
-    crate::icons::SLOT_CELL.width,
-    crate::icons::SLOT_CELL.height,
-);
-use crate::theme;
+use crate::icons::{Icons, Key, SLOT_CELL};
+use crate::ui::fields::{self, NumberField, Pick, Range, TextField};
+use crate::ui::{theme, widgets};
 
 pub const EQUIPMENT_SLOTS: [(usize, &str); 12] = [
     (0, "Head"),
@@ -770,7 +772,7 @@ pub fn load(
         .ok_or_else(|| "no data folder".to_owned())
         .and_then(|path| {
             std::fs::create_dir_all(path.parent().unwrap_or(&path))
-                .and_then(|()| std::fs::write(&path, &text))
+                .and_then(|()| std::fs::write(&path, text))
                 .map(|()| path)
                 .map_err(|e| e.to_string())
         });
@@ -787,11 +789,13 @@ pub fn load(
     )
 }
 
-pub trait Layout: Clone + Default + PartialEq {
+pub trait Layout: Clone + Default + PartialEq + 'static {
     const KIND: Kind;
     fn name(&self) -> &str;
     fn set_name(&mut self, name: String);
     fn to_value(&self) -> Value;
+    fn editor_in(editors: &mut Editors) -> &mut Editor<Self>;
+    fn saved_in(layouts: &mut ScriptLayouts) -> &mut Vec<Self>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -802,14 +806,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn field_kind(self) -> &'static str {
-        match self {
-            Kind::Equipment => "equipment",
-            Kind::Inventory => "inventory",
-            Kind::Prayer => "prayer",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             Kind::Equipment => "Equipment",
@@ -870,6 +866,12 @@ impl Kind {
 
 impl Layout for Equipment {
     const KIND: Kind = Kind::Equipment;
+    fn editor_in(editors: &mut Editors) -> &mut Editor<Self> {
+        &mut editors.equipment
+    }
+    fn saved_in(layouts: &mut ScriptLayouts) -> &mut Vec<Self> {
+        &mut layouts.equipment
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -899,6 +901,12 @@ impl Layout for Equipment {
 
 impl Layout for Inventory {
     const KIND: Kind = Kind::Inventory;
+    fn editor_in(editors: &mut Editors) -> &mut Editor<Self> {
+        &mut editors.inventory
+    }
+    fn saved_in(layouts: &mut ScriptLayouts) -> &mut Vec<Self> {
+        &mut layouts.inventory
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -926,6 +934,12 @@ impl Layout for Inventory {
 
 impl Layout for Prayer {
     const KIND: Kind = Kind::Prayer;
+    fn editor_in(editors: &mut Editors) -> &mut Editor<Self> {
+        &mut editors.prayer
+    }
+    fn saved_in(layouts: &mut ScriptLayouts) -> &mut Vec<Self> {
+        &mut layouts.prayer
+    }
     fn name(&self) -> &str {
         &self.name
     }
@@ -1034,7 +1048,7 @@ fn copy_name<L: Layout>(saved: &[L], name: &str) -> String {
 }
 
 impl<L: Layout> Editor<L> {
-    fn open(&mut self, saved: &[L], index: Option<usize>) {
+    pub fn open(&mut self, saved: &[L], index: Option<usize>) {
         self.index = index.filter(|&i| i < saved.len());
         self.opened = self.index.map(|i| saved[i].name().to_owned());
         self.draft = self.index.map(|i| saved[i].clone()).unwrap_or_default();
@@ -1068,266 +1082,200 @@ impl<L: Layout> Editor<L> {
         }
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, saved: &mut Vec<L>) {
-        self.follow(saved);
-        let mut open: Option<Option<usize>> = None;
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.label("Layout:");
-                let current = self
-                    .index
-                    .and_then(|i| saved.get(i))
-                    .map_or(NEW_LAYOUT, |l| l.name());
-                egui::ComboBox::from_id_salt((L::KIND.field_kind(), "layout_picker"))
-                    .width(PICKER_WIDTH)
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        for (i, layout) in saved.iter().enumerate() {
-                            if ui
-                                .selectable_label(self.index == Some(i), layout.name())
-                                .clicked()
-                            {
-                                open = Some(Some(i));
-                            }
-                        }
-                        if ui
-                            .selectable_label(self.index.is_none(), NEW_LAYOUT)
-                            .clicked()
-                        {
-                            open = Some(None);
-                        }
-                    });
-            });
-            ui.vertical(|ui| {
-                ui.label("Name:");
-                let mut name = self.draft.name().to_owned();
-                if ui
-                    .add(egui::TextEdit::singleline(&mut name).desired_width(NAME_WIDTH))
-                    .changed()
-                {
-                    self.draft.set_name(name);
-                }
-            });
-        });
-        ui.add_space(4.0);
-        let button = (COLUMN_WIDTH - 2.0 * ui.spacing().item_spacing.x) / 3.0;
-        ui.horizontal(|ui| {
-            let name = self.draft.name().trim().to_owned();
-            let taken = saved
-                .iter()
-                .enumerate()
-                .any(|(i, l)| Some(i) != self.index && l.name() == name);
-            let can_save =
-                !name.is_empty() && !taken && self.invalid.is_none() && self.dirty(saved);
-            if ui
-                .add_enabled(
-                    can_save,
-                    egui::Button::new("Save").min_size(egui::vec2(button, 0.0)),
-                )
-                .on_disabled_hover_text(if let Some(invalid) = &self.invalid {
-                    invalid.as_str()
-                } else if taken {
-                    "Another layout has this name."
-                } else if name.is_empty() {
-                    "Give the layout a name."
-                } else {
-                    "Nothing changed."
-                })
-                .clicked()
-            {
-                self.draft.set_name(name.clone());
-                match self.index {
-                    Some(i) => saved[i] = self.draft.clone(),
-                    None => {
-                        saved.push(self.draft.clone());
-                        self.index = Some(saved.len() - 1);
-                    }
-                }
-                self.opened = Some(name);
-            }
-            if ui
-                .add_enabled(
-                    self.index.is_some(),
-                    egui::Button::new("Duplicate").min_size(egui::vec2(button, 0.0)),
-                )
-                .clicked()
-                && let Some(i) = self.index
-            {
-                let mut copy = saved[i].clone();
-                copy.set_name(copy_name(saved, copy.name()));
-                saved.push(copy);
-                open = Some(Some(saved.len() - 1));
-            }
-            if ui
-                .add_enabled(
-                    self.index.is_some(),
-                    egui::Button::new("Remove").min_size(egui::vec2(button, 0.0)),
-                )
-                .clicked()
-                && let Some(i) = self.index
-            {
-                saved.remove(i);
-                open = Some(
-                    i.checked_sub(1)
-                        .or_else(|| (!saved.is_empty()).then_some(0)),
-                );
-            }
-        });
-        if let Some(index) = open {
-            self.open(saved, index);
-        }
-    }
-
     fn begin_read(&mut self) {
         self.reading = true;
         self.error = None;
     }
 
-    fn read_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        hint: Option<&str>,
-        can_read: bool,
-        quick_read: bool,
-    ) -> Option<Action> {
-        let mut action = None;
-        ui.vertical(|ui| {
-            ui.set_width(COLUMN_WIDTH);
-            if let Some(hint) = hint {
-                ui.vertical_centered(|ui| ui.weak(hint));
-            }
-            ui.vertical_centered_justified(|ui| {
-                let read = ui
-                    .add_enabled(
-                        can_read && !self.reading,
-                        egui::Button::new("Read from client"),
-                    )
-                    .on_hover_text("Fills the layout with what the selected client holds now.")
-                    .on_disabled_hover_text(
-                        "Select a client with the agent loaded in the Clients tab.",
-                    );
-                if self.reading {
-                    let height = read.rect.height();
-                    let center = read.rect.right_center() - egui::vec2(height / 2.0, 0.0);
-                    egui::Spinner::new().paint_at(
-                        ui,
-                        egui::Rect::from_center_size(center, egui::Vec2::splat(height * 0.7)),
-                    );
-                }
-                if read.clicked() {
-                    self.begin_read();
-                    action = Some(Action::Read);
-                }
-                if quick_read
-                    && ui
-                        .add_enabled(
-                            can_read && !self.reading,
-                            egui::Button::new("Read quick prayers"),
-                        )
-                        .on_hover_text("Fills the layout with the client's quick prayer selection.")
-                        .clicked()
-                {
-                    self.begin_read();
-                    action = Some(Action::ReadQuick);
-                }
-            });
-            if let Some(error) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-        });
-        action
-    }
-}
-
-const fn grid_width(columns: usize, cell: f32, gap: f32) -> f32 {
-    columns as f32 * cell + (columns - 1) as f32 * gap
-}
-
-const PRAYER_CELL: f32 = 42.0;
-const PRAYER_GAP: f32 = 4.0;
-const PICKER_WIDTH: f32 = 100.0;
-const NAME_WIDTH: f32 = 160.0;
-
-const COLUMN_WIDTH: f32 = PICKER_WIDTH + 8.0 + NAME_WIDTH;
-
-fn centered_column<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    centered_width(ui, COLUMN_WIDTH, add)
-}
-
-fn centered_width<R>(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let pad = ((ui.available_width() - width) / 2.0 - ui.spacing().item_spacing.x).max(0.0);
-    ui.horizontal_top(|ui| {
-        ui.add_space(pad);
-        ui.vertical(|ui| {
-            ui.set_width(width);
-            add(ui)
-        })
-        .inner
-    })
-    .inner
-}
-
-fn slot_ui(
-    ui: &mut egui::Ui,
-    icons: &mut Icons,
-    item: Option<&Item>,
-    empty_text: &str,
-    selected: bool,
-    sense: egui::Sense,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(SLOT_CELL, sense);
-    if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact(&response);
-        let stroke = if selected {
-            egui::Stroke::new(1.5, crate::theme::BLUE)
-        } else {
-            visuals.bg_stroke
-        };
-        ui.painter().rect(
-            rect,
-            3.0,
-            visuals.weak_bg_fill,
-            stroke,
-            egui::StrokeKind::Inside,
-        );
-        let inner = egui::Rect::from_center_size(rect.center(), SLOT_SIZE);
-        match item {
-            Some(item) => {
-                match icons.image(item.icon_key()).and(None::<&egui::TextureHandle>) {
-                    Some(texture) => {
-                        egui::Image::from_texture(texture).paint_at(ui, inner);
-                    }
-                    None => {
-                        let short = if item.name.is_empty() {
-                            item.id.to_string()
-                        } else {
-                            item.name.chars().take(4).collect()
-                        };
-                        ui.painter().text(
-                            inner.center(),
-                            egui::Align2::CENTER_CENTER,
-                            short,
-                            egui::TextStyle::Small.resolve(ui.style()),
-                            ui.visuals().weak_text_color(),
-                        );
-                    }
-                }
-                if item.locked {
-                    paint_padlock(ui.painter(), rect);
-                }
-            }
+    fn save(&mut self, saved: &mut Vec<L>) {
+        let name = self.draft.name().trim().to_owned();
+        self.draft.set_name(name.clone());
+        match self.index.filter(|&i| i < saved.len()) {
+            Some(i) => saved[i] = self.draft.clone(),
             None => {
-                ui.painter().text(
-                    inner.center(),
-                    egui::Align2::CENTER_CENTER,
-                    empty_text,
-                    egui::TextStyle::Small.resolve(ui.style()),
-                    ui.visuals().weak_text_color(),
-                );
+                saved.push(self.draft.clone());
+                self.index = Some(saved.len() - 1);
             }
         }
+        self.opened = Some(name);
     }
-    response
+
+    fn duplicate(&mut self, saved: &mut Vec<L>) {
+        let Some(i) = self.index.filter(|&i| i < saved.len()) else {
+            return;
+        };
+        let mut copy = saved[i].clone();
+        copy.set_name(copy_name(saved, copy.name()));
+        saved.push(copy);
+        self.open(saved, Some(saved.len() - 1));
+    }
+
+    fn remove(&mut self, saved: &mut Vec<L>) {
+        let Some(i) = self.index.filter(|&i| i < saved.len()) else {
+            return;
+        };
+        saved.remove(i);
+        let next = i
+            .checked_sub(1)
+            .or_else(|| (!saved.is_empty()).then_some(0));
+        self.open(saved, next);
+    }
+
+    fn header(&mut self, saved: &[L], ui: &mut Ui, with: &With<L>, window: &mut Window, cx: &mut App) -> Div {
+        self.follow(saved);
+        let current = self
+            .index
+            .and_then(|i| saved.get(i))
+            .map_or(NEW_LAYOUT, |l| l.name())
+            .to_owned();
+        let mut picks: Vec<Pick> = saved
+            .iter()
+            .enumerate()
+            .map(|(i, layout)| {
+                Pick::new(
+                    layout.name().to_owned(),
+                    self.index == Some(i),
+                    edit(with, move |editor, saved| editor.open(saved, Some(i))),
+                )
+            })
+            .collect();
+        picks.push(Pick::new(
+            NEW_LAYOUT,
+            self.index.is_none(),
+            edit(with, |editor, saved| editor.open(saved, None)),
+        ));
+        let name = ui.names[kind_index(L::KIND)].get_or_insert_with(|| {
+            let with = with.clone();
+            TextField::new(
+                "",
+                move |name, cx| with(cx, &mut |editor, _| editor.draft.set_name(name.clone())),
+                window,
+                cx,
+            )
+        });
+        name.sync(self.draft.name(), window, cx);
+        let trimmed = self.draft.name().trim();
+        let taken = saved
+            .iter()
+            .enumerate()
+            .any(|(i, l)| Some(i) != self.index && l.name() == trimmed);
+        let can_save =
+            !trimmed.is_empty() && !taken && self.invalid.is_none() && self.dirty(saved);
+        let refusal = if let Some(invalid) = &self.invalid {
+            invalid.clone()
+        } else if taken {
+            "Another layout has this name.".to_owned()
+        } else if trimmed.is_empty() {
+            "Give the layout a name.".to_owned()
+        } else {
+            "Nothing changed.".to_owned()
+        };
+        let opened = self.index.is_some();
+        let width = px((COLUMN_WIDTH - 2.0 * f32::from(theme::ITEM_GAP)) / 3.0);
+        let button = |id: &'static str, label: &'static str, enabled: bool, change: fn(&mut Editor<L>, &mut Vec<L>)| {
+            widgets::button(id, label, enabled, click(edit(with, change)))
+                .w(width)
+                .justify_center()
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(theme::ITEM_GAP)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(theme::LINE_GAP)
+                            .child("Layout:")
+                            .child(fields::select(
+                                ("layout-picker", kind_index(L::KIND)),
+                                current,
+                                picks,
+                                true,
+                                Some(px(PICKER_WIDTH)),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(theme::LINE_GAP)
+                            .child("Name:")
+                            .child(name.input(true).w(px(NAME_WIDTH))),
+                    ),
+            )
+            .child(
+                div()
+                    .mt(theme::LINE_GAP)
+                    .flex()
+                    .gap(theme::ITEM_GAP)
+                    .child(
+                        button("layout-save", "Save", can_save, Editor::save)
+                            .when(!can_save, |this| this.tooltip(widgets::tooltip(refusal))),
+                    )
+                    .child(button("layout-duplicate", "Duplicate", opened, Editor::duplicate))
+                    .child(button("layout-remove", "Remove", opened, Editor::remove)),
+            )
+    }
+
+    fn read_ui(&self, hint: Option<&str>, can_read: bool, quick: bool, with: &With<L>, on_read: &OnRead) -> Div {
+        let enabled = can_read && !self.reading;
+        let read = |action: Action| {
+            let (with, on_read) = (with.clone(), on_read.clone());
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                with(cx, &mut |editor, _| editor.begin_read());
+                on_read(action, cx);
+            }
+        };
+        let read_button = widgets::button("layout-read", "Read from client", enabled, read(Action::Read))
+            .w_full()
+            .justify_center()
+            .relative()
+            .tooltip(widgets::tooltip(if enabled {
+                "Fills the layout with what the selected client holds now."
+            } else {
+                "Select a client with the agent loaded in the Clients tab."
+            }))
+            .when(self.reading, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(px(4.0))
+                        .flex()
+                        .items_center()
+                        .child(Spinner::new().xsmall()),
+                )
+            });
+        div()
+            .w(px(COLUMN_WIDTH))
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .when_some(hint, |this, hint| {
+                this.child(widgets::weak(hint.to_owned()).w_full().text_center())
+            })
+            .child(read_button)
+            .when(quick, |this| {
+                this.child(
+                    widgets::button("layout-read-quick", "Read quick prayers", enabled, read(Action::ReadQuick))
+                        .w_full()
+                        .justify_center()
+                        .when(enabled, |this| {
+                            this.tooltip(widgets::tooltip(
+                                "Fills the layout with the client's quick prayer selection.",
+                            ))
+                        }),
+                )
+            })
+            .when_some(self.error.clone(), |this, error| this.child(widgets::error(error)))
+    }
 }
 
 fn range_text(item: &Item) -> String {
@@ -1377,182 +1325,6 @@ fn slot_name(slot: usize) -> &'static str {
         .map_or("", |(_, name)| name)
 }
 
-fn paint_sprite(
-    ui: &mut egui::Ui,
-    icons: &mut Icons,
-    sprite: i32,
-    rect: egui::Rect,
-    padding: f32,
-    tint: egui::Color32,
-    name: &str,
-) {
-    match icons.image(Key::Sprite(sprite)).and(None::<&egui::TextureHandle>) {
-        Some(texture) => {
-            let size = texture
-                .size_vec2()
-                .min(rect.size() - egui::vec2(padding, padding));
-            egui::Image::from_texture(texture)
-                .tint(tint)
-                .paint_at(ui, egui::Rect::from_center_size(rect.center(), size));
-        }
-        None => {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                name.split(' ')
-                    .map(|w| w.chars().next().unwrap_or(' '))
-                    .collect::<String>(),
-                egui::TextStyle::Small.resolve(ui.style()),
-                ui.visuals().weak_text_color(),
-            );
-        }
-    }
-}
-
-fn paint_padlock(painter: &egui::Painter, rect: egui::Rect) {
-    let size = (rect.width() * 0.32).clamp(9.0, 14.0);
-    let body = egui::Rect::from_min_size(
-        egui::pos2(rect.right() - size - 2.0, rect.top() + size * 0.55 + 2.0),
-        egui::vec2(size, size * 0.75),
-    );
-    let backing = body
-        .expand2(egui::vec2(2.0, size * 0.55 + 1.5))
-        .translate(egui::vec2(0.0, -size * 0.27));
-    painter.rect_filled(backing, 3.0, egui::Color32::from_black_alpha(170));
-    let gold = egui::Color32::from_rgb(232, 190, 80);
-    let radius = size * 0.3;
-    let center = egui::pos2(body.center().x, body.top());
-    let mut shackle: Vec<egui::Pos2> = vec![egui::pos2(center.x - radius, body.top() + 1.0)];
-    shackle.extend((0..=12).map(|i| {
-        let angle = std::f32::consts::PI * i as f32 / 12.0;
-        egui::pos2(
-            center.x - radius * angle.cos(),
-            center.y - radius * angle.sin(),
-        )
-    }));
-    shackle.push(egui::pos2(center.x + radius, body.top() + 1.0));
-    painter.add(egui::Shape::line(
-        shackle,
-        egui::Stroke::new(size * 0.16, gold),
-    ));
-    painter.rect_filled(body, 1.5, gold);
-    painter.circle_filled(
-        body.center(),
-        size * 0.1,
-        egui::Color32::from_black_alpha(200),
-    );
-}
-
-fn item_ui(ui: &mut egui::Ui, item: &mut Item, doses_fixed: bool, cap: i32) -> Option<Doses> {
-    ui.label(item_title(item));
-    if item.locked {
-        ui.colored_label(
-            theme::BLUE,
-            "The script requires this item: it can be moved, not removed or changed.",
-        );
-        let mut parts = Vec::new();
-        if item.stackable {
-            parts.push(range_text(item));
-        }
-        if let Some(doses) = &item.doses {
-            parts.push(doses_text(doses));
-        }
-        if !parts.is_empty() {
-            ui.weak(parts.join(", "));
-        }
-        return None;
-    }
-    if item.stackable {
-        ui.horizontal(|ui| {
-            let spacing = ui.spacing().item_spacing.x;
-            let width = 2.0 * 30.0 + 2.0 * 70.0 + 3.0 * spacing;
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            ui.label("Min");
-            let min = ui.add(
-                egui::DragValue::new(&mut item.min)
-                    .range(0..=cap)
-                    .speed(1.0)
-                    .update_while_editing(false),
-            );
-            ui.label("Max");
-            let max = ui.add(
-                egui::DragValue::new(&mut item.max)
-                    .range(0..=cap)
-                    .speed(1.0)
-                    .update_while_editing(false),
-            );
-            if min.changed() && item.min > item.max {
-                item.max = item.min;
-            }
-            if max.changed() && (item.max == 0 || item.max < item.min) {
-                item.min = item.min.min(item.max);
-            }
-        });
-        ui.weak("Equal: exactly that many. Both 0: any amount.");
-    }
-    variants_ui(ui, item);
-    if doses_fixed {
-        if let Some(doses) = &item.doses {
-            ui.weak(format!(
-                "{}: the same as the item the script requires.",
-                doses_text(doses)
-            ));
-        }
-        return None;
-    }
-    let doses = item.doses.as_mut()?;
-    let before = doses.clone();
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Doses:");
-        for &dose in &doses.all {
-            let mut on = doses.accepted.contains(&dose);
-            if ui.checkbox(&mut on, format!("({dose})")).changed() {
-                if on {
-                    doses.accepted.push(dose);
-                } else if doses.accepted.len() > 1 {
-                    doses.accepted.retain(|&d| d != dose);
-                }
-            }
-        }
-    });
-    egui::ComboBox::from_id_salt("dose_order")
-        .selected_text(if doses.highest_first {
-            "Highest first"
-        } else {
-            "Lowest first"
-        })
-        .show_ui(ui, |ui| {
-            ui.selectable_value(&mut doses.highest_first, true, "Highest first");
-            ui.selectable_value(&mut doses.highest_first, false, "Lowest first");
-        });
-    doses.sort();
-    ui.weak("A carried dose that isn't ticked is swapped at the bank.");
-    (*doses != before).then(|| doses.clone())
-}
-
-fn variants_ui(ui: &mut egui::Ui, item: &mut Item) {
-    if item.variants.is_empty() {
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Also counts:");
-        for &id in &item.variants {
-            let mut on = item.ids.contains(&id);
-            if ui.checkbox(&mut on, format!("id {id}")).changed() {
-                if on {
-                    item.ids.push(id);
-                    item.ids.sort_unstable();
-                } else {
-                    item.ids.retain(|&other| other != id);
-                }
-            }
-        }
-    });
-    ui.weak(
-        "Items of the same name, such as a used and an unused one. The read id is taken first.",
-    );
-}
-
 fn share_doses<'a>(items: impl IntoIterator<Item = &'a mut Item>, base: &str, doses: &Doses) {
     for item in items {
         if !item.locked && item.dose_base() == Some(base) {
@@ -1561,530 +1333,12 @@ fn share_doses<'a>(items: impl IntoIterator<Item = &'a mut Item>, base: &str, do
     }
 }
 
-pub fn equipment_ui(
-    ui: &mut egui::Ui,
-    editor: &mut Editor<Equipment>,
-    saved: &mut Vec<Equipment>,
-    icons: &mut Icons,
-    can_read: bool,
-    rules: &Rules,
-    known: &Known,
-) -> Option<Action> {
-    for layout in saved.iter_mut() {
-        rules.fit_equipment(layout, known);
-    }
-    rules.fit_equipment(&mut editor.draft, known);
-    let cell = SLOT_CELL;
-    let gap = 6.0;
-    let width = grid_width(3, cell.x, gap);
-    let margin = (COLUMN_WIDTH - width) / 2.0;
-    let mut action = None;
-    let mut part = |ui: &mut egui::Ui, spells: bool| {
-        if spells {
-            spell_ui(ui, &mut editor.draft, icons);
-            return;
-        }
-        ui.set_width(COLUMN_WIDTH);
-        editor.header(ui, saved);
-        ui.add_space(6.0);
-        let hint = if rules.required.is_empty() {
-            "Right-click to empty."
-        } else {
-            "Right-click to empty.\nPadlocked items are the script's."
-        };
-        action = editor.read_ui(ui, Some(hint), can_read, false);
-        ui.add_space(6.0);
-        ui.horizontal_top(|ui| {
-            ui.add_space(margin);
-            let (grid, _) = ui.allocate_exact_size(
-                egui::vec2(width, 5.0 * cell.y + 4.0 * gap),
-                egui::Sense::hover(),
-            );
-            for &(slot, column, row) in &EQUIPMENT_CELLS {
-                let min = grid.min
-                    + egui::vec2(column as f32 * (cell.x + gap), row as f32 * (cell.y + gap));
-                let mut child = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(egui::Rect::from_min_size(min, cell))
-                        .layout(egui::Layout::left_to_right(egui::Align::Min)),
-                );
-                let name = slot_name(slot);
-                let (item, text, hover) = match editor.draft.slot(slot) {
-                    EquipmentSlot::Item(item) => {
-                        (Some(item), "", format!("{name}: {}", item_hover(item)))
-                    }
-                    EquipmentSlot::Empty => (None, "", format!("{name}: must be empty.")),
-                    EquipmentSlot::Any => (
-                        None,
-                        "any",
-                        format!("{name}: anything or nothing may be worn."),
-                    ),
-                };
-                let hover = if slot == SECONDARY_AMMO_SLOT {
-                    format!("{hover}\n{SECONDARY_AMMO_HINT}")
-                } else {
-                    hover
-                };
-                let response = slot_ui(
-                    &mut child,
-                    icons,
-                    item,
-                    text,
-                    editor.selected == Some(slot),
-                    egui::Sense::click(),
-                )
-                .on_hover_text(hover);
-                if response.clicked() {
-                    editor.selected = Some(slot);
-                }
-                if response.secondary_clicked() {
-                    editor.selected = Some(slot);
-                    let slot = editor.draft.slot_mut(slot);
-                    if !matches!(slot, EquipmentSlot::Item(item) if item.locked) {
-                        *slot = EquipmentSlot::Empty;
-                    }
-                }
-            }
-        });
-        ui.add_space(6.0);
-        ui.vertical_centered(|ui| {
-            if let Some(slot) = editor.selected {
-                ui.strong(slot_name(slot));
-                if slot == SECONDARY_AMMO_SLOT {
-                    ui.weak(SECONDARY_AMMO_HINT);
-                }
-                match editor.draft.slot_mut(slot) {
-                    EquipmentSlot::Item(item) => {
-                        item_ui(ui, item, false, i32::MAX);
-                    }
-                    state => {
-                        const EMPTY: &str = "Must be empty";
-                        const ANY: &str = "Any";
-                        egui::ComboBox::from_id_salt("equipment_slot_mode")
-                            .selected_text(if *state == EquipmentSlot::Any {
-                                ANY
-                            } else {
-                                EMPTY
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(state, EquipmentSlot::Empty, EMPTY);
-                                ui.selectable_value(state, EquipmentSlot::Any, ANY);
-                            });
-                    }
-                }
-            }
-        });
-    };
-    let gap = 24.0;
-    if ui.available_width() >= COLUMN_WIDTH + gap + COLUMN_WIDTH {
-        centered_width(ui, COLUMN_WIDTH + gap + COLUMN_WIDTH, |ui| {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| part(ui, false));
-                ui.add_space(gap);
-                ui.vertical(|ui| part(ui, true));
-            });
-        });
-    } else {
-        centered_width(ui, COLUMN_WIDTH, |ui| part(ui, false));
-        ui.add_space(gap);
-        centered_width(ui, COLUMN_WIDTH, |ui| part(ui, true));
-    }
-    action
-}
-
-fn spell_ui(ui: &mut egui::Ui, draft: &mut Equipment, icons: &mut Icons) {
-    let width = COLUMN_WIDTH;
-    ui.set_width(width);
-    ui.strong(if draft.autocast {
-        "Autocast"
-    } else {
-        "Spell to cast by hand"
-    });
-    ui.weak(if draft.autocast {
-        "The weapon can autocast: the script sets this spell on the combat tab."
-    } else {
-        "The weapon can't autocast (or none was read): the script gets the spell to cast itself."
-    });
-    let cell = egui::vec2(30.0, 30.0);
-    let mut clicked: Option<&'static str> = None;
-    let book_id = egui::Id::new("spell_book");
-    let mut book = ui
-        .data(|d| d.get_temp::<Book>(book_id))
-        .or_else(|| draft.spell.as_deref().and_then(spell_info).map(|s| s.book))
-        .unwrap_or(Book::Standard);
-    ui.add_space(4.0);
-    egui::ComboBox::from_id_salt("spell_book_mode")
-        .width(width)
-        .selected_text(book.label())
-        .show_ui(ui, |ui| {
-            for option in [Book::Standard, Book::Ancient, Book::Arceuus] {
-                ui.selectable_value(&mut book, option, option.label());
-            }
-        });
-    ui.data_mut(|d| d.insert_temp(book_id, book));
-    ui.add_space(4.0);
-    let mut columns: Vec<(&str, Vec<&SpellInfo>)> = Vec::new();
-    for info in AUTOCAST_SPELLS.iter().filter(|s| s.book == book) {
-        let column = spell_column(info);
-        match columns.iter_mut().find(|(name, _)| *name == column) {
-            Some((_, spells)) => spells.push(info),
-            None => columns.push((column, vec![info])),
-        }
-    }
-    for (_, spells) in &mut columns {
-        spells.sort_by_key(|s| s.level);
-    }
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(3.0, 3.0);
-        ui.add_space(((width - grid_width(columns.len(), cell.x, 3.0)) / 2.0 - 3.0).max(0.0));
-        for (_, spells) in &columns {
-            ui.vertical(|ui| {
-                for info in spells {
-                    let on = draft.spell.as_deref() == Some(info.key);
-                    let (rect, response) = ui.allocate_exact_size(cell, egui::Sense::click());
-                    if ui.is_rect_visible(rect) {
-                        let visuals = ui.style().interact(&response);
-                        let (fill, stroke) = if on {
-                            (
-                                theme::BLUE.linear_multiply(0.35),
-                                egui::Stroke::new(1.5, theme::BLUE),
-                            )
-                        } else {
-                            (visuals.weak_bg_fill, visuals.bg_stroke)
-                        };
-                        ui.painter()
-                            .rect(rect, 3.0, fill, stroke, egui::StrokeKind::Inside);
-                        paint_sprite(
-                            ui,
-                            icons,
-                            info.sprite,
-                            rect,
-                            4.0,
-                            egui::Color32::WHITE,
-                            info.name,
-                        );
-                    }
-                    if response
-                        .on_hover_text(format!("{} (level {})", info.name, info.level))
-                        .clicked()
-                    {
-                        clicked = Some(info.key);
-                    }
-                }
-            });
-        }
-    });
-    if let Some(key) = clicked {
-        draft.spell = if draft.spell.as_deref() == Some(key) {
-            None
-        } else {
-            Some(key.to_owned())
-        };
-    }
-    match draft.spell.as_deref().and_then(spell_info) {
-        Some(info) => ui.label(format!(
-            "{} ({}, level {})",
-            info.name,
-            info.book.label(),
-            info.level
-        )),
-        None => ui.weak("No spell."),
-    };
-}
-
 fn no_room(missing: usize) -> String {
     if missing == 1 {
         "No room for an item the script requires: free a slot.".to_owned()
     } else {
         format!("No room for {missing} items the script requires: free {missing} slots.")
     }
-}
-
-pub fn inventory_ui(
-    ui: &mut egui::Ui,
-    editor: &mut Editor<Inventory>,
-    saved: &mut Vec<Inventory>,
-    icons: &mut Icons,
-    can_read: bool,
-    rules: &Rules,
-    known: &Known,
-) -> Option<Action> {
-    for layout in saved.iter_mut() {
-        rules.fit_inventory(layout, known);
-    }
-    let missing = rules.fit_inventory(&mut editor.draft, known);
-    editor.invalid = (missing > 0).then(|| no_room(missing));
-    let gap = 6.0;
-    let margin = (COLUMN_WIDTH - grid_width(INVENTORY_COLUMNS, SLOT_CELL.x, gap)) / 2.0;
-    centered_column(ui, |ui| {
-        editor.header(ui, saved);
-        ui.add_space(6.0);
-        let hint = if rules.required.is_empty() {
-            "Drag to move.\nRight-click to empty."
-        } else {
-            "Drag to move. Right-click to empty.\nPadlocked items are the script's."
-        };
-        let action = editor.read_ui(ui, Some(hint), can_read, false);
-        ui.add_space(6.0);
-        let mut moved: Option<(usize, usize)> = None;
-        ui.horizontal_top(|ui| {
-            ui.add_space(margin);
-            egui::Grid::new("inventory_layout_grid")
-                .spacing(egui::vec2(gap, gap))
-                .show(ui, |ui| {
-                    for slot in 0..INVENTORY_SIZE {
-                        let item = editor.draft.slots.get(slot).and_then(Option::as_ref);
-                        let selected = editor.selected == Some(slot) && !editor.selected_in_pouch;
-                        let response = match item {
-                            Some(item) => {
-                                let response = slot_ui(
-                                    ui,
-                                    icons,
-                                    Some(item),
-                                    "",
-                                    selected,
-                                    egui::Sense::click_and_drag(),
-                                )
-                                .on_hover_text(item_hover(item));
-                                if response.drag_started() {
-                                    egui::DragAndDrop::set_payload(ui.ctx(), slot);
-                                }
-                                if response.dragged() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                    if let Some(pos) = ui.ctx().pointer_interact_pos() {
-                                        egui::Area::new(egui::Id::new("inventory_layout_ghost"))
-                                            .order(egui::Order::Tooltip)
-                                            .interactable(false)
-                                            .fixed_pos(pos - SLOT_CELL / 2.0)
-                                            .show(ui.ctx(), |ui| {
-                                                slot_ui(
-                                                    ui,
-                                                    icons,
-                                                    Some(item),
-                                                    "",
-                                                    true,
-                                                    egui::Sense::hover(),
-                                                );
-                                            });
-                                    }
-                                }
-                                response
-                            }
-                            None => slot_ui(ui, icons, None, "", selected, egui::Sense::click())
-                                .on_hover_text(format!("Slot {slot}: empty")),
-                        };
-                        if let Some(from) = response.dnd_release_payload::<usize>()
-                            && *from != slot
-                        {
-                            moved = Some((*from, slot));
-                        }
-                        if response.clicked() {
-                            editor.selected = Some(slot);
-                            editor.selected_in_pouch = false;
-                        }
-                        if response.secondary_clicked() {
-                            let slot_item = editor.draft.slot_mut(slot);
-                            if !slot_item.as_ref().is_some_and(|item| item.locked) {
-                                *slot_item = None;
-                            }
-                            editor.selected = Some(slot);
-                            editor.selected_in_pouch = false;
-                        }
-                        if (slot + 1) % INVENTORY_COLUMNS == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        });
-        ui.add_space(6.0);
-        ui.vertical_centered(|ui| {
-            if editor.draft.pouch.is_some() || editor.draft.holds_pouch() {
-                ui.strong("Rune pouch");
-                let runes = editor.draft.pouch.get_or_insert_with(Vec::new);
-                let spacing = ui.spacing().item_spacing.x;
-                let row = grid_width(POUCH_SIZE, SLOT_CELL.x, spacing);
-                ui.horizontal(|ui| {
-                    ui.add_space(((COLUMN_WIDTH - row) / 2.0 - spacing).max(0.0));
-                    for i in 0..POUCH_SIZE {
-                        let selected = editor.selected == Some(i) && editor.selected_in_pouch;
-                        let response =
-                            slot_ui(ui, icons, runes.get(i), "", selected, egui::Sense::click())
-                                .on_hover_text(
-                                    runes.get(i).map_or_else(|| "Empty".to_owned(), item_hover),
-                                );
-                        if response.clicked() {
-                            editor.selected = Some(i);
-                            editor.selected_in_pouch = true;
-                        }
-                        if response.secondary_clicked() && i < runes.len() {
-                            runes.remove(i);
-                            editor.selected = None;
-                        }
-                    }
-                });
-                if let Some(rune) = editor
-                    .selected
-                    .filter(|_| editor.selected_in_pouch)
-                    .and_then(|i| runes.get_mut(i))
-                {
-                    item_ui(ui, rune, false, POUCH_MAX_AMOUNT);
-                }
-                ui.weak("Read from client fills it from the pouch's contents.");
-                ui.add_space(10.0);
-            }
-            if let Some(slot) = editor.selected.filter(|_| !editor.selected_in_pouch) {
-                ui.strong(format!("Slot {slot}"));
-                let mut shared = None;
-                let fixed = editor
-                    .draft
-                    .slots
-                    .get(slot)
-                    .and_then(Option::as_ref)
-                    .is_some_and(|item| !item.locked && editor.draft.script_doses(item).is_some());
-                match editor.draft.slot_mut(slot) {
-                    Some(item) => {
-                        if let Some(doses) = item_ui(ui, item, fixed, i32::MAX) {
-                            shared = item.dose_base().map(|base| (base.to_owned(), doses));
-                        }
-                    }
-                    None => {
-                        ui.label("Empty.");
-                    }
-                }
-                if let Some((base, doses)) = shared {
-                    share_doses(editor.draft.slots.iter_mut().flatten(), &base, &doses);
-                }
-            }
-            if let Some(invalid) = &editor.invalid {
-                ui.colored_label(ui.visuals().error_fg_color, invalid);
-            }
-        });
-        if let Some((from, to)) = moved {
-            editor
-                .draft
-                .slots
-                .resize(editor.draft.slots.len().max(INVENTORY_SIZE), None);
-            editor.draft.slots.swap(from, to);
-            editor.selected = Some(to);
-            editor.selected_in_pouch = false;
-        }
-        action
-    })
-}
-
-pub fn prayer_ui(
-    ui: &mut egui::Ui,
-    editor: &mut Editor<Prayer>,
-    saved: &mut Vec<Prayer>,
-    icons: &mut Icons,
-    can_read: bool,
-    prayer_level: Option<u32>,
-    rules: &Rules,
-) -> Option<Action> {
-    for layout in saved.iter_mut() {
-        rules.fit_prayer(layout);
-    }
-    rules.fit_prayer(&mut editor.draft);
-    let cell = egui::Vec2::splat(PRAYER_CELL);
-    centered_column(ui, |ui| {
-        editor.header(ui, saved);
-        ui.add_space(6.0);
-        let action = editor.read_ui(ui, None, can_read, true);
-        ui.add_space(6.0);
-        let mut toggled: Option<&'static str> = None;
-        let mut picked_blocked: Option<usize> = None;
-        let margin = (COLUMN_WIDTH - grid_width(PRAYER_COLUMNS, PRAYER_CELL, PRAYER_GAP)) / 2.0;
-        ui.horizontal_top(|ui| {
-            ui.add_space(margin);
-            egui::Grid::new("prayer_layout_grid")
-                .spacing(egui::Vec2::splat(PRAYER_GAP))
-                .show(ui, |ui| {
-                    for (i, info) in PRAYERS.iter().enumerate() {
-                        let on = editor.draft.has(info.key);
-                        let blocked = rules.blocks(info.key);
-                        let too_high = prayer_level.is_some_and(|level| level < info.level);
-                        let (rect, response) = ui.allocate_exact_size(cell, egui::Sense::click());
-                        if ui.is_rect_visible(rect) {
-                            let visuals = ui.style().interact(&response);
-                            let fill = if on {
-                                theme::BLUE.linear_multiply(0.35)
-                            } else {
-                                visuals.weak_bg_fill
-                            };
-                            let stroke = if on || editor.selected == Some(i) {
-                                egui::Stroke::new(1.5, theme::BLUE)
-                            } else {
-                                visuals.bg_stroke
-                            };
-                            ui.painter()
-                                .rect(rect, 4.0, fill, stroke, egui::StrokeKind::Inside);
-                            let tint = if too_high || blocked {
-                                egui::Color32::from_white_alpha(90)
-                            } else {
-                                egui::Color32::WHITE
-                            };
-                            paint_sprite(ui, icons, info.sprite, rect, 6.0, tint, info.name);
-                            if blocked {
-                                paint_padlock(ui.painter(), rect);
-                            }
-                        }
-                        let hover = if blocked {
-                            format!("{}: {CONTROLLED}", info.name)
-                        } else if too_high {
-                            format!(
-                                "{} (level {}, above the client's {})",
-                                info.name,
-                                info.level,
-                                prayer_level.unwrap_or(0)
-                            )
-                        } else {
-                            format!("{} (level {})", info.name, info.level)
-                        };
-                        if response.on_hover_text(hover).clicked() {
-                            if blocked {
-                                picked_blocked = Some(i);
-                            } else {
-                                toggled = Some(info.key);
-                            }
-                        }
-                        if (i + 1) % PRAYER_COLUMNS == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        });
-        if let Some(key) = toggled {
-            editor.draft.toggle(key);
-            editor.selected = None;
-        }
-        if picked_blocked.is_some() {
-            editor.selected = picked_blocked;
-        }
-        ui.add_space(6.0);
-        if let Some(info) = editor
-            .selected
-            .and_then(|i| PRAYERS.get(i))
-            .filter(|p| rules.blocks(p.key))
-        {
-            ui.vertical_centered(|ui| {
-                ui.strong(info.name);
-                ui.colored_label(theme::BLUE, CONTROLLED);
-            });
-            ui.add_space(4.0);
-        }
-        let names: Vec<&str> = editor
-            .draft
-            .prayers
-            .iter()
-            .filter_map(|k| prayer_info(k).map(|p| p.name))
-            .collect();
-        if names.is_empty() {
-            ui.weak("No prayers: click them in the book, or read the ones on in the client.");
-        } else {
-            ui.label(names.join(", "));
-        }
-        action
-    })
 }
 
 const CONTROLLED: &str = "The script controls this prayer: it can't be customised.";
@@ -2195,14 +1449,983 @@ pub fn items_of(
         .collect()
 }
 
-pub fn picker_ui(
-    ui: &mut egui::Ui,
+pub type With<L> = Rc<dyn Fn(&mut App, &mut dyn FnMut(&mut Editor<L>, &mut Vec<L>))>;
+
+pub type OnRead = Rc<dyn Fn(Action, &mut App)>;
+
+pub struct Editing<'a, L> {
+    pub editor: &'a mut Editor<L>,
+    pub saved: &'a mut Vec<L>,
+    pub rules: &'a Rules,
+    pub can_read: bool,
+    pub with: With<L>,
+    pub on_read: OnRead,
+}
+
+type AmountOf = (Kind, usize, bool);
+
+#[derive(Default)]
+pub struct Ui {
+    names: [Option<TextField>; 3],
+    amounts: Option<(AmountOf, NumberField, NumberField)>,
+    book: Rc<Cell<Option<Book>>>,
+}
+
+fn kind_index(kind: Kind) -> usize {
+    match kind {
+        Kind::Equipment => 0,
+        Kind::Inventory => 1,
+        Kind::Prayer => 2,
+    }
+}
+
+fn edit<L: 'static>(
+    with: &With<L>,
+    change: impl Fn(&mut Editor<L>, &mut Vec<L>) + 'static,
+) -> impl Fn(&mut App) + 'static {
+    let with = with.clone();
+    move |cx| with(cx, &mut |editor, saved| change(editor, saved))
+}
+
+fn click(action: impl Fn(&mut App) + 'static) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    move |_, _, cx| action(cx)
+}
+
+fn right_click(action: impl Fn(&mut App) + 'static) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    move |event, _, cx| {
+        if event.is_right_click() {
+            action(cx);
+        }
+    }
+}
+
+trait Holds: Layout {
+    fn item_at(&mut self, slot: usize, pouch: bool) -> Option<&mut Item>;
+    fn share_doses_of(&mut self, _slot: usize, _pouch: bool) {}
+}
+
+impl Holds for Equipment {
+    fn item_at(&mut self, slot: usize, _: bool) -> Option<&mut Item> {
+        match self.slot_mut(slot) {
+            EquipmentSlot::Item(item) => Some(item),
+            _ => None,
+        }
+    }
+}
+
+impl Holds for Inventory {
+    fn item_at(&mut self, slot: usize, pouch: bool) -> Option<&mut Item> {
+        if pouch {
+            self.pouch.as_mut()?.get_mut(slot)
+        } else {
+            self.slot_mut(slot).as_mut()
+        }
+    }
+
+    fn share_doses_of(&mut self, slot: usize, pouch: bool) {
+        if pouch {
+            return;
+        }
+        let Some((base, doses)) = self
+            .slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .and_then(|item| Some((item.dose_base()?.to_owned(), item.doses.clone()?)))
+        else {
+            return;
+        };
+        share_doses(self.slots.iter_mut().flatten(), &base, &doses);
+    }
+}
+
+fn edit_item<L: Holds>(
+    with: &With<L>,
+    slot: usize,
+    pouch: bool,
+    change: impl Fn(&mut Item) + 'static,
+) -> impl Fn(&mut App) + 'static {
+    edit(with, move |editor, _| {
+        if let Some(item) = editor.draft.item_at(slot, pouch) {
+            change(item);
+        }
+    })
+}
+
+fn edit_doses<L: Holds>(
+    with: &With<L>,
+    slot: usize,
+    pouch: bool,
+    change: impl Fn(&mut Doses) + 'static,
+) -> impl Fn(&mut App) + 'static {
+    edit(with, move |editor, _| {
+        if let Some(doses) = editor
+            .draft
+            .item_at(slot, pouch)
+            .and_then(|item| item.doses.as_mut())
+        {
+            change(doses);
+            doses.sort();
+        }
+        editor.draft.share_doses_of(slot, pouch);
+    })
+}
+
+const fn grid_width(columns: usize, cell: f32, gap: f32) -> f32 {
+    columns as f32 * cell + (columns - 1) as f32 * gap
+}
+
+const PRAYER_CELL: f32 = 42.0;
+const PRAYER_GAP: f32 = 4.0;
+const SLOT_GAP: f32 = 6.0;
+const POUCH_GAP: f32 = 8.0;
+const SPELL_CELL: f32 = 30.0;
+const SPELL_GAP: f32 = 3.0;
+const PICKER_WIDTH: f32 = 100.0;
+const NAME_WIDTH: f32 = 160.0;
+const AMOUNT_WIDTH: f32 = 70.0;
+const PART_GAP: f32 = 24.0;
+
+const COLUMN_WIDTH: f32 = PICKER_WIDTH + 8.0 + NAME_WIDTH;
+
+fn frame(
+    id: impl Into<ElementId>,
+    width: f32,
+    height: f32,
+    radius: f32,
+    on: bool,
+    outlined: bool,
+) -> Stateful<Div> {
+    let fill: Hsla = if on {
+        theme::alpha(theme::BLUE, 0.35)
+    } else {
+        theme::BG_HL.into()
+    };
+    let hovered: Hsla = if on { fill } else { theme::SEL.into() };
+    div()
+        .id(id)
+        .relative()
+        .flex_none()
+        .w(px(width))
+        .h(px(height))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius))
+        .border(px(1.5))
+        .bg(fill)
+        .border_color(if outlined {
+            theme::BLUE.into()
+        } else {
+            theme::alpha(theme::BLUE, 0.0)
+        })
+        .hover(move |style| style.bg(hovered).border_color(theme::BLUE))
+}
+
+fn faint(text: impl Into<gpui_kit::SharedString>) -> Div {
+    div()
+        .text_size(theme::SMALL)
+        .text_color(theme::COMMENT)
+        .child(text.into())
+}
+
+fn item_fallback(item: &Item) -> String {
+    if item.name.is_empty() {
+        item.id.to_string()
+    } else {
+        item.name.clone()
+    }
+}
+
+fn padlock(width: f32) -> Div {
+    let size = (width * 0.32).clamp(9.0, 14.0);
+    let left = width - size - 2.0;
+    let top = size * 0.55 + 2.0;
+    let height = size * 0.75;
+    let lift = size * 0.55 + 1.5;
+    let radius = size * 0.3;
+    let stroke = size * 0.16;
+    let gold = rgb(0xe8be50);
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(
+            div()
+                .absolute()
+                .left(px(left - 2.0))
+                .top(px(top - lift - size * 0.27))
+                .w(px(size + 4.0))
+                .h(px(height + 2.0 * lift))
+                .rounded(px(3.0))
+                .bg(rgba(0x000000aa)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(left + size / 2.0 - radius - stroke / 2.0))
+                .top(px(top - radius - stroke / 2.0))
+                .w(px(2.0 * radius + stroke))
+                .h(px(radius + stroke / 2.0 + 1.0))
+                .border_t(px(stroke))
+                .border_l(px(stroke))
+                .border_r(px(stroke))
+                .border_color(gold)
+                .rounded_t(px(radius + stroke / 2.0)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(size))
+                .h(px(height))
+                .rounded(px(1.5))
+                .bg(gold)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().size(px(size * 0.2)).rounded_full().bg(rgba(0x000000c8))),
+        )
+}
+
+fn item_slot(
+    id: impl Into<ElementId>,
+    icons: &mut Icons,
+    item: Option<&Item>,
+    empty_text: &str,
+    selected: bool,
+) -> Stateful<Div> {
+    let frame = frame(id, SLOT_CELL.width, SLOT_CELL.height, 3.0, false, selected);
+    match item {
+        Some(item) => frame
+            .child(crate::icons::slot(icons.image(item.icon_key()), &item_fallback(item)))
+            .when(item.locked, |this| this.child(padlock(SLOT_CELL.width))),
+        None => frame.child(faint(empty_text.to_owned())),
+    }
+}
+
+fn sprite_face(icons: &mut Icons, sprite: i32, cell: f32, padding: f32, faded: bool, name: &str) -> Div {
+    match icons.image(Key::Sprite(sprite)) {
+        Some(image) => {
+            let size = image.size(0);
+            let room = cell - padding;
+            div()
+                .flex_none()
+                .w(px((size.width.0 as f32).min(room)))
+                .h(px((size.height.0 as f32).min(room)))
+                .when(faded, |this| this.opacity(90.0 / 255.0))
+                .child(
+                    img(ImageSource::Render(image))
+                        .size_full()
+                        .object_fit(ObjectFit::Fill),
+                )
+        }
+        None => faint(
+            name.split(' ')
+                .map(|w| w.chars().next().unwrap_or(' '))
+                .collect::<String>(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn item_ui<L: Holds>(
+    item: &mut Item,
+    (slot, pouch): (usize, bool),
+    doses_fixed: bool,
+    cap: i32,
+    ui: &mut Ui,
+    with: &With<L>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (Div, bool) {
+    let column = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .text_center()
+        .gap(theme::LINE_GAP)
+        .child(div().text_center().child(item_title(item)));
+    if item.locked {
+        let mut parts = Vec::new();
+        if item.stackable {
+            parts.push(range_text(item));
+        }
+        if let Some(doses) = &item.doses {
+            parts.push(doses_text(doses));
+        }
+        let column = column
+            .child(
+                div()
+                    .text_center()
+                    .text_color(theme::BLUE)
+                    .child("The script requires this item: it can be moved, not removed or changed."),
+            )
+            .when(!parts.is_empty(), |this| this.child(widgets::weak(parts.join(", "))));
+        return (column, false);
+    }
+    let mut column = column;
+    if item.stackable {
+        let key = (L::KIND, slot, pouch);
+        if ui.amounts.as_ref().is_none_or(|(at, ..)| *at != key) {
+            let range = Range::new(0.0..=f64::from(cap)).integer();
+            let (with_min, with_max) = (with.clone(), with.clone());
+            let min = NumberField::new(
+                range,
+                true,
+                move |value, cx| {
+                    with_min(cx, &mut |editor, _| {
+                        if let Some(item) = editor.draft.item_at(slot, pouch) {
+                            item.min = value as i32;
+                            if item.min > item.max {
+                                item.max = item.min;
+                            }
+                        }
+                    })
+                },
+                window,
+                cx,
+            );
+            let max = NumberField::new(
+                range,
+                true,
+                move |value, cx| {
+                    with_max(cx, &mut |editor, _| {
+                        if let Some(item) = editor.draft.item_at(slot, pouch) {
+                            item.max = value as i32;
+                            if item.max == 0 || item.max < item.min {
+                                item.min = item.min.min(item.max);
+                            }
+                        }
+                    })
+                },
+                window,
+                cx,
+            );
+            ui.amounts = Some((key, min, max));
+        }
+        if let Some((_, min, max)) = &ui.amounts {
+            min.sync(f64::from(item.min), window, cx);
+            max.sync(f64::from(item.max), window, cx);
+            column = column
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(theme::ITEM_GAP)
+                        .child("Min")
+                        .child(min.input(true).stepper(false).w(px(AMOUNT_WIDTH)))
+                        .child("Max")
+                        .child(max.input(true).stepper(false).w(px(AMOUNT_WIDTH))),
+                )
+                .child(widgets::weak("Equal: exactly that many. Both 0: any amount."));
+        }
+    }
+    if !item.variants.is_empty() {
+        let row = item.variants.iter().fold(
+            div()
+                .flex()
+                .flex_wrap()
+                .justify_center()
+                .items_center()
+                .gap(theme::ITEM_GAP)
+                .child("Also counts:"),
+            |row, &id| {
+                row.child(fields::checkbox(
+                    ("item-variant", id as usize),
+                    format!("id {id}"),
+                    item.ids.contains(&id),
+                    true,
+                    {
+                        let with = with.clone();
+                        move |on, cx| {
+                            edit_item(&with, slot, pouch, move |item| {
+                                if on {
+                                    item.ids.push(id);
+                                    item.ids.sort_unstable();
+                                } else {
+                                    item.ids.retain(|&other| other != id);
+                                }
+                            })(cx)
+                        }
+                    },
+                ))
+            },
+        );
+        column = column.child(row).child(
+            widgets::weak(
+                "Items of the same name, such as a used and an unused one. The read id is taken first.",
+            )
+            .text_center(),
+        );
+    }
+    if doses_fixed {
+        if let Some(doses) = &item.doses {
+            column = column.child(widgets::weak(format!(
+                "{}: the same as the item the script requires.",
+                doses_text(doses)
+            )));
+        }
+        return (column, false);
+    }
+    let Some(doses) = item.doses.as_mut() else {
+        return (column, false);
+    };
+    let before = doses.clone();
+    doses.sort();
+    let resorted = *doses != before;
+    let row = doses.all.iter().fold(
+        div()
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .items_center()
+            .gap(theme::ITEM_GAP)
+            .child("Doses:"),
+        |row, &dose| {
+            row.child(fields::checkbox(
+                ("item-dose", dose as usize),
+                format!("({dose})"),
+                doses.accepted.contains(&dose),
+                true,
+                {
+                    let with = with.clone();
+                    move |on, cx| {
+                        edit_doses(&with, slot, pouch, move |doses| {
+                            if on {
+                                doses.accepted.push(dose);
+                            } else if doses.accepted.len() > 1 {
+                                doses.accepted.retain(|&d| d != dose);
+                            }
+                        })(cx)
+                    }
+                },
+            ))
+        },
+    );
+    let order = |highest: bool| {
+        edit_doses(with, slot, pouch, move |doses| doses.highest_first = highest)
+    };
+    let column = column
+        .child(row)
+        .child(fields::select(
+            "dose-order",
+            if doses.highest_first {
+                "Highest first"
+            } else {
+                "Lowest first"
+            },
+            vec![
+                Pick::new("Highest first", doses.highest_first, order(true)),
+                Pick::new("Lowest first", !doses.highest_first, order(false)),
+            ],
+            true,
+            None,
+        ))
+        .child(widgets::weak("A carried dose that isn't ticked is swapped at the bank."));
+    (column, resorted)
+}
+
+fn column() -> Div {
+    div()
+        .w(px(COLUMN_WIDTH))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(theme::LINE_GAP)
+}
+
+fn centered(child: impl IntoElement) -> Div {
+    div().w_full().flex().justify_center().child(child)
+}
+
+pub fn equipment_ui(
+    editing: Editing<Equipment>,
+    ui: &mut Ui,
+    icons: &mut Icons,
+    known: &Known,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let Editing {
+        editor,
+        saved,
+        rules,
+        can_read,
+        with,
+        on_read,
+    } = editing;
+    for layout in saved.iter_mut() {
+        rules.fit_equipment(layout, known);
+    }
+    rules.fit_equipment(&mut editor.draft, known);
+    let (cell, gap) = (SLOT_CELL, SLOT_GAP);
+    let header = editor.header(saved, ui, &with, window, cx);
+    let hint = if rules.required.is_empty() {
+        "Right-click to empty."
+    } else {
+        "Right-click to empty.\nPadlocked items are the script's."
+    };
+    let read = editor.read_ui(Some(hint), can_read, false, &with, &on_read);
+    let grid = EQUIPMENT_CELLS.iter().fold(
+        div()
+            .relative()
+            .flex_none()
+            .w(px(grid_width(3, cell.width, gap)))
+            .h(px(5.0 * cell.height + 4.0 * gap)),
+        |grid, &(slot, column, row)| {
+            let name = slot_name(slot);
+            let (item, text, hover) = match editor.draft.slot(slot) {
+                EquipmentSlot::Item(item) => (Some(item), "", format!("{name}: {}", item_hover(item))),
+                EquipmentSlot::Empty => (None, "", format!("{name}: must be empty.")),
+                EquipmentSlot::Any => (None, "any", format!("{name}: anything or nothing may be worn.")),
+            };
+            let hover = if slot == SECONDARY_AMMO_SLOT {
+                format!("{hover}\n{SECONDARY_AMMO_HINT}")
+            } else {
+                hover
+            };
+            grid.child(
+                item_slot(("equipment-slot", slot), icons, item, text, editor.selected == Some(slot))
+                    .absolute()
+                    .left(px(column as f32 * (cell.width + gap)))
+                    .top(px(row as f32 * (cell.height + gap)))
+                    .tooltip(widgets::tooltip(hover))
+                    .on_click(click(edit(&with, move |editor, _| editor.selected = Some(slot))))
+                    .on_aux_click(right_click(edit(&with, move |editor, _| {
+                        editor.selected = Some(slot);
+                        let slot = editor.draft.slot_mut(slot);
+                        if !matches!(slot, EquipmentSlot::Item(item) if item.locked) {
+                            *slot = EquipmentSlot::Empty;
+                        }
+                    }))),
+            )
+        },
+    );
+    let details = editor.selected.map(|slot| {
+        let details = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .text_center()
+            .gap(theme::LINE_GAP)
+            .child(widgets::strong(slot_name(slot)))
+            .when(slot == SECONDARY_AMMO_SLOT, |this| {
+                this.child(widgets::weak(SECONDARY_AMMO_HINT).text_center())
+            });
+        match editor.draft.slot_mut(slot) {
+            EquipmentSlot::Item(item) => {
+                details.child(item_ui(item, (slot, false), false, i32::MAX, ui, &with, window, cx).0)
+            }
+            state => {
+                const EMPTY: &str = "Must be empty";
+                const ANY: &str = "Any";
+                let any = *state == EquipmentSlot::Any;
+                let mode = |mode: EquipmentSlot| {
+                    edit(&with, move |editor, _| *editor.draft.slot_mut(slot) = mode.clone())
+                };
+                details.child(fields::select(
+                    "equipment-slot-mode",
+                    if any { ANY } else { EMPTY },
+                    vec![
+                        Pick::new(EMPTY, !any, mode(EquipmentSlot::Empty)),
+                        Pick::new(ANY, any, mode(EquipmentSlot::Any)),
+                    ],
+                    true,
+                    None,
+                ))
+            }
+        }
+    });
+    let layout = column()
+        .child(header)
+        .child(read.mt(px(6.0)))
+        .child(centered(grid).mt(px(6.0)))
+        .children(details.map(|details| details.mt(px(6.0))));
+    let spells = spell_ui(&editor.draft, ui, icons, &with);
+    div()
+        .w_full()
+        .flex()
+        .flex_wrap()
+        .justify_center()
+        .items_start()
+        .gap(px(PART_GAP))
+        .child(layout)
+        .child(spells)
+}
+
+fn spell_ui(draft: &Equipment, ui: &Ui, icons: &mut Icons, with: &With<Equipment>) -> Div {
+    let book = ui
+        .book
+        .get()
+        .or_else(|| draft.spell.as_deref().and_then(spell_info).map(|s| s.book))
+        .unwrap_or(Book::Standard);
+    let books = [Book::Standard, Book::Ancient, Book::Arceuus]
+        .into_iter()
+        .map(|option| {
+            let (chosen, with) = (ui.book.clone(), with.clone());
+            Pick::new(option.label(), book == option, move |cx| {
+                chosen.set(Some(option));
+                with(cx, &mut |_, _| {});
+            })
+        })
+        .collect();
+    let mut columns: Vec<(&str, Vec<&SpellInfo>)> = Vec::new();
+    for info in AUTOCAST_SPELLS.iter().filter(|s| s.book == book) {
+        let column = spell_column(info);
+        match columns.iter_mut().find(|(name, _)| *name == column) {
+            Some((_, spells)) => spells.push(info),
+            None => columns.push((column, vec![info])),
+        }
+    }
+    for (_, spells) in &mut columns {
+        spells.sort_by_key(|s| s.level);
+    }
+    let grid = columns.into_iter().fold(
+        div().flex().justify_center().gap(px(SPELL_GAP)),
+        |grid, (_, spells)| {
+            grid.child(spells.into_iter().fold(
+                div().flex().flex_col().gap(px(SPELL_GAP)),
+                |column, info| {
+                    let on = draft.spell.as_deref() == Some(info.key);
+                    let key = info.key;
+                    column.child(
+                        frame(("spell", info.sprite as usize), SPELL_CELL, SPELL_CELL, 3.0, on, on)
+                            .child(sprite_face(icons, info.sprite, SPELL_CELL, 4.0, false, info.name))
+                            .tooltip(widgets::tooltip(format!("{} (level {})", info.name, info.level)))
+                            .on_click(click(edit(with, move |editor, _| {
+                                let draft = &mut editor.draft;
+                                draft.spell = if draft.spell.as_deref() == Some(key) {
+                                    None
+                                } else {
+                                    Some(key.to_owned())
+                                };
+                            }))),
+                    )
+                },
+            ))
+        },
+    );
+    let chosen = match draft.spell.as_deref().and_then(spell_info) {
+        Some(info) => div().child(format!(
+            "{} ({}, level {})",
+            info.name,
+            info.book.label(),
+            info.level
+        )),
+        None => widgets::weak("No spell."),
+    };
+    column()
+        .child(widgets::strong(if draft.autocast {
+            "Autocast"
+        } else {
+            "Spell to cast by hand"
+        }))
+        .child(widgets::weak(if draft.autocast {
+            "The weapon can autocast: the script sets this spell on the combat tab."
+        } else {
+            "The weapon can't autocast (or none was read): the script gets the spell to cast itself."
+        }))
+        .child(
+            div().mt(theme::LINE_GAP).child(fields::select(
+                "spell-book",
+                book.label(),
+                books,
+                true,
+                Some(px(COLUMN_WIDTH)),
+            )),
+        )
+        .child(grid.mt(theme::LINE_GAP))
+        .child(chosen)
+}
+
+#[derive(Clone)]
+struct Dragged {
+    slot: usize,
+    picture: Option<Arc<RenderImage>>,
+    fallback: String,
+    locked: bool,
+}
+
+struct Ghost {
+    dragged: Dragged,
+    offset: Point<gpui_kit::Pixels>,
+}
+
+impl Render for Ghost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .relative()
+            .left(self.offset.x - px(SLOT_CELL.width / 2.0))
+            .top(self.offset.y - px(SLOT_CELL.height / 2.0))
+            .child(
+                frame("inventory-ghost", SLOT_CELL.width, SLOT_CELL.height, 3.0, false, true)
+                    .child(crate::icons::slot(self.dragged.picture.clone(), &self.dragged.fallback))
+                    .when(self.dragged.locked, |this| this.child(padlock(SLOT_CELL.width))),
+            )
+    }
+}
+
+pub fn inventory_ui(
+    editing: Editing<Inventory>,
+    ui: &mut Ui,
+    icons: &mut Icons,
+    known: &Known,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let Editing {
+        editor,
+        saved,
+        rules,
+        can_read,
+        with,
+        on_read,
+    } = editing;
+    for layout in saved.iter_mut() {
+        rules.fit_inventory(layout, known);
+    }
+    let missing = rules.fit_inventory(&mut editor.draft, known);
+    editor.invalid = (missing > 0).then(|| no_room(missing));
+    let header = editor.header(saved, ui, &with, window, cx);
+    let hint = if rules.required.is_empty() {
+        "Drag to move.\nRight-click to empty."
+    } else {
+        "Drag to move. Right-click to empty.\nPadlocked items are the script's."
+    };
+    let read = editor.read_ui(Some(hint), can_read, false, &with, &on_read);
+    let select = |slot: usize, pouch: bool| {
+        edit(&with, move |editor, _| {
+            editor.selected = Some(slot);
+            editor.selected_in_pouch = pouch;
+        })
+    };
+    let mut grid = div()
+        .flex_none()
+        .w(px(grid_width(INVENTORY_COLUMNS, SLOT_CELL.width, SLOT_GAP)))
+        .grid()
+        .grid_cols(INVENTORY_COLUMNS as u16)
+        .gap(px(SLOT_GAP));
+    for slot in 0..INVENTORY_SIZE {
+        let item = editor.draft.slots.get(slot).and_then(Option::as_ref);
+        let selected = editor.selected == Some(slot) && !editor.selected_in_pouch;
+        let hover = item.map_or_else(|| format!("Slot {slot}: empty"), item_hover);
+        let dragged = item.map(|item| Dragged {
+            slot,
+            picture: icons.image(item.icon_key()),
+            fallback: item_fallback(item),
+            locked: item.locked,
+        });
+        let moved = with.clone();
+        grid = grid.child(
+            item_slot(("inventory-slot", slot), icons, item, "", selected)
+                .tooltip(widgets::tooltip(hover))
+                .on_click(click(select(slot, false)))
+                .on_aux_click(right_click(edit(&with, move |editor, _| {
+                    let slot_item = editor.draft.slot_mut(slot);
+                    if !slot_item.as_ref().is_some_and(|item| item.locked) {
+                        *slot_item = None;
+                    }
+                    editor.selected = Some(slot);
+                    editor.selected_in_pouch = false;
+                })))
+                .when_some(dragged, |this, dragged| {
+                    this.on_drag(dragged, |dragged, offset, _, cx| {
+                        let dragged = dragged.clone();
+                        cx.new(|_| Ghost { dragged, offset })
+                    })
+                })
+                .on_drop(move |dragged: &Dragged, _, cx| {
+                    let from = dragged.slot;
+                    if from == slot {
+                        return;
+                    }
+                    moved(cx, &mut |editor, _| {
+                        let slots = &mut editor.draft.slots;
+                        slots.resize(slots.len().max(INVENTORY_SIZE), None);
+                        slots.swap(from, slot);
+                        editor.selected = Some(slot);
+                        editor.selected_in_pouch = false;
+                    });
+                }),
+        );
+    }
+    let mut details = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .text_center()
+        .gap(theme::LINE_GAP);
+    if editor.draft.pouch.is_some() || editor.draft.holds_pouch() {
+        let selected_rune = editor.selected.filter(|_| editor.selected_in_pouch);
+        let runes = editor.draft.pouch.get_or_insert_with(Vec::new);
+        let row = (0..POUCH_SIZE).fold(div().flex().gap(px(POUCH_GAP)), |row, i| {
+            let hover = runes.get(i).map_or_else(|| "Empty".to_owned(), item_hover);
+            row.child(
+                item_slot(("pouch-slot", i), icons, runes.get(i), "", selected_rune == Some(i))
+                    .tooltip(widgets::tooltip(hover))
+                    .on_click(click(select(i, true)))
+                    .on_aux_click(right_click(edit(&with, move |editor, _| {
+                        if let Some(runes) = editor.draft.pouch.as_mut()
+                            && i < runes.len()
+                        {
+                            runes.remove(i);
+                            editor.selected = None;
+                        }
+                    }))),
+            )
+        });
+        details = details.child(widgets::strong("Rune pouch")).child(row);
+        if let Some(rune) = selected_rune.and_then(|i| runes.get_mut(i)) {
+            let index = selected_rune.unwrap_or_default();
+            details = details.child(item_ui(rune, (index, true), false, POUCH_MAX_AMOUNT, ui, &with, window, cx).0);
+        }
+        details = details
+            .child(widgets::weak("Read from client fills it from the pouch's contents."))
+            .child(div().h(px(6.0)));
+    }
+    if let Some(slot) = editor.selected.filter(|_| !editor.selected_in_pouch) {
+        details = details.child(widgets::strong(format!("Slot {slot}")));
+        let fixed = editor
+            .draft
+            .slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .is_some_and(|item| !item.locked && editor.draft.script_doses(item).is_some());
+        let mut resorted = false;
+        details = match editor.draft.slot_mut(slot) {
+            Some(item) => {
+                let (shown, sorted) = item_ui(item, (slot, false), fixed, i32::MAX, ui, &with, window, cx);
+                resorted = sorted;
+                details.child(shown)
+            }
+            None => details.child("Empty."),
+        };
+        if resorted {
+            editor.draft.share_doses_of(slot, false);
+        }
+    }
+    if let Some(invalid) = &editor.invalid {
+        details = details.child(widgets::error(invalid.clone()));
+    }
+    centered(
+        column()
+            .child(header)
+            .child(read.mt(px(6.0)))
+            .child(centered(grid).mt(px(6.0)))
+            .child(details.mt(px(6.0))),
+    )
+}
+
+pub fn prayer_ui(
+    editing: Editing<Prayer>,
+    ui: &mut Ui,
+    icons: &mut Icons,
+    prayer_level: Option<u32>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let Editing {
+        editor,
+        saved,
+        rules,
+        can_read,
+        with,
+        on_read,
+    } = editing;
+    for layout in saved.iter_mut() {
+        rules.fit_prayer(layout);
+    }
+    rules.fit_prayer(&mut editor.draft);
+    let header = editor.header(saved, ui, &with, window, cx);
+    let read = editor.read_ui(None, can_read, true, &with, &on_read);
+    let grid = PRAYERS.iter().enumerate().fold(
+        div()
+            .flex_none()
+            .w(px(grid_width(PRAYER_COLUMNS, PRAYER_CELL, PRAYER_GAP)))
+            .grid()
+            .grid_cols(PRAYER_COLUMNS as u16)
+            .gap(px(PRAYER_GAP)),
+        |grid, (i, info)| {
+            let on = editor.draft.has(info.key);
+            let blocked = rules.blocks(info.key);
+            let too_high = prayer_level.is_some_and(|level| level < info.level);
+            let hover = if blocked {
+                format!("{}: {CONTROLLED}", info.name)
+            } else if too_high {
+                format!(
+                    "{} (level {}, above the client's {})",
+                    info.name,
+                    info.level,
+                    prayer_level.unwrap_or(0)
+                )
+            } else {
+                format!("{} (level {})", info.name, info.level)
+            };
+            let key = info.key;
+            grid.child(
+                frame(("prayer", i), PRAYER_CELL, PRAYER_CELL, 4.0, on, on || editor.selected == Some(i))
+                    .child(sprite_face(icons, info.sprite, PRAYER_CELL, 6.0, too_high || blocked, info.name))
+                    .when(blocked, |this| this.child(padlock(PRAYER_CELL)))
+                    .tooltip(widgets::tooltip(hover))
+                    .on_click(click(edit(&with, move |editor, _| {
+                        if blocked {
+                            editor.selected = Some(i);
+                        } else {
+                            editor.draft.toggle(key);
+                            editor.selected = None;
+                        }
+                    }))),
+            )
+        },
+    );
+    let controlled = editor
+        .selected
+        .and_then(|i| PRAYERS.get(i))
+        .filter(|p| rules.blocks(p.key))
+        .map(|info| {
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(widgets::strong(info.name))
+                .child(div().text_center().text_color(theme::BLUE).child(CONTROLLED))
+        });
+    let names: Vec<&str> = editor
+        .draft
+        .prayers
+        .iter()
+        .filter_map(|k| prayer_info(k).map(|p| p.name))
+        .collect();
+    let names = if names.is_empty() {
+        widgets::weak("No prayers: click them in the book, or read the ones on in the client.")
+    } else {
+        div().child(names.join(", "))
+    };
+    centered(
+        column()
+            .child(header)
+            .child(read.mt(px(6.0)))
+            .child(centered(grid).mt(px(6.0)))
+            .children(controlled.map(|controlled| controlled.mt(px(6.0))))
+            .child(names.mt(px(6.0))),
+    )
+}
+
+pub fn picker(
     kind: Kind,
     layouts: &ScriptLayouts,
     chosen: &mut Option<String>,
     id: &str,
     rules: &Rules,
-) {
+    enabled: bool,
+    on_pick: impl Fn(Option<String>, &mut App) + 'static,
+) -> Div {
     let names = kind.names(layouts);
     if chosen
         .as_deref()
@@ -2210,24 +2433,37 @@ pub fn picker_ui(
     {
         *chosen = None;
     }
-    egui::ComboBox::from_id_salt(("layout_field", id))
-        .selected_text(chosen.as_deref().unwrap_or("None"))
-        .show_ui(ui, |ui| {
-            ui.selectable_value(chosen, None, "None");
-            for name in names {
-                match kind.unusable(layouts, name, rules) {
-                    Some(why) => {
-                        ui.add_enabled(false, egui::Button::selectable(false, name))
-                            .on_disabled_hover_text(why);
-                    }
-                    None => {
-                        ui.selectable_value(chosen, Some(name.to_owned()), name);
-                    }
-                }
-            }
+    let on_pick = Rc::new(on_pick);
+    let pick = |name: Option<String>| {
+        let on_pick = on_pick.clone();
+        move |cx: &mut App| on_pick(name.clone(), cx)
+    };
+    let mut picks = vec![Pick::new("None", chosen.is_none(), pick(None))];
+    for name in names {
+        picks.push(match kind.unusable(layouts, name, rules) {
+            Some(why) => Pick::refused(name.to_owned(), why),
+            None => Pick::new(
+                name.to_owned(),
+                chosen.as_deref() == Some(name),
+                pick(Some(name.to_owned())),
+            ),
         });
-    ui.weak(format!("Edit them in the {} tab.", kind.label()));
+    }
+    div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(theme::LINE_GAP)
+        .child(fields::select(
+            format!("layout-field-{id}"),
+            chosen.clone().unwrap_or_else(|| "None".to_owned()),
+            picks,
+            enabled,
+            None,
+        ))
+        .child(widgets::weak(format!("Edit them in the {} tab.", kind.label())))
 }
+
 
 #[cfg(test)]
 mod tests {
