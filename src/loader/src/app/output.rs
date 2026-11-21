@@ -1280,11 +1280,14 @@ mod tests {
             moved > bottom && held > moved,
             "{bottom:?} {moved:?} {held:?}"
         );
+        cx.update_window(window, |_, window, cx| {
+            window.pointer_up(point(px(50.0), px(250.0)), MouseButton::Left, cx);
+        })
+        .unwrap();
         let selection = harness.read_with(cx, |h, _| h.view.ordered());
         let (from, to) = selection.expect("the drag selected text");
         assert!(from.entry < to.entry && to.entry < 500);
         cx.update_window(window, |_, window, cx| {
-            window.pointer_up(point(px(50.0), px(250.0)), MouseButton::Left, cx);
             window.key_down("ctrl-c", false, cx);
         })
         .unwrap();
