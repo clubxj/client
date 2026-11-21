@@ -278,7 +278,7 @@ impl LoaderApp {
                     }
                     ToolsTab::Xp => self.xp_tracker_ui(ui),
                     ToolsTab::Breaks => self.breaks_ui(ui),
-                    ToolsTab::Feedback => self.run_feedback_ui(ui),
+                    ToolsTab::Feedback => {}
                 })
             });
         if let Some((kind, quick)) = read {
@@ -477,38 +477,6 @@ impl LoaderApp {
             let result = run.send(|s| s.skip_next(kind, index));
             run.report(result, &format!("Skipping the next {kind}."));
         }
-    }
-
-    pub(super) fn run_feedback_ui(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        let Some(session_id) = self.run().and_then(|r| r.session_id().map(str::to_owned)) else {
-            return;
-        };
-        self.fetch_sessions_if_stale();
-        let Some(session) = self
-            .feedback
-            .sessions
-            .iter()
-            .find(|s| s.session_id == session_id)
-            .cloned()
-        else {
-            ui.label(
-                egui::RichText::new(if self.feedback.loading {
-                    "Loading…"
-                } else {
-                    "This run isn't listed yet; it is once the server has it."
-                })
-                .weak(),
-            );
-            if let Some(error) = &self.feedback.error {
-                egui_error_label(ui, error);
-            }
-            return;
-        };
-        let draft = self.feedback.draft(&session_id);
-        let actions =
-            feedback::session_ui(ui, &session, draft, &mut self.settings.include_system_info);
-        self.apply_feedback_actions(actions);
     }
 }
 
