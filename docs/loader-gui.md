@@ -85,6 +85,7 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 - `theme::icon_button_width` sizes a group from all its possible labels so buttons never resize.
 - Inventory drag and drop uses `DragAndDrop::set_payload` on `drag_started`, not `dnd_drag_source`, whose drag-only sense swallows clicks.
 - Row widths for form rows are remembered in egui temp memory to decide wrapping next frame.
+- The Editor's text element (`app/editor/code.rs`) is the loader's own, not gpui-component's `Editor`: that one keeps its folds private (no way to fold from the app or a snapshot) and its gutter can't select a line. Folds live in `LoaderApp::fold` (`fold.rs`): the element draws the rows it is given and reports cursor moves and fold clicks back, so a fold opens when the cursor enters it. Tabs draw four columns wide, the width `Folds::longest_line` counts.
 
 ## Scripts, settings and stdin contract
 

@@ -1,172 +1,503 @@
-use super::*;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::{Entity, Subscription};
 
-pub(super) fn paint_arrow(
-    painter: &egui::Painter,
-    center: egui::Pos2,
-    size: f32,
-    folded: bool,
-    color: egui::Color32,
-) {
-    let points = if folded {
-        vec![
-            center + egui::vec2(-size * 0.6, -size),
-            center + egui::vec2(-size * 0.6, size),
-            center + egui::vec2(size * 0.9, 0.0),
-        ]
-    } else {
-        vec![
-            center + egui::vec2(-size, -size * 0.6),
-            center + egui::vec2(size, -size * 0.6),
-            center + egui::vec2(0.0, size * 0.9),
-        ]
-    };
-    painter.add(egui::Shape::convex_polygon(
-        points,
-        color,
-        egui::Stroke::NONE,
-    ));
+use super::*;
+use crate::ui::{theme, widgets};
+
+mod code;
+
+use code::{CodeEditor, Fold, Row, Shown};
+
+const GROUP_GAP: Pixels = px(8.0);
+const FIND_WIDTH: Pixels = px(200.0);
+const PROMPT_WIDTH: Pixels = px(420.0);
+const PROMPT_MARGIN: Pixels = px(6.0);
+
+#[derive(Clone)]
+struct Parts {
+    page: FocusHandle,
+    code: Entity<CodeEditor>,
+    query: Entity<InputState>,
+    replacement: Entity<InputState>,
 }
 
-pub(super) fn paint_matches(
-    ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
-    text: &str,
-    matches: &[usize],
-    find: &mut Find,
-    visible: &[usize],
-    on_screen: std::ops::Range<usize>,
-) {
-    let query_len = find.query.len();
-    let origin = output.galley_pos.to_vec2();
-    let mut walk = TextWalk::new(text);
-    for (i, &at) in matches.iter().enumerate() {
-        let (first_char, line) = walk.advance(at);
-        let current = i == find.current;
-        let shown = visible
-            .binary_search(&line)
-            .is_ok_and(|row| on_screen.contains(&row));
-        if !shown && !(current && find.jump) {
-            continue;
-        }
-        let Some(query_chars) = text.get(at..at + query_len).map(|q| q.chars().count()) else {
-            continue;
-        };
-        let start = output
-            .galley
-            .pos_from_cursor(egui::text::CCursor::new(first_char));
-        let end = output
-            .galley
-            .pos_from_cursor(egui::text::CCursor::new(first_char + query_chars));
-        if (start.top() - end.top()).abs() > 1.0 {
-            continue;
-        }
-        let rect = egui::Rect::from_min_max(start.min, egui::pos2(end.max.x, start.max.y))
-            .translate(origin);
-        let color = if current {
-            egui::Color32::from_rgba_unmultiplied(255, 140, 0, 150)
-        } else {
-            egui::Color32::from_rgba_unmultiplied(255, 220, 0, 70)
-        };
-        ui.painter().rect_filled(rect, 2.0, color);
-        if current && find.jump {
-            ui.scroll_to_rect(rect, Some(egui::Align::Center));
-        }
-    }
-    find.jump = false;
+#[derive(Default)]
+pub(super) struct Ui {
+    parts: Option<Parts>,
+    path: Option<String>,
+    subscriptions: Vec<Subscription>,
+}
+
+fn group_width(buttons: usize, width: Pixels) -> Pixels {
+    (width + px(1.0)) * buttons as f32 + px(1.0)
+}
+
+fn page_width(window: &Window) -> Pixels {
+    let width = window.viewport_size().width;
+    let margin = (width * 0.02).clamp(px(8.0), px(16.0));
+    let side = if width < px(SIDEBAR_MIN_WINDOW) {
+        px(SIDEBAR_HANDLE_WIDTH)
+    } else {
+        px(SIDEBAR_WIDTH)
+    };
+    width - side - margin * 2.0
 }
 
 impl LoaderApp {
-    pub(super) fn file_buttons(&mut self, ui: &mut egui::Ui, running: bool, width: f32) {
-        if icon_button(ui, ICON_OPEN, "Open…", width, !running).clicked() {
-            self.open_script();
+    fn editor_parts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Parts {
+        if let Some(parts) = &self.editor_ui.parts {
+            return parts.clone();
         }
-        let last = self.last_script.as_deref();
-        let open_last = icon_button(
-            ui,
-            ICON_OPEN_LAST,
-            "Open last",
-            width,
-            !running && last.is_some(),
-        );
-        let open_last = match last {
-            Some(path) => open_last.on_hover_text(path),
-            None => open_last,
+        let text = self.script_file.text.clone();
+        let code = cx.new(|cx| CodeEditor::new(&text, cx));
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
+        let replacement = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
+        let subscriptions = vec![
+            cx.subscribe_in(&code, window, |app, code, event: &code::Event, _, cx| {
+                match event {
+                    code::Event::Edited => {
+                        app.script_file.text = code.read(cx).text().to_owned();
+                    }
+                    code::Event::Moved(at) => {
+                        app.fold.follow_cursor(&app.script_file.text, *at);
+                        app.push_shown(code, cx);
+                    }
+                    code::Event::Fold(line) => {
+                        app.fold.toggle(*line);
+                        app.push_shown(code, cx);
+                    }
+                }
+                cx.notify();
+            }),
+            cx.subscribe_in(&query, window, |app, input, event: &InputEvent, _, cx| {
+                match event {
+                    InputEvent::Change => {
+                        let value = input.read(cx).value().to_string();
+                        if value != app.find.query {
+                            app.find.query = value;
+                            app.find.current = 0;
+                            app.find.jump = true;
+                        }
+                    }
+                    InputEvent::PressEnter { shift, .. } => app.find_step(*shift),
+                    _ => return,
+                }
+                cx.notify();
+            }),
+            cx.subscribe_in(
+                &replacement,
+                window,
+                |app, input, event: &InputEvent, _, cx| {
+                    if let InputEvent::Change = event {
+                        app.find.replacement = input.read(cx).value().to_string();
+                        cx.notify();
+                    }
+                },
+            ),
+        ];
+        let parts = Parts {
+            page: cx.focus_handle(),
+            code,
+            query,
+            replacement,
         };
-        if open_last.clicked()
-            && let Some(path) = self.last_script.clone()
-        {
-            self.open_path(std::path::Path::new(&path));
-        }
-        if icon_button(
-            ui,
-            ICON_SAVE,
-            "Save",
-            width,
-            !running && !self.script_file.path.is_empty(),
-        )
-        .clicked()
-        {
-            self.save_script();
-        }
-        if icon_button(ui, ICON_SAVE_AS, "Save as…", width, !running).clicked() {
-            self.save_script_as();
-        }
+        self.editor_ui.parts = Some(parts.clone());
+        self.editor_ui.subscriptions = subscriptions;
+        parts
     }
 
-    pub(super) fn run_buttons(
-        &mut self,
-        ui: &mut egui::Ui,
-        running: bool,
-        paused: bool,
-        target: Option<&Target>,
-        width: f32,
-    ) {
-        let can_run = !running && !self.script_file.text.trim().is_empty();
-        if icon_button(ui, ICON_START, "Run", width, can_run).clicked() {
-            match self.script_file.changed_on_disk() {
-                Some(disk) => {
-                    self.reload_prompt = Some(ReloadPrompt {
-                        disk,
-                        restart: None,
-                    })
-                }
-                None => self.run_file(self.script_file.clone(), target, None, None),
+    fn push_shown(&mut self, code: &Entity<CodeEditor>, cx: &mut Context<Self>) {
+        self.fold
+            .sync(&self.script_file.path, &self.script_file.text);
+        let view = self.fold.view(&self.script_file.text);
+        let rows = view
+            .visible
+            .iter()
+            .map(|&line| Row {
+                line,
+                fold: if !self.fold.is_foldable(line) {
+                    Fold::None
+                } else if self.fold.is_folded(line) {
+                    Fold::Folded
+                } else {
+                    Fold::Open
+                },
+            })
+            .collect();
+        let shown = Shown {
+            rows,
+            headers: view.headers,
+            lines: self.fold.line_count(),
+            longest: self.fold.longest_line(),
+        };
+        code.update(cx, |code, cx| code.set_shown(shown, cx));
+    }
+
+    fn sync_editor(&mut self, parts: &Parts, window: &mut Window, cx: &mut Context<Self>) -> usize {
+        let text = self.script_file.text.clone();
+        if self.editor_ui.path.as_deref() != Some(self.script_file.path.as_str()) {
+            self.editor_ui.path = Some(self.script_file.path.clone());
+            parts.code.update(cx, |code, cx| code.load(&text, cx));
+        } else {
+            parts.code.update(cx, |code, cx| code.set_text(&text, cx));
+        }
+        let matches = if self.find.open {
+            find_matches(&text, &self.find.query, self.find.case_sensitive)
+        } else {
+            Vec::new()
+        };
+        let count = matches.len();
+        self.find.current = self.find.current.min(count.saturating_sub(1));
+        let jump = self.find.open && std::mem::take(&mut self.find.jump);
+        if jump && let Some(&at) = matches.get(self.find.current) {
+            self.fold.reveal(text[..at].matches('\n').count());
+        }
+        self.push_shown(&parts.code, cx);
+        let query_len = self.find.query.len();
+        let ranges = matches.iter().map(|&at| at..at + query_len).collect();
+        let current = (count > 0).then_some(self.find.current);
+        parts
+            .code
+            .update(cx, |code, cx| code.set_matches(ranges, current, jump, cx));
+        for (input, value) in [
+            (&parts.query, &self.find.query),
+            (&parts.replacement, &self.find.replacement),
+        ] {
+            if input.read(cx).value().as_ref() != value.as_str() {
+                let value = value.clone();
+                input.update(cx, |input, cx| input.set_value(value, window, cx));
             }
         }
-        let (pause_icon, pause_text) = run_pause_label(paused);
-        if icon_button(ui, pause_icon, pause_text, width, running).clicked()
-            && let Some(id) = self.editor_run_mut().map(|r| r.id)
-        {
-            self.toggle_pause_of(id);
+        if self.find.open && std::mem::take(&mut self.find.focus) {
+            parts.query.update(cx, |input, cx| input.focus(window, cx));
         }
-        if icon_button(ui, ICON_STOP, "Stop", width, running).clicked()
-            && let Some(run) = self.editor_run_mut()
-        {
-            run.stop();
+        count
+    }
+
+    fn editor_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let command = keystroke.modifiers.secondary(cx) && !keystroke.modifiers.alt;
+        let key = keystroke.key.as_str();
+        if command && (key == "f" || key == "r") {
+            self.find.open = true;
+            self.find.replace |= key == "r";
+            self.find.focus = true;
+            cx.stop_propagation();
+            cx.notify();
+        } else if key == "escape" && self.find.open {
+            self.find.open = false;
+            cx.notify();
         }
     }
 
-    pub(super) fn scripts_ui(&mut self, ui: &mut egui::Ui) {
+    fn run_editor_file(&mut self) {
+        match self.script_file.changed_on_disk() {
+            Some(disk) => {
+                self.reload_prompt = Some(ReloadPrompt {
+                    disk,
+                    restart: None,
+                })
+            }
+            None => {
+                let target = self.run_target_client();
+                self.run_file(self.script_file.clone(), target.as_ref(), None, None);
+            }
+        }
+    }
+
+    fn find_step(&mut self, back: bool) {
+        let count = find_matches(
+            &self.script_file.text,
+            &self.find.query,
+            self.find.case_sensitive,
+        )
+        .len();
+        if count == 0 {
+            return;
+        }
+        let current = self.find.current.min(count - 1);
+        self.find.current = if back {
+            (current + count - 1) % count
+        } else {
+            (current + 1) % count
+        };
+        self.find.jump = true;
+    }
+
+    fn replace_current(&mut self) {
+        let matches = find_matches(
+            &self.script_file.text,
+            &self.find.query,
+            self.find.case_sensitive,
+        );
+        let current = self.find.current.min(matches.len().saturating_sub(1));
+        let Some(&at) = matches.get(current) else {
+            return;
+        };
+        let replacement = self.find.replacement.clone();
+        let text = &mut self.script_file.text;
+        text.replace_range(at..at + self.find.query.len(), &replacement);
+        let after = at + replacement.len();
+        let next = find_matches(text, &self.find.query, self.find.case_sensitive);
+        self.find.current = next.iter().position(|&start| start >= after).unwrap_or(0);
+        self.find.jump = true;
+    }
+
+    fn replace_all(&mut self) {
+        let matches = find_matches(
+            &self.script_file.text,
+            &self.find.query,
+            self.find.case_sensitive,
+        );
+        if matches.is_empty() {
+            return;
+        }
+        let query_len = self.find.query.len();
+        let mut out = String::with_capacity(self.script_file.text.len());
+        let mut last = 0;
+        for &at in &matches {
+            out.push_str(&self.script_file.text[last..at]);
+            out.push_str(&self.find.replacement);
+            last = at + query_len;
+        }
+        out.push_str(&self.script_file.text[last..]);
+        self.script_file.text = out;
+        self.find.current = 0;
+    }
+
+    fn render_run_buttons(
+        &mut self,
+        running: bool,
+        paused: bool,
+        width: Pixels,
+        vertical: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let can_run = !running && !self.script_file.text.trim().is_empty();
+        let (pause_icon, pause_text) = run_pause_label(paused);
+        widgets::button_group(vertical)
+            .child(widgets::icon_button(
+                "editor-run",
+                ICON_START,
+                "Run",
+                width,
+                can_run,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.run_editor_file();
+                    cx.notify();
+                }),
+            ))
+            .child(widgets::icon_button(
+                "editor-pause",
+                pause_icon,
+                pause_text,
+                width,
+                running,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    if let Some(id) = app.editor_run_mut().map(|r| r.id) {
+                        app.toggle_pause_of(id);
+                    }
+                    cx.notify();
+                }),
+            ))
+            .child(widgets::icon_button(
+                "editor-stop",
+                ICON_STOP,
+                "Stop",
+                width,
+                running,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    if let Some(run) = app.editor_run_mut() {
+                        run.stop();
+                    }
+                    cx.notify();
+                }),
+            ))
+    }
+
+    fn render_file_buttons(
+        &mut self,
+        running: bool,
+        width: Pixels,
+        vertical: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let last = self.last_script.clone();
+        let open_last = !running && last.is_some();
+        widgets::button_group(vertical)
+            .child(widgets::icon_button(
+                "editor-open",
+                ICON_OPEN,
+                "Open…",
+                width,
+                !running,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.open_script();
+                    cx.notify();
+                }),
+            ))
+            .child(
+                widgets::icon_button(
+                    "editor-open-last",
+                    ICON_OPEN_LAST,
+                    "Open last",
+                    width,
+                    open_last,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        if let Some(path) = app.last_script.clone() {
+                            app.open_path(std::path::Path::new(&path));
+                        }
+                        cx.notify();
+                    }),
+                )
+                .when_some(last.filter(|_| open_last), |this, path| {
+                    this.tooltip(widgets::tooltip(path))
+                }),
+            )
+            .child(widgets::icon_button(
+                "editor-save",
+                ICON_SAVE,
+                "Save",
+                width,
+                !running && !self.script_file.path.is_empty(),
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.save_script();
+                    cx.notify();
+                }),
+            ))
+            .child(widgets::icon_button(
+                "editor-save-as",
+                ICON_SAVE_AS,
+                "Save as…",
+                width,
+                !running,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.save_script_as();
+                    cx.notify();
+                }),
+            ))
+    }
+
+    fn render_find(&mut self, parts: &Parts, count: usize, cx: &mut Context<Self>) -> Div {
+        let status = if self.find.query.is_empty() {
+            String::new()
+        } else if count == 0 {
+            "No matches".into()
+        } else {
+            format!("{} of {count}", self.find.current + 1)
+        };
+        let any = count > 0;
+        let find = div()
+            .flex()
+            .items_center()
+            .gap(theme::ITEM_GAP)
+            .child(Input::new(&parts.query).small().w(FIND_WIDTH))
+            .child(
+                widgets::button(
+                    "find-previous",
+                    "Previous",
+                    any,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        app.find_step(true);
+                        cx.notify();
+                    }),
+                )
+                .when(any, |this| this.tooltip(widgets::tooltip("Shift+Enter"))),
+            )
+            .child(
+                widgets::button(
+                    "find-next",
+                    "Next",
+                    any,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        app.find_step(false);
+                        cx.notify();
+                    }),
+                )
+                .when(any, |this| this.tooltip(widgets::tooltip("Enter"))),
+            )
+            .child(div().flex_none().whitespace_nowrap().child(status))
+            .child(
+                Checkbox::new("find-case")
+                    .label("Match case")
+                    .checked(self.find.case_sensitive)
+                    .on_click(cx.listener(|app, checked: &bool, _, cx| {
+                        app.find.case_sensitive = *checked;
+                        app.find.current = 0;
+                        app.find.jump = true;
+                        cx.notify();
+                    })),
+            )
+            .child(div().flex_1())
+            .child(
+                widgets::button(
+                    "find-close",
+                    "Close",
+                    true,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        app.find.open = false;
+                        cx.notify();
+                    }),
+                )
+                .tooltip(widgets::tooltip("Escape")),
+            );
+        let replace = self.find.replace.then(|| {
+            div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(theme::ITEM_GAP)
+                .child(Input::new(&parts.replacement).small().w(FIND_WIDTH))
+                .child(widgets::button(
+                    "find-replace",
+                    "Replace",
+                    any,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        app.replace_current();
+                        cx.notify();
+                    }),
+                ))
+                .child(widgets::button(
+                    "find-replace-all",
+                    "Replace all",
+                    any,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        app.replace_all();
+                        cx.notify();
+                    }),
+                ))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(theme::LINE_GAP)
+            .pt(theme::LINE_GAP)
+            .child(find)
+            .children(replace)
+    }
+
+    pub(super) fn render_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let parts = self.editor_parts(window, cx);
+        if window
+            .focused(cx)
+            .is_none_or(|focused| focused == self.chrome.focus)
+        {
+            window.focus(&parts.page, cx);
+        }
+        let count = self.sync_editor(&parts, window, cx);
         let (running, paused) = self
             .editor_run_mut()
             .map_or((false, false), |r| (true, r.is_paused()));
-
-        let (find, replace) = ui.input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::F),
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::R),
-            )
-        });
-        if find || replace {
-            self.find.open = true;
-            self.find.replace |= replace;
-            self.find.focus = true;
-        }
-
-        let target = self.egui_run_target_ui(ui);
-
-        let width = icon_button_width(
-            ui,
+        let (picker, _) = self.render_run_target(cx);
+        let width = widgets::icon_button_width(
+            window,
             &[
                 (ICON_START, "Run"),
                 PAUSE_BUTTONS[0],
@@ -178,442 +509,76 @@ impl LoaderApp {
                 (ICON_SAVE_AS, "Save as…"),
             ],
         );
-        let group_gap = 8.0;
-        let available = ui.available_width();
-        let run_group = crate::theme::button_group_width(3, width);
-        let file_group = crate::theme::button_group_width(4, width);
-        let stack_groups =
-            run_group + ui.spacing().item_spacing.x + group_gap + file_group > available;
+        let available = page_width(window);
+        let run_group = group_width(3, width);
+        let file_group = group_width(4, width);
+        let stack_groups = run_group + theme::ITEM_GAP + GROUP_GAP + file_group > available;
         let stack_buttons = run_group.max(file_group) > available;
-        egui_fit_row(ui, !stack_groups, |ui| {
-            crate::theme::button_group_in(ui, stack_buttons, |ui| {
-                self.run_buttons(ui, running, paused, target.as_ref(), width)
-            });
-            ui.add_space(group_gap);
-            crate::theme::button_group_in(ui, stack_buttons, |ui| {
-                self.file_buttons(ui, running, width)
-            });
-        });
+        let run_buttons = self.render_run_buttons(running, paused, width, stack_buttons, cx);
+        let file_buttons = self.render_file_buttons(running, width, stack_buttons, cx);
+        let buttons =
+            fit_row(!stack_groups)
+                .flex_none()
+                .when(stack_groups, |row| row.items_start())
+                .child(run_buttons)
+                .child(file_buttons.map(|group| {
+                    if stack_groups {
+                        group.mt(GROUP_GAP)
+                    } else {
+                        group.ml(GROUP_GAP)
+                    }
+                }));
         let status = match (running, paused) {
             (true, true) => "paused",
             (true, false) => "running",
             (false, _) => "not running",
         };
-        ui.label(format!("{}, {status}", self.script_file.name()))
-            .on_hover_text(&self.script_file.path);
-        ui.add_space(4.0);
-        let matches = if self.find.open {
-            let matches = self.find_ui(ui);
-            ui.add_space(4.0);
-            matches
-        } else {
-            Vec::new()
-        };
-
-        let size = ui.available_size();
-        let margin = egui::Margin::symmetric(4, 2);
-        let font = egui::TextStyle::Monospace.resolve(ui.style());
-        let (row_height, digit_width) =
-            ui.fonts_mut(|fonts| (fonts.row_height(&font), fonts.glyph_width(&font, '0')));
-        self.fold
-            .sync(&self.script_file.path, &self.script_file.text);
-        let lines = self.fold.line_count();
-        let arrow_width = row_height;
-        let gutter_width =
-            digit_width * lines.to_string().len() as f32 + 3.0 * margin.leftf() + arrow_width;
-        let gutter_color = ui.visuals().weak_text_color();
-        if self.find.open
-            && self.find.jump
-            && let Some(&at) = matches.get(self.find.current)
-        {
-            self.fold
-                .reveal(self.script_file.text[..at].matches('\n').count());
-        }
-        let view = self.fold.view(&self.script_file.text);
-        let text_width = (self.fold.longest_line() as f32 * digit_width + margin.sum().x + 8.0)
-            .max(size.x - gutter_width - ui.spacing().item_spacing.x);
-        let gutter_height = size
-            .y
-            .max(view.visible.len() as f32 * row_height + margin.sum().y);
-        let highlighter = &mut self.highlighter;
-        let hidden = &view.hidden;
-        let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap_width: f32| {
-            let mut job = highlighter.layout(ui, text.as_str(), hidden);
-            job.wrap.max_width = f32::INFINITY;
-            ui.fonts_mut(|fonts| fonts.layout_job(job))
-        };
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    let mut select_line = None;
-                    let (gutter, response) = ui.allocate_exact_size(
-                        egui::vec2(gutter_width, gutter_height),
-                        egui::Sense::click(),
-                    );
-                    ui.painter()
-                        .rect_filled(gutter, 0.0, ui.visuals().faint_bg_color);
-                    let row_top =
-                        |row: usize| gutter.top() + margin.topf() + row as f32 * row_height;
-                    let first = ((ui.clip_rect().top() - gutter.top() - margin.topf()) / row_height)
-                        .floor()
-                        .max(0.0) as usize;
-                    let last = ((ui.clip_rect().bottom() - gutter.top() - margin.topf())
-                        / row_height)
-                        .ceil()
-                        .max(0.0) as usize;
-                    let arrow_center = |row: usize| {
-                        egui::pos2(
-                            gutter.right() - arrow_width / 2.0,
-                            row_top(row) + row_height / 2.0,
-                        )
-                    };
-                    let hover_row = response
-                        .hover_pos()
-                        .map(|pos| ((pos.y - gutter.top() - margin.topf()) / row_height).floor())
-                        .filter(|&row| row >= 0.0 && (row as usize) < view.visible.len())
-                        .map(|row| row as usize);
-                    let hover_fill = ui.visuals().widgets.hovered.bg_fill;
-                    if let Some(row) = hover_row {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        let rect = egui::Rect::from_min_size(
-                            egui::pos2(gutter.left(), row_top(row)),
-                            egui::vec2(gutter_width, row_height),
-                        );
-                        ui.painter().rect_filled(rect, 0.0, hover_fill);
-                    }
-                    for row in first..last.min(view.visible.len()) {
-                        let line = view.visible[row];
-                        let number_color = if hover_row == Some(row) {
-                            ui.visuals().text_color()
-                        } else {
-                            gutter_color
-                        };
-                        ui.painter().text(
-                            egui::pos2(
-                                gutter.right() - arrow_width - 2.0 * margin.leftf(),
-                                row_top(row),
-                            ),
-                            egui::Align2::RIGHT_TOP,
-                            line + 1,
-                            font.clone(),
-                            number_color,
-                        );
-                        if self.fold.is_foldable(line) {
-                            paint_arrow(
-                                ui.painter(),
-                                arrow_center(row),
-                                row_height * 0.3,
-                                self.fold.is_folded(line),
-                                gutter_color,
-                            );
-                        }
-                    }
-                    if response.clicked()
-                        && let Some(pos) = response.interact_pointer_pos()
-                    {
-                        let row = ((pos.y - gutter.top() - margin.topf()) / row_height).floor();
-                        if row >= 0.0
-                            && let Some(&line) = view.visible.get(row as usize)
-                        {
-                            if pos.x >= gutter.right() - arrow_width - margin.leftf()
-                                && self.fold.is_foldable(line)
-                            {
-                                self.fold.toggle(line);
-                            } else {
-                                select_line = Some(line);
-                            }
-                        }
-                    }
-                    let mut output = egui::TextEdit::multiline(&mut self.script_file.text)
-                        .code_editor()
-                        .margin(margin)
-                        .desired_width(text_width)
-                        .min_size(egui::vec2(text_width, size.y))
-                        .layouter(&mut layouter)
-                        .show(ui);
-                    if let Some(row) = hover_row {
-                        let rect = egui::Rect::from_min_size(
-                            egui::pos2(output.response.rect.left(), row_top(row)),
-                            egui::vec2(output.response.rect.width(), row_height),
-                        );
-                        ui.painter()
-                            .rect_filled(rect, 0.0, hover_fill.gamma_multiply(0.4));
-                    }
-                    if let Some(line) = select_line {
-                        let (start, end) = line_char_range(&self.script_file.text, line);
-                        let range = egui::text::CCursorRange::two(
-                            egui::text::CCursor::new(start),
-                            egui::text::CCursor::new(end),
-                        );
-                        output.state.cursor.set_char_range(Some(range));
-                        output.state.clone().store(ui.ctx(), output.response.id);
-                        output.response.request_focus();
-                    }
-                    if let Some(range) = output.state.cursor.char_range() {
-                        self.fold
-                            .follow_cursor(&self.script_file.text, range.primary.index.0);
-                    }
-                    let on_screen = first.saturating_sub(1)..last + 1;
-                    if self.find.open {
-                        paint_matches(
-                            ui,
-                            &output,
-                            &self.script_file.text,
-                            &matches,
-                            &mut self.find,
-                            &view.visible,
-                            on_screen.clone(),
-                        );
-                    }
-                    let mut walk = TextWalk::new(&self.script_file.text);
-                    for &(line, header_end) in &view.headers {
-                        if !view
-                            .visible
-                            .binary_search(&line)
-                            .is_ok_and(|row| on_screen.contains(&row))
-                        {
-                            continue;
-                        }
-                        let at = output
-                            .galley
-                            .pos_from_cursor(egui::text::CCursor::new(walk.advance(header_end).0));
-                        let badge = egui::Rect::from_min_size(
-                            egui::pos2(
-                                output.galley_pos.x + at.max.x + 6.0,
-                                output.galley_pos.y + at.min.y + 1.0,
-                            ),
-                            egui::vec2(2.0 * digit_width + 8.0, row_height - 2.0),
-                        );
-                        let click = ui.interact(
-                            badge,
-                            ui.id().with(("fold_badge", line)),
-                            egui::Sense::click(),
-                        );
-                        let fill = if click.hovered() {
-                            ui.visuals().widgets.hovered.bg_fill
-                        } else {
-                            ui.visuals().widgets.inactive.bg_fill
-                        };
-                        ui.painter().rect_filled(badge, 3.0, fill);
-                        ui.painter().text(
-                            badge.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "...",
-                            font.clone(),
-                            gutter_color,
-                        );
-                        if click.on_hover_text("Click to unfold").clicked() {
-                            self.fold.toggle(line);
-                        }
-                    }
-                });
+        let label = div()
+            .id("editor-file")
+            .flex_none()
+            .child(format!("{}, {status}", self.script_file.name()))
+            .when(!self.script_file.path.is_empty(), |this| {
+                this.tooltip(widgets::tooltip(self.script_file.path.clone()))
             });
+        let find = self.find.open.then(|| self.render_find(&parts, count, cx));
+        div()
+            .id("editor-page")
+            .track_focus(&parts.page)
+            .flex()
+            .flex_col()
+            .size_full()
+            .gap(theme::LINE_GAP)
+            .capture_key_down(
+                cx.listener(|app, event: &KeyDownEvent, _, cx| app.editor_key(event, cx)),
+            )
+            .child(picker.flex_none())
+            .child(buttons)
+            .child(label)
+            .children(find)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .pt(theme::LINE_GAP)
+                    .child(parts.code.clone()),
+            )
+            .into_any_element()
     }
 
-    pub(super) fn find_ui(&mut self, ui: &mut egui::Ui) -> Vec<usize> {
-        let matches = find_matches(
-            &self.script_file.text,
-            &self.find.query,
-            self.find.case_sensitive,
-        );
-        let count = matches.len();
-        self.find.current = self.find.current.min(count.saturating_sub(1));
-
-        let mut step = None;
-        let mut replace_current = false;
-        let mut replace_all = false;
-        let mut query_changed = false;
-
-        ui.horizontal(|ui| {
-            let query = ui.add(
-                egui::TextEdit::singleline(&mut self.find.query)
-                    .hint_text("Find")
-                    .desired_width(200.0),
-            );
-            if std::mem::take(&mut self.find.focus) {
-                query.request_focus();
-            }
-            if query.changed() {
-                self.find.current = 0;
-                self.find.jump = true;
-                query_changed = true;
-            }
-            if (query.has_focus() || query.lost_focus())
-                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            {
-                step = Some(ui.input(|i| i.modifiers.shift));
-            }
-            if ui
-                .add_enabled(count > 0, egui::Button::new("Previous"))
-                .on_hover_text("Shift+Enter")
-                .clicked()
-            {
-                step = Some(true);
-            }
-            if ui
-                .add_enabled(count > 0, egui::Button::new("Next"))
-                .on_hover_text("Enter")
-                .clicked()
-            {
-                step = Some(false);
-            }
-            let status = if self.find.query.is_empty() {
-                String::new()
-            } else if count == 0 {
-                "No matches".into()
-            } else {
-                format!("{} of {count}", self.find.current + 1)
-            };
-            ui.label(status);
-            if ui
-                .checkbox(&mut self.find.case_sensitive, "Match case")
-                .changed()
-            {
-                self.find.current = 0;
-                self.find.jump = true;
-                query_changed = true;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Close").on_hover_text("Escape").clicked() {
-                    self.find.open = false;
-                }
-            });
-        });
-
-        if self.find.replace {
-            ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.find.replacement)
-                        .hint_text("Replace with")
-                        .desired_width(200.0),
-                );
-                if ui
-                    .add_enabled(count > 0, egui::Button::new("Replace"))
-                    .clicked()
-                {
-                    replace_current = true;
-                }
-                if ui
-                    .add_enabled(count > 0, egui::Button::new("Replace all"))
-                    .clicked()
-                {
-                    replace_all = true;
-                }
-            });
-        }
-
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.find.open = false;
-        }
-        if let Some(back) = step.filter(|_| count > 0) {
-            let current = self.find.current;
-            self.find.current = if back {
-                (current + count - 1) % count
-            } else {
-                (current + 1) % count
-            };
-            self.find.jump = true;
-        }
-        if replace_all {
-            let query_len = self.find.query.len();
-            let mut out = String::with_capacity(self.script_file.text.len());
-            let mut last = 0;
-            for &at in &matches {
-                out.push_str(&self.script_file.text[last..at]);
-                out.push_str(&self.find.replacement);
-                last = at + query_len;
-            }
-            out.push_str(&self.script_file.text[last..]);
-            self.script_file.text = out;
-            self.find.current = 0;
-            find_matches(
-                &self.script_file.text,
-                &self.find.query,
-                self.find.case_sensitive,
-            )
-        } else if let (true, Some(&at)) = (replace_current, matches.get(self.find.current)) {
-            let replacement = self.find.replacement.clone();
-            let text = &mut self.script_file.text;
-            text.replace_range(at..at + self.find.query.len(), &replacement);
-            let after = at + replacement.len();
-            let next = find_matches(text, &self.find.query, self.find.case_sensitive);
-            self.find.current = next.iter().position(|&start| start >= after).unwrap_or(0);
-            self.find.jump = true;
-            next
-        } else if query_changed {
-            find_matches(
-                &self.script_file.text,
-                &self.find.query,
-                self.find.case_sensitive,
-            )
-        } else {
-            matches
-        }
-    }
-
-    pub(super) fn reload_prompt_ui(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = &self.reload_prompt else {
+    fn answer_reload(&mut self, choice: Option<bool>) {
+        let Some(ReloadPrompt { disk, restart }) = self.reload_prompt.take() else {
             return;
         };
-        let restart = prompt.restart;
+        let Some(reload) = choice else {
+            return;
+        };
         let file = match restart {
             Some(id) => match self.run_by_id(id).and_then(|r| r.file.clone()) {
                 Some(file) => file,
-                None => {
-                    self.reload_prompt = None;
-                    return;
-                }
+                None => return,
             },
             None => self.script_file.clone(),
         };
-        let name = file.name();
-        let unsaved =
-            restart.is_none() && file.disk.as_ref().is_some_and(|known| known != &file.text);
-        let mut choice: Option<Option<bool>> = None;
-        egui::Window::new("Script changed on disk")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.label(if restart.is_some() {
-                    format!(
-                        "{name} changed on disk since it last ran. Reload it before restarting?"
-                    )
-                } else {
-                    format!("{name} changed on disk since it was loaded. Reload it before running?")
-                });
-                if unsaved {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        "Reloading discards your unsaved edits.",
-                    );
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Reload and run").clicked() {
-                        choice = Some(Some(true));
-                    }
-                    if ui
-                        .button(if restart.is_some() {
-                            "Run previous version"
-                        } else {
-                            "Run editor version"
-                        })
-                        .clicked()
-                    {
-                        choice = Some(Some(false));
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(None);
-                    }
-                });
-            });
-        let Some(choice) = choice else { return };
-        let Some(ReloadPrompt { disk, .. }) = self.reload_prompt.take() else {
-            return;
-        };
-        let Some(reload) = choice else { return };
         let mut file = file;
         file.disk = Some(disk.clone());
         if reload {
@@ -628,21 +593,142 @@ impl LoaderApp {
             }
         }
     }
+
+    pub(super) fn render_reload_prompt(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let restart = self.reload_prompt.as_ref()?.restart;
+        let file = match restart {
+            Some(id) => match self.run_by_id(id).and_then(|r| r.file.clone()) {
+                Some(file) => file,
+                None => {
+                    self.reload_prompt = None;
+                    return None;
+                }
+            },
+            None => self.script_file.clone(),
+        };
+        let name = file.name();
+        let unsaved =
+            restart.is_none() && file.disk.as_ref().is_some_and(|known| known != &file.text);
+        let message = if restart.is_some() {
+            format!("{name} changed on disk since it last ran. Reload it before restarting?")
+        } else {
+            format!("{name} changed on disk since it was loaded. Reload it before running?")
+        };
+        let answer = |choice: Option<bool>| {
+            cx.listener(move |app: &mut LoaderApp, _: &ClickEvent, _, cx| {
+                app.answer_reload(choice);
+                cx.notify();
+            })
+        };
+        let buttons = div()
+            .flex()
+            .flex_wrap()
+            .gap(theme::ITEM_GAP)
+            .child(widgets::button(
+                "reload-run",
+                "Reload and run",
+                true,
+                answer(Some(true)),
+            ))
+            .child(widgets::button(
+                "reload-keep",
+                if restart.is_some() {
+                    "Run previous version"
+                } else {
+                    "Run editor version"
+                },
+                true,
+                answer(Some(false)),
+            ))
+            .child(widgets::button(
+                "reload-cancel",
+                "Cancel",
+                true,
+                answer(None),
+            ));
+        let card = div()
+            .id("reload-prompt")
+            .occlude()
+            .flex()
+            .flex_col()
+            .max_w(PROMPT_WIDTH)
+            .bg(theme::BG_FLOAT)
+            .border_1()
+            .border_color(theme::BORDER)
+            .child(
+                div()
+                    .flex()
+                    .justify_center()
+                    .px(PROMPT_MARGIN)
+                    .py(theme::LINE_GAP)
+                    .child(widgets::heading("Script changed on disk")),
+            )
+            .child(divider())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(theme::LINE_GAP)
+                    .p(PROMPT_MARGIN)
+                    .child(message)
+                    .when(unsaved, |this| {
+                        this.child(
+                            div()
+                                .text_color(theme::YELLOW)
+                                .child("Reloading discards your unsaved edits."),
+                        )
+                    })
+                    .child(widgets::separator())
+                    .child(buttons),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(card)
+                .into_any_element(),
+        )
+    }
 }
 
-impl LoaderApp {
-    pub(super) fn render_editor(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
-        not_ported("Editor")
-    }
-
-    pub(super) fn render_reload_prompt(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<AnyElement> {
-        None
-    }
+#[cfg(test)]
+fn example(app: &mut LoaderApp) {
+    app.tab = Tab::Scripts;
+    app.script_file = ScriptFile::default();
 }
 
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("editor", |app| app.tab = Tab::Scripts),
+        ("editor", example),
+        ("editor-folded", |app| {
+            example(app);
+            app.fold.sync(&app.script_file.path, &app.script_file.text);
+            app.fold.toggle(3);
+            app.fold.toggle(19);
+        }),
+        ("editor-find", |app| {
+            example(app);
+            app.find.open = true;
+            app.find.replace = true;
+            app.find.query = "state".into();
+            app.find.current = 2;
+            app.find.jump = true;
+        }),
+        ("editor-reload", |app| {
+            example(app);
+            app.script_file.disk = Some(String::new());
+            app.reload_prompt = Some(ReloadPrompt {
+                disk: String::new(),
+                restart: None,
+            });
+        }),
     ]
 }
