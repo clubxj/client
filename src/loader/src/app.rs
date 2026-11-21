@@ -31,7 +31,6 @@ use crate::api::{
     models::{API_VERSION, Ended, Quote, RecentSession, Scored},
 };
 use crate::feedback;
-use crate::highlight::Highlighter;
 use crate::libs::Lib;
 use crate::pipe::Rows;
 use crate::script::{Launch, Script, ScriptEvent};
@@ -1147,8 +1146,8 @@ pub struct LoaderApp {
     script_file: ScriptFile,
     last_script: Option<String>,
     find: Find,
-    highlighter: Highlighter,
     fold: crate::fold::Folds,
+    editor_ui: editor::Ui,
     runs: Vec<Run>,
     active_run: Option<u64>,
     next_run: u64,
@@ -1275,8 +1274,8 @@ impl LoaderApp {
                 .unwrap_or_default(),
             last_script: storage.get(LAST_SCRIPT_KEY).flatten(),
             find: Find::default(),
-            highlighter: Highlighter::default(),
             fold: crate::fold::Folds::default(),
+            editor_ui: editor::Ui::default(),
             reload_prompt: None,
             remembered_forms: storage.get(FORMS_KEY)
                 .unwrap_or_default(),
@@ -3776,45 +3775,6 @@ impl LoaderApp {
 
 }
 
-fn line_char_range(text: &str, line: usize) -> (usize, usize) {
-    let mut start = 0;
-    for (i, content) in text.split('\n').enumerate() {
-        let len = content.trim_end_matches('\r').chars().count();
-        if i == line {
-            return (start, start + len);
-        }
-        start += content.chars().count() + 1;
-    }
-    (start, start)
-}
-
-struct TextWalk<'a> {
-    text: &'a str,
-    byte: usize,
-    char: usize,
-    line: usize,
-}
-
-impl<'a> TextWalk<'a> {
-    fn new(text: &'a str) -> Self {
-        Self {
-            text,
-            byte: 0,
-            char: 0,
-            line: 0,
-        }
-    }
-
-    fn advance(&mut self, to: usize) -> (usize, usize) {
-        if let Some(part) = self.text.get(self.byte..to) {
-            self.char += part.chars().count();
-            self.line += part.bytes().filter(|&b| b == b'\n').count();
-            self.byte = to;
-        }
-        (self.char, self.line)
-    }
-}
-
 fn varps_report(read: Read, varps: &[i32], previous: Option<&[i32]>) -> Option<String> {
     let varp = |id: usize| varps.get(id).copied();
     Some(match read {
@@ -4131,15 +4091,5 @@ mod tests {
                 ("e", normal)
             ]
         );
-    }
-
-    #[test]
-    fn the_text_walk_counts_chars_and_lines() {
-        let text = "é\nab\nc";
-        let mut walk = TextWalk::new(text);
-        assert_eq!(walk.advance(3), (2, 1));
-        assert_eq!(walk.advance(7), (6, 2));
-        assert_eq!(walk.advance(1), (6, 2));
-        assert_eq!(walk.advance(99), (6, 2));
     }
 }

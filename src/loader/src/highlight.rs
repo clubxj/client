@@ -3,7 +3,7 @@ use std::{
     ops::Range,
 };
 
-use eframe::egui::{self, Color32, FontId, TextFormat, text::LayoutJob};
+use gpui_kit::Rgba;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -260,108 +260,51 @@ fn tokenize_into(text: &[u8], start: usize, end: usize, tokens: &mut Vec<(Range<
     }
 }
 
-fn color(kind: Kind, dark: bool) -> Color32 {
-    let (dark_color, light_color) = match kind {
-        Kind::Plain => (
-            Color32::from_rgb(0xd4, 0xd4, 0xd4),
-            Color32::from_rgb(0x24, 0x29, 0x2e),
-        ),
-        Kind::Comment => (
-            Color32::from_rgb(0x6a, 0x99, 0x55),
-            Color32::from_rgb(0x5a, 0x7a, 0x4a),
-        ),
-        Kind::String => (
-            Color32::from_rgb(0xce, 0x91, 0x78),
-            Color32::from_rgb(0xa3, 0x15, 0x15),
-        ),
-        Kind::Literal => (
-            Color32::from_rgb(0xb5, 0xce, 0xa8),
-            Color32::from_rgb(0x09, 0x86, 0x58),
-        ),
-        Kind::Keyword => (
-            Color32::from_rgb(0xc5, 0x86, 0xc0),
-            Color32::from_rgb(0xaf, 0x00, 0xdb),
-        ),
-        Kind::Builtin => (
-            Color32::from_rgb(0x4e, 0xc9, 0xb0),
-            Color32::from_rgb(0x26, 0x7f, 0x99),
-        ),
-        Kind::Host => (
-            Color32::from_rgb(0x56, 0x9c, 0xd6),
-            Color32::from_rgb(0x00, 0x50, 0xb0),
-        ),
-        Kind::Call => (
-            Color32::from_rgb(0xdc, 0xdc, 0xaa),
-            Color32::from_rgb(0x79, 0x5e, 0x26),
-        ),
-    };
-    if dark { dark_color } else { light_color }
+const fn rgb(value: u32) -> Rgba {
+    Rgba {
+        r: ((value >> 16) & 0xff) as f32 / 255.0,
+        g: ((value >> 8) & 0xff) as f32 / 255.0,
+        b: (value & 0xff) as f32 / 255.0,
+        a: 1.0,
+    }
 }
 
-pub fn layout_job(source: &str, font: FontId, dark: bool, hidden: &[Range<usize>]) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    let tokens = tokenize(source);
-    if tokens
-        .iter()
-        .any(|(range, _)| source.get(range.clone()).is_none())
-    {
-        job.append(
-            source,
-            0.0,
-            TextFormat::simple(font, color(Kind::Plain, dark)),
-        );
-        return job;
+pub fn color(kind: Kind) -> Rgba {
+    match kind {
+        Kind::Plain => rgb(0xd4d4d4),
+        Kind::Comment => rgb(0x6a9955),
+        Kind::String => rgb(0xce9178),
+        Kind::Literal => rgb(0xb5cea8),
+        Kind::Keyword => rgb(0xc586c0),
+        Kind::Builtin => rgb(0x4ec9b0),
+        Kind::Host => rgb(0x569cd6),
+        Kind::Call => rgb(0xdcdcaa),
     }
-    let folded = TextFormat {
-        font_id: FontId::new(1.0, font.family.clone()),
-        color: Color32::TRANSPARENT,
-        line_height: Some(0.0),
-        ..Default::default()
-    };
-    let mut next = 0;
-    for (range, kind) in tokens {
-        let mut at = range.start;
-        while at < range.end {
-            while next < hidden.len() && hidden[next].end <= at {
-                next += 1;
-            }
-            let (end, is_hidden) = match hidden.get(next) {
-                Some(h) if h.start <= at => (h.end.min(range.end), true),
-                Some(h) => (h.start.min(range.end), false),
-                None => (range.end, false),
-            };
-            let format = if is_hidden {
-                folded.clone()
-            } else {
-                TextFormat::simple(font.clone(), color(kind, dark))
-            };
-            job.append(&source[at..end], 0.0, format);
-            at = end;
-        }
-    }
-    job
 }
 
 #[derive(Default)]
 pub struct Highlighter {
-    key: u64,
-    job: Option<LayoutJob>,
+    key: Option<u64>,
+    tokens: Vec<(Range<usize>, Kind)>,
 }
 
 impl Highlighter {
-    pub fn layout(&mut self, ui: &egui::Ui, source: &str, hidden: &[Range<usize>]) -> LayoutJob {
-        let font = egui::TextStyle::Monospace.resolve(ui.style());
-        let dark = ui.visuals().dark_mode;
+    pub fn tokens(&mut self, source: &str) -> &[(Range<usize>, Kind)] {
         let mut hasher = DefaultHasher::new();
-        (source, dark, font.size.to_bits(), hidden).hash(&mut hasher);
+        source.hash(&mut hasher);
         let key = hasher.finish();
-        if self.key != key {
-            self.key = key;
-            self.job = None;
+        if self.key != Some(key) {
+            self.key = Some(key);
+            self.tokens = tokenize(source);
+            if self
+                .tokens
+                .iter()
+                .any(|(range, _)| source.get(range.clone()).is_none())
+            {
+                self.tokens = vec![(0..source.len(), Kind::Plain)];
+            }
         }
-        self.job
-            .get_or_insert_with(|| layout_job(source, font, dark, hidden))
-            .clone()
+        &self.tokens
     }
 }
 

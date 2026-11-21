@@ -171,7 +171,7 @@ impl Folds {
         if index == self.cursor.0 {
             return;
         }
-        let line = text.chars().take(index).filter(|&c| c == '\n').count();
+        let line = text.get(..index).unwrap_or(text).matches('\n').count();
         self.cursor = (index, line);
         self.reveal(line);
     }
