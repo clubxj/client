@@ -12,7 +12,6 @@ use std::{
 
 use injector::Cursor;
 use loader::backend::{self, Settings, Target};
-use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::api::{Api, Config};

@@ -2,14 +2,14 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
+    App, ClickEvent, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Pixels, SharedString, Stateful, StatefulInteractiveElement, Styled, TextRun,
     Window, div, font, prelude::FluentBuilder, px,
 };
 
 use super::theme;
 
-pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type OnSelect = std::rc::Rc<dyn Fn(&mut Window, &mut App)>;
 
 pub fn text_width(window: &Window, text: &str, size: Pixels, bold: bool) -> Pixels {
     let mut font = font(theme::current_ui_family());
@@ -132,9 +132,6 @@ impl Slide {
         }
     }
 
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
 
     fn value_at(&self, now: Instant) -> f32 {
         let t = (now.duration_since(self.since).as_secs_f32() / self.length.as_secs_f32()).min(1.0);
@@ -153,17 +150,28 @@ impl Slide {
 
 pub const SLIDE_LENGTH: Duration = Duration::from_millis(150);
 
+#[derive(Clone, Copy)]
+pub struct SlideButton {
+    pub icon: &'static str,
+    pub label: &'static str,
+    pub enabled: bool,
+    pub selected: bool,
+}
+
 pub fn slide_button(
     id: impl Into<ElementId>,
-    icon: &'static str,
-    label: &'static str,
+    button: SlideButton,
     open: f32,
-    enabled: bool,
-    selected: bool,
     window: &Window,
     on_hover: impl Fn(&bool, &mut Window, &mut App) + 'static,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
+    let SlideButton {
+        icon,
+        label,
+        enabled,
+        selected,
+    } = button;
     let label_width = text_width(window, label, theme::BODY, false);
     let shown = (ICON_GAP + label_width) * open;
     button_frame(id, enabled, selected)
@@ -273,19 +281,6 @@ pub fn credits(text: impl Into<SharedString>, suffix: &str, weak: bool) -> Div {
         })
 }
 
-pub fn link(
-    id: impl Into<ElementId>,
-    text: impl Into<SharedString>,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .cursor_pointer()
-        .hover(|style| style.text_color(theme::BLUE))
-        .on_click(on_click)
-        .child(text.into())
-}
 
 pub fn heading(text: impl Into<SharedString>) -> Div {
     div()
@@ -306,20 +301,11 @@ pub fn error(text: impl Into<SharedString>) -> Div {
     div().text_color(theme::RED).child(text.into())
 }
 
-pub fn mono(text: impl Into<SharedString>) -> Div {
-    div().font_family(theme::MONO).child(text.into())
-}
 
 pub fn separator() -> Div {
     div().h(px(1.0)).my(theme::LINE_GAP).bg(theme::BORDER)
 }
 
-pub fn table_header<'a>(heads: impl IntoIterator<Item = &'a str>) -> Vec<AnyElement> {
-    heads
-        .into_iter()
-        .map(|head| strong(head.to_owned()).into_any_element())
-        .collect()
-}
 
 pub fn mono_font() -> gpui_kit::Font {
     font(theme::MONO)
@@ -328,7 +314,7 @@ pub fn mono_font() -> gpui_kit::Font {
 pub struct Choice {
     label: SharedString,
     selected: bool,
-    on_select: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+    on_select: OnSelect,
 }
 
 impl Choice {

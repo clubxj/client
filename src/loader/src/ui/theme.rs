@@ -4,7 +4,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFallbacks, Hsla, Pixels, Rgba, SharedString, px};
 
-pub use crate::theme::UiFont;
+#[derive(Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum UiFont {
+    #[default]
+    Proportional,
+    Monospace,
+}
+
+impl UiFont {
+    pub const ALL: [Self; 2] = [Self::Proportional, Self::Monospace];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Proportional => "Proportional",
+            Self::Monospace => "Monospace",
+        }
+    }
+}
 
 const fn hex(value: u32) -> Rgba {
     Rgba {

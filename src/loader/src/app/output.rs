@@ -642,10 +642,7 @@ fn pick_log_tab(
 
 struct Control {
     slot: usize,
-    icon: &'static str,
-    label: &'static str,
-    enabled: bool,
-    selected: bool,
+    button: widgets::SlideButton,
 }
 
 const CLEAR: usize = 0;
@@ -762,11 +759,8 @@ impl LoaderApp {
         let open = self.output_ui.slides[slot].value(window);
         widgets::slide_button(
             ("log-control", slot),
-            control.icon,
-            control.label,
+            control.button,
             open,
-            control.enabled,
-            control.selected,
             window,
             cx.listener(move |app, hovered: &bool, _, cx| {
                 app.output_ui.slides[slot].set(*hovered);
@@ -816,10 +810,12 @@ impl LoaderApp {
             .map(|pipe| pipe.path().display().to_string());
         let control = |slot, icon, label, enabled, selected| Control {
             slot,
-            icon,
-            label,
-            enabled,
-            selected,
+            button: widgets::SlideButton {
+                icon,
+                label,
+                enabled,
+                selected,
+            },
         };
         let clear = self.render_log_slide(
             control(CLEAR, ICON_CLEAR, "Clear", filled, false),

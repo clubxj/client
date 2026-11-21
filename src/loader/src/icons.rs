@@ -65,7 +65,7 @@ fn path() -> Option<PathBuf> {
 
 fn render_image(width: u32, height: u32, rgba: &[u8]) -> Option<Arc<RenderImage>> {
     let mut bgra = rgba.to_vec();
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let buffer = image::RgbaImage::from_raw(width, height, bgra)?;

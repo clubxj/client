@@ -33,7 +33,6 @@ mod script_names;
 mod session;
 mod store;
 mod terminal;
-mod theme;
 mod ui;
 mod transports;
 mod update;

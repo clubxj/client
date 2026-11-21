@@ -10,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, Div, ElementId, FocusHandle,
@@ -35,7 +34,6 @@ use crate::pipe::Rows;
 use crate::script::{Launch, Script, ScriptEvent};
 use crate::session::{self, Kept, Prepared};
 use crate::store::{Confirmed, Store};
-use crate::theme::{icon_button, icon_button_width};
 use crate::update;
 use crate::storage::Storage;
 use crate::wake::Wake;
@@ -1096,7 +1094,7 @@ pub struct LoaderApp {
     run_ui: run_page::Ui,
     dev_toggles: [bool; DEV_TOGGLES.len()],
     cursor: Cursor,
-    ui_font: crate::theme::UiFont,
+    ui_font: crate::ui::theme::UiFont,
     dev_tab: DevTab,
     inspector_tab: InspectorTab,
     tiles: Option<TilesWorker>,
