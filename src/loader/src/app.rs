@@ -1207,6 +1207,7 @@ pub struct LoaderApp {
     last_save: Instant,
     quit: bool,
     copy: Option<String>,
+    dev_ui: development::Ui,
     chrome: Chrome,
 }
 
@@ -1343,6 +1344,7 @@ impl LoaderApp {
             last_save: Instant::now(),
             quit: false,
             copy: None,
+            dev_ui: Default::default(),
             chrome,
         };
         if let Some(message) = layouts_unreadable {

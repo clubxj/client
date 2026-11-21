@@ -4,8 +4,6 @@ use std::{
     path::PathBuf,
 };
 
-use eframe::egui;
-
 pub struct Pipe {
     path: PathBuf,
     file: File,
@@ -82,20 +80,6 @@ pub fn toggle(
     let message = format!("Piping new lines to {}.", open.path.display());
     *pipe = Some(open);
     Ok(Some(message))
-}
-
-pub fn button(ui: &mut egui::Ui, pipe: Option<&Pipe>) -> bool {
-    let response = ui.add(egui::Button::new("Pipe").selected(pipe.is_some()));
-    match pipe {
-        Some(pipe) => response.on_hover_text(format!(
-            "Appending every new line to {}. Click to stop.",
-            pipe.path.display()
-        )),
-        None => response.on_hover_text(
-            "Appends every new line to a file you pick, and creates the file if it doesn't exist.",
-        ),
-    }
-    .clicked()
 }
 
 #[cfg(test)]
