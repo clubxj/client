@@ -12,15 +12,15 @@ use super::theme;
 pub type OnClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 pub fn text_width(window: &Window, text: &str, size: Pixels, bold: bool) -> Pixels {
-    let style = window.text_style();
-    let mut font = style.font();
+    let mut font = font(theme::current_ui_family());
+    font.fallbacks = Some(theme::fallbacks());
     if bold {
         font.weight = FontWeight::BOLD;
     }
     let run = TextRun {
         len: text.len(),
         font,
-        color: style.color,
+        color: theme::FG.into(),
         background_color: None,
         underline: None,
         strikethrough: None,

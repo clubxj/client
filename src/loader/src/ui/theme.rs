@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{App, FontFallbacks, Hsla, Pixels, Rgba, SharedString, px};
@@ -177,7 +178,18 @@ pub fn install(cx: &mut App, ui_font: UiFont) {
     set_ui_font(cx, ui_font);
 }
 
+static CURRENT_UI_FONT: AtomicBool = AtomicBool::new(false);
+
+pub fn current_ui_family() -> SharedString {
+    ui_family(if CURRENT_UI_FONT.load(Ordering::Relaxed) {
+        UiFont::Monospace
+    } else {
+        UiFont::Proportional
+    })
+}
+
 pub fn set_ui_font(cx: &mut App, ui_font: UiFont) {
+    CURRENT_UI_FONT.store(ui_font == UiFont::Monospace, Ordering::Relaxed);
     Theme::global_mut(cx).font_family = ui_family(ui_font);
     cx.refresh_windows();
 }
