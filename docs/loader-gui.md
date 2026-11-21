@@ -1,12 +1,17 @@
 # loader (`src/loader`)
 
-The desktop app (`eframe`/egui). It never touches the client itself: a new capability goes into the injector (and usually the agent) first, then gets surfaced here. Releases, signing and the installer are in [releases.md](releases.md).
+The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches the client itself: a new capability goes into the injector (and usually the agent) first, then gets surfaced here. Releases, signing and the installer are in [releases.md](releases.md).
 
 ## Map
 
 | Path | Holds |
 | --- | --- |
-| `app.rs` | All page UI and app state: sidebar, header, Clients, Editor, Sessions, run pages, Development (tools, inspectors' UI, `LogTable`), Settings, output panel |
+| `app.rs` | `LoaderApp`: app state, events, jobs, run/session logic, `tick` (the per-frame logic), `save`/`on_exit` |
+| `app/chrome.rs` | Window, `Render`, the wake loop, header, sidebar and drawer, sign-in gate, update banner/screen, page dispatch, overlay dialogs |
+| `app/<page>.rs` | One module per page (`clients`, `store_page`, `sessions`, `run_page`, `editor` + `editor/code.rs`, `development`, `terminal_page`, `accounts_page`, `feedback_page`, `settings_page`, `queue_page`, `output`, `dialogs`), each with its widget state in one `Ui` field on `LoaderApp`; `shared.rs` holds what several pages use |
+| `app/snapshots.rs` | Offscreen page snapshots (test only), see below |
+| `ui/` | `theme.rs` palette, sizes, fonts, gpui-component theme; `widgets.rs` and `fields.rs` shared widgets |
+| `storage.rs`, `wake.rs` | `app.ron` key/value store; `Wake`, the handle background threads use to wake the window |
 | `script.rs` | Script process: spawn, stdio pumping, pause/stop, `ScriptEvent`; `Process` (session thread's handle); `Host` (answers PIN, lamp, HTTP off the UI) |
 | `session.rs` | Store run start (cache, in-memory download, decrypt), `Beat` heartbeat state machine, `keep`, quotes/restart |
 | `store.rs` | Scripts page, prices, community tags, `Confirmed` |
@@ -27,14 +32,15 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 | `terminal.rs` | Terminal page (`portable-pty` + `alacritty_terminal`), started in the agent workspace |
 | `mcp.rs`, `mcp/`, `workspace.rs` | `loader mcp` server and the agent workspace, see [mcp.md](mcp.md) |
 | `log_view.rs`, `pipe.rs` | Output tab buffer; append-to-file pipe |
-| `theme.rs`, `highlight.rs`, `fold.rs` | Widgets/fonts, Luau highlighting |
+| `highlight.rs`, `fold.rs` | Luau highlighting, folding |
 | `backend/` | `mod.rs` `Settings` + platform-neutral facade; `native.rs` (Windows, calls `injector` lib); `wine.rs` (Linux helper) |
 | `paths.rs` | `ProjectDirs` `com.volcren.Volcren`, user agent |
 | `fake_api.rs`, `flow_tests.rs` | Test API and flow tests |
 
 ## Threads and frame independence
 
-- The window draws no frames while minimised or on a hidden workspace, so nothing billing-critical runs in `ui()`.
+- The window draws no frames while minimised or on a hidden workspace, so nothing billing-critical runs in `tick`.
+- `LoaderApp::tick` (events, script events, queues, xp, inspector polls, the 30 s autosave) runs at the start of every render, as egui's frame did, so a click that changes what a poll watches acts on the next frame. Threads call `Wake::wake` (render now) or `wake_after` (render by then); the wake loop in `chrome.rs` keeps only the earliest deadline, and every tick asks again for what it still needs.
 - Each store run has its own thread (`session::keep`): heartbeat every `heartbeat_seconds` (clamped 10 to 120), stats from `report_stats`, stop on server-ended session, stop after `GIVE_UP_AFTER` (4 min) without a successful beat, before the server's 5 min timeout. Ends the session when the script exits.
 - PIN, lamp and `http_request` are answered on the script's output thread (`script::Host`), since a script blocks until answered. Nothing a script asks for waits for the window: settings are fixed before it starts.
 - All `Api` calls block and run on `api_job` threads.
@@ -44,8 +50,8 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 ## Sign-in and storage
 
 - Discord via Supabase, PKCE; listener on `127.0.0.1:5217`, redirect URL `http://localhost:5217/`. Login times out after 5 min.
-- Keyring service `volcren-loader`: `refresh-token` (sign-in, shared with `loader mcp`, see [mcp.md](mcp.md)), `accounts-key` (32-byte AES-256-GCM key for `accounts.bin` and run records). Never in eframe storage.
-- eframe storage keys: `script`, `last_script`, `forms`, `queues`, `layouts`, `cursor`, `ui_font`, `community_confirmed`, `http_whitelist`, plus `Settings`.
+- Keyring service `volcren-loader`: `refresh-token` (sign-in, shared with `loader mcp`, see [mcp.md](mcp.md)), `accounts-key` (32-byte AES-256-GCM key for `accounts.bin` and run records). Never in `app.ron`.
+- `app.ron` (`storage.rs`) is the file eframe wrote, kept so installs keep their data: in the data dir of app id `Loader` (`~/.local/share/loader`, `%APPDATA%\Loader\data`), a RON map of RON-encoded values. Keys: `app` (`Settings`), `script`, `last_script`, `forms`, `queues`, `layouts`, `cursor`, `ui_font`, `community_confirmed`, `http_whitelist`. Keys it doesn't know (eframe's `egui`, `window`) are kept. Written every 30 s and on exit, through a temporary file and a rename.
 - `accounts.bin` (data dir) is `nonce || ciphertext || tag`. If it can't be opened (no keyring, wrong key) the page refuses to save so it isn't overwritten. Only `hash_name` of the account name is kept, normalised like the client (lowercase, spaces/hyphens to `_`).
 - `layouts`: if unreadable (written by a newer loader) it is copied to `layouts-unreadable-<unix>.ron` and never saved over. Two open loaders still overwrite each other's storage.
 - Endpoints compiled from `src/loader/config.json`; `API_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SITE_URL`, `PRICES_URL` env vars override at run time. No `.env`.
@@ -77,13 +83,16 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 
 ## UI mechanisms
 
-- Sidebar drawer (window narrower than `SIDEBAR_MIN_WINDOW`): it overlays the page, so row hovers use `Ui::rect_contains_pointer` (layer-aware), never the raw pointer.
-- `theme::link_hovered` reads the hover from the last frame's response so text can be coloured before it's laid out.
+- GPUI keeps no hidden widget state for us: text inputs are entities, scroll positions handles, open sections flags. Each page keeps them in its `Ui` struct, created on first render; the model the logic reads (`Settings`, forms, the inspectors) stays the source of truth, and inputs are pushed from it when they aren't focused.
+- Overlay dialogs (start prompt, community warning, reload prompt, queue prompt, accounts and whitelist dialogs) are absolutely positioned elements over a backdrop, not windows.
+- Key events only travel the path to the focused element and the window root usually has focus, so page shortcuts (Clients arrows, accounts Escape) use `cx.observe_keystrokes` gated on the tab, no modifiers and `window.has_focused_input`, which replaces egui's `wants_keyboard_input`. The Editor takes focus when nothing inside a page has it, so Ctrl+F/Ctrl+R/Escape reach it.
+- `widgets::text_width` measures with the current UI font (`theme::current_ui_family`), not `window.text_style()`, which is GPUI's default outside layout. `widgets::icon_button_width` sizes a group from all its possible labels so buttons never resize.
 - Output panel (`app/output.rs`): the log view is a `uniform_list` of wrapped rows, so only visible rows are drawn. Each entry is wrapped once; an append wraps only the new entries (`Log::appended` tells an append from a rebuild because a rebuild or clear raises `revision` by more than the entries added). A tab switch, filter change, trim or clear re-wraps the whole tab and drops the selection; a new width only re-wraps it.
 - Output tabs are capped (`backend::LOG_LINES`, 2000 to 10 000), trimmed a quarter at a time. A trim or filter change rebuilds the tab's text and re-wraps it, and Copy all and Save copy the whole text.
 - GPUI has no selectable text, so the log view selects by itself: a selection is two (entry, byte) spots, rows hit-test by shaping the one row under the pointer, Ctrl+C copies it. Dragging past the edge keeps scrolling (`LogView::step_past_edge`); speed is relative to room to the window edge since the output sits at the bottom.
-- `theme::icon_button_width` sizes a group from all its possible labels so buttons never resize.
 - The Editor's text element (`app/editor/code.rs`) is the loader's own, not gpui-component's `Editor`: that one keeps its folds private (no way to fold from the app or a snapshot) and its gutter can't select a line. Folds live in `LoaderApp::fold` (`fold.rs`): the element draws the rows it is given and reports cursor moves and fold clicks back, so a fold opens when the cursor enters it. Tabs draw four columns wide, the width `Folds::longest_line` counts.
+- The terminal paints its grid in one canvas, one shaped line per row with every glyph forced to the cell width; text arrives through an input handler so IME and dead keys work.
+- Offscreen snapshots: `SNAPSHOT_DIR=<dir> [SNAPSHOT_ONLY=<prefix,…>] [SNAPSHOT_SIZE=900x640] cargo test -p loader app::snapshots::pages -- --ignored` renders each page state listed in the pages' `snapshots()` to a PNG (2x scale) with GPUI's headless WGPU renderer, without a window, a client or the API. Use it to check a page's look; Windows has no headless renderer.
 
 ## Scripts, settings and stdin contract
 
@@ -97,7 +106,7 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 ## HTTP whitelist
 
 - At most 32 requests in flight across all scripts (`MAX_HTTP_IN_FLIGHT`); beyond that the answer is an error.
-- Built-in hosts: those of `api_url`, `supabase_url`, `site_url`, `prices_url`. User entries live in eframe storage, out of scripts' reach. `*.example.com` matches subdomains only.
+- Built-in hosts: those of `api_url`, `supabase_url`, `site_url`, `prices_url`. User entries live in `app.ron`, out of scripts' reach. `*.example.com` matches subdomains only.
 - Redirects followed by hand (max 5), each host checked; `Authorization`/`Cookie`/`Proxy-Authorization` dropped on a host change or https-to-http.
 - The whitelist is copied per request, so changes apply from the next one.
 
