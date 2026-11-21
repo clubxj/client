@@ -1,18 +1,22 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use eframe::egui;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::{Entity, Subscription};
 use injector::manifest::Manifest;
 use serde_json::Value;
 
-use super::{Event, LoaderApp, PendingStart, Run, Tab, not_ported};
-use gpui_kit::{AnyElement, Context, Window};
+use super::*;
 use crate::api::models::ScriptManifest;
 use crate::api::{Api, ApiError, Me, StoreScript};
 use crate::libs::Lib;
 use crate::queue::{self, Entry, Goal, OnChange, Outcome, Phase, Runner, WhenFinished};
 use crate::script::{Launch, Script};
 use crate::session;
+use crate::ui::fields::{self, NumberField, Range};
+use crate::ui::{theme, widgets};
 
 const LOGOUT_SOURCE: &str = "local Logout = require(\"@lib/main/interfaces/gametabs/logout\")\nif not Logout.logout() then\n\terror(\"Couldn't log out\", 0)\nend\n";
 
@@ -131,6 +135,7 @@ pub(super) struct Page {
     checking: Option<u32>,
     fetching: std::collections::HashSet<String>,
     prompt: Option<Prompt>,
+    ui: Ui,
 }
 
 impl LoaderApp {
@@ -229,364 +234,6 @@ impl LoaderApp {
         scripts
     }
 
-    pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        ui.heading("Queue");
-        if self.auth.me().is_none() {
-            ui.label("Sign in to queue store scripts.");
-            return;
-        }
-        if !self.store.loaded && !self.store.loading && self.store.error.is_none() {
-            self.fetch_scripts();
-        }
-        self.running_queues_ui(ui);
-        ui.add_space(8.0);
-        self.saved_queues_ui(ui);
-        ui.add_space(8.0);
-        self.queue_options_ui(ui);
-        ui.add_space(8.0);
-        self.add_entry_ui(ui);
-        ui.separator();
-        self.entry_form();
-        egui::ScrollArea::vertical()
-            .id_salt("queue")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                self.entries_ui(ui);
-                ui.separator();
-                self.entry_editor_ui(ui);
-            });
-        self.queue_prompt_ui(&ctx);
-    }
-
-    fn running_queues_ui(&mut self, ui: &mut egui::Ui) {
-        let mut stop = None;
-        let mut finish = None;
-        for runner in &self.queue_runners {
-            ui.horizontal_wrapped(|ui| {
-                crate::theme::status_dot(ui, crate::theme::GREEN);
-                ui.label(format!("Client {}: {}", runner.pid, runner.progress()));
-                ui.weak(crate::xp::duration(runner.started.elapsed()));
-                if ui
-                    .button("Finish")
-                    .on_hover_text("Lets the current script wrap up, then ends the queue.")
-                    .clicked()
-                {
-                    finish = Some(runner.pid);
-                }
-                if ui
-                    .button("Stop")
-                    .on_hover_text("Stops the current script now and ends the queue.")
-                    .clicked()
-                {
-                    stop = Some(runner.pid);
-                }
-            });
-        }
-        if let Some(pid) = finish
-            && let Some(runner) = self.queue_runners.iter_mut().find(|r| r.pid == pid)
-        {
-            runner.finishing = true;
-        }
-        if let Some(pid) = stop {
-            self.end_queue(pid, "Queue stopped.".into());
-            if let Some(run) = self
-                .runs
-                .iter_mut()
-                .find(|r| r.target.as_ref().is_some_and(|t| t.client.pid == pid) && r.is_running())
-            {
-                run.stop();
-            }
-        }
-    }
-
-    fn saved_queues_ui(&mut self, ui: &mut egui::Ui) {
-        let mut load = None;
-        let mut delete = None;
-        let mut save = false;
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("saved_queues")
-                .selected_text("Load a saved queue")
-                .show_ui(ui, |ui| {
-                    for saved in &self.queues.saved {
-                        if ui.selectable_label(false, &saved.name).clicked() {
-                            load = Some(saved.name.clone());
-                        }
-                    }
-                });
-            ui.add(
-                egui::TextEdit::singleline(&mut self.queue_page.save_name)
-                    .hint_text(&self.queues.current.name)
-                    .desired_width(160.0),
-            );
-            save = ui.button("Save").clicked();
-            if self
-                .queues
-                .saved
-                .iter()
-                .any(|q| q.name == self.queues.current.name)
-                && ui.button("Delete saved").clicked()
-            {
-                delete = Some(self.queues.current.name.clone());
-            }
-        });
-        if let Some(name) = load {
-            self.select_entry(None);
-            self.queues.load(&name);
-            self.queue_page.save_name = name;
-        }
-        if save {
-            self.sync_queue_form();
-            let name = if self.queue_page.save_name.trim().is_empty() {
-                self.queues.current.name.clone()
-            } else {
-                self.queue_page.save_name.clone()
-            };
-            match self.queues.save_as(&name) {
-                Ok(()) => self.info(format!("Saved the queue {}.", name.trim())),
-                Err(error) => self.error(error),
-            }
-        }
-        if let Some(name) = delete {
-            self.queues.delete(&name);
-            self.info(format!("Deleted the saved queue {name}."));
-        }
-    }
-
-    fn queue_options_ui(&mut self, ui: &mut egui::Ui) {
-        let queue = &mut self.queues.current;
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut queue.repeat, "Repeat")
-                .on_hover_text("Starts over from the first entry after the last one.");
-            ui.label("When finished:");
-            egui::ComboBox::from_id_salt("queue_when_finished")
-                .selected_text(match queue.when_finished {
-                    WhenFinished::LogOut => "log out",
-                    WhenFinished::StayLoggedIn => "stay logged in",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut queue.when_finished, WhenFinished::LogOut, "log out");
-                    ui.selectable_value(
-                        &mut queue.when_finished,
-                        WhenFinished::StayLoggedIn,
-                        "stay logged in",
-                    );
-                });
-            ui.label("If a script changed:").on_hover_text(
-                "Its price, its settings or a new community revision since the queue started.",
-            );
-            egui::ComboBox::from_id_salt("queue_on_change")
-                .selected_text(match queue.on_change {
-                    OnChange::Stop => "stop the queue",
-                    OnChange::Skip => "skip it",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut queue.on_change, OnChange::Stop, "stop the queue");
-                    ui.selectable_value(&mut queue.on_change, OnChange::Skip, "skip it");
-                });
-        });
-    }
-
-    fn add_entry_ui(&mut self, ui: &mut egui::Ui) {
-        let scripts = self.queueable_scripts();
-        let ctx = ui.ctx().clone();
-        let mut add = None;
-        let mut start = None;
-        ui.horizontal_wrapped(|ui| {
-            let chosen = self
-                .queue_page
-                .add
-                .as_ref()
-                .and_then(|id| scripts.iter().find(|s| &s.id == id));
-            egui::ComboBox::from_id_salt("queue_add")
-                .selected_text(chosen.map_or("Pick a queueable script", |s| s.title.as_str()))
-                .show_ui(ui, |ui| {
-                    for script in &scripts {
-                        if ui.selectable_label(false, &script.title).clicked() {
-                            self.queue_page.add = Some(script.id.clone());
-                        }
-                    }
-                });
-            if ui
-                .add_enabled(
-                    chosen.is_some() && self.queues.current.entries.len() < queue::MAX_ENTRIES,
-                    egui::Button::new("Add"),
-                )
-                .clicked()
-            {
-                add = chosen.cloned();
-            }
-            ui.separator();
-            let target = self.egui_run_target_ui(ui);
-            let problem = self
-                .queues
-                .current
-                .problem()
-                .or_else(|| self.run_block(target.as_ref()))
-                .or_else(|| {
-                    self.queue_page
-                        .checking
-                        .map(|_| "Checking the queue…".into())
-                });
-            let button = ui.add_enabled(problem.is_none(), egui::Button::new("Start queue"));
-            let button = match &problem {
-                Some(why) => button.on_disabled_hover_text(why),
-                None => button,
-            };
-            if button.clicked() {
-                start = target;
-            }
-        });
-        if scripts.is_empty() && self.store.loaded {
-            ui.weak("None of your scripts can run in a queue yet.");
-        }
-        if let Some(script) = add {
-            self.sync_queue_form();
-            self.queues
-                .current
-                .entries
-                .push(Entry::new(script.id.clone(), script.title.clone()));
-            let last = self.queues.current.entries.len() - 1;
-            self.select_entry(Some(last));
-        }
-        if let Some(target) = start {
-            self.check_queue(target.client.pid);
-        }
-    }
-
-    fn entries_ui(&mut self, ui: &mut egui::Ui) {
-        let mut select = None;
-        let mut action: Option<(usize, i32)> = None;
-        for (i, entry) in self.queues.current.entries.iter().enumerate() {
-            ui.horizontal(|ui| {
-                let picked = self.queue_page.selected == Some(i);
-                if ui
-                    .selectable_label(picked, format!("{}. {}", i + 1, entry.title))
-                    .clicked()
-                {
-                    select = Some(i);
-                }
-                ui.weak(limits_text(entry));
-                if picked {
-                    if ui.small_button("Up").clicked() {
-                        action = Some((i, -1));
-                    }
-                    if ui.small_button("Down").clicked() {
-                        action = Some((i, 1));
-                    }
-                    if ui.small_button("Duplicate").clicked() {
-                        action = Some((i, 2));
-                    }
-                    if ui.small_button("Remove").clicked() {
-                        action = Some((i, 0));
-                    }
-                }
-            });
-        }
-        if self.queues.current.entries.is_empty() {
-            ui.weak("Add scripts to build a queue. Each entry keeps its own settings.");
-        }
-        if let Some(i) = select {
-            self.select_entry(Some(i));
-        }
-        if let Some((i, what)) = action {
-            self.sync_queue_form();
-            self.queue_page.form = None;
-            let entries = &mut self.queues.current.entries;
-            match what {
-                0 => {
-                    entries.remove(i);
-                    self.queue_page.selected = None;
-                }
-                2 if entries.len() < queue::MAX_ENTRIES => {
-                    entries.insert(i + 1, entries[i].clone());
-                    self.queue_page.selected = Some(i + 1);
-                }
-                -1 if i > 0 => {
-                    entries.swap(i, i - 1);
-                    self.queue_page.selected = Some(i - 1);
-                }
-                1 if i + 1 < entries.len() => {
-                    entries.swap(i, i + 1);
-                    self.queue_page.selected = Some(i + 1);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn entry_editor_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(index) = self.queue_page.selected else {
-            return;
-        };
-        let Some(entry) = self.queues.current.entries.get(index) else {
-            return;
-        };
-        let goals = self
-            .manifests
-            .get(&entry.script_id)
-            .map(|(_, m)| m.goals.clone())
-            .unwrap_or_default();
-        let entry = &mut self.queues.current.entries[index];
-        ui.strong(&entry.title);
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Goal:");
-            let current = entry
-                .goal
-                .as_ref()
-                .and_then(|g| goals.iter().find(|goal| goal.id == g.counter))
-                .map_or("none", |g| g.label.as_str());
-            let mut pick: Option<Option<String>> = None;
-            egui::ComboBox::from_id_salt(("queue_goal", index))
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(entry.goal.is_none(), "none").clicked() {
-                        pick = Some(None);
-                    }
-                    for goal in &goals {
-                        if ui.selectable_label(false, &goal.label).clicked() {
-                            pick = Some(Some(goal.id.clone()));
-                        }
-                    }
-                });
-            match pick {
-                Some(None) => entry.goal = None,
-                Some(Some(counter)) => {
-                    let target = entry.goal.as_ref().map_or(1.0, |g| g.target);
-                    entry.goal = Some(Goal { counter, target });
-                }
-                None => {}
-            }
-            if let Some(goal) = entry.goal.as_mut() {
-                ui.add(
-                    egui::DragValue::new(&mut goal.target)
-                        .range(1.0..=1e9)
-                        .speed(1.0),
-                );
-            }
-            if goals.is_empty() {
-                ui.weak("(this script names no goals)");
-            }
-        });
-        minutes_ui(ui, "At least", &mut entry.min_minutes, index, "min");
-        minutes_ui(ui, "At most", &mut entry.max_minutes, index, "max");
-        ui.add_space(8.0);
-        let title = entry.title.clone();
-        match self.queue_page.form.take() {
-            Some((i, id, form)) if i == index => {
-                ui.weak(format!("{title}: settings render on the GPUI Queue page."));
-                self.queue_page.form = Some((i, id, form));
-            }
-            other => {
-                self.queue_page.form = other;
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Loading the script's settings…");
-                });
-            }
-        }
-    }
-
     fn check_queue(&mut self, pid: u32) {
         self.sync_queue_form();
         self.queue_page.checking = Some(pid);
@@ -669,69 +316,6 @@ impl LoaderApp {
             rows,
             approved,
         });
-    }
-
-    fn queue_prompt_ui(&mut self, ctx: &egui::Context) {
-        let Some(prompt) = &self.queue_page.prompt else {
-            return;
-        };
-        let mut choice = None;
-        egui::Window::new("Start the queue?")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.label(format!(
-                    "{} on client {}{}",
-                    prompt.queue.name,
-                    prompt.pid,
-                    if prompt.queue.repeat { ", repeating" } else { "" }
-                ));
-                egui::Grid::new("queue_prices").striped(true).show(ui, |ui| {
-                    ui.strong("Script");
-                    ui.strong("Per hour");
-                    ui.strong("At most");
-                    ui.end_row();
-                    for (title, price, most) in &prompt.rows {
-                        ui.label(title);
-                        ui.label(crate::api::models::rate_label(*price as f64));
-                        ui.label(most.map_or_else(
-                            || "no limit".to_owned(),
-                            |m| crate::api::models::credits_label(m as f64),
-                        ));
-                        ui.end_row();
-                    }
-                });
-                if prompt.queue.repeat || prompt.rows.iter().any(|(_, p, m)| *p > 0 && m.is_none()) {
-                    ui.weak("Entries without a maximum time are billed for as long as they run.");
-                }
-                ui.weak("If a script's price or settings change, or a community script gets a new revision, the queue follows the option you picked.");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Start").clicked() {
-                        choice = Some(true);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(false);
-                    }
-                });
-            });
-        match choice {
-            Some(true) => {
-                if let Some(prompt) = self.queue_page.prompt.take() {
-                    if self.free_client(prompt.pid).is_none() {
-                        return self.script_error("The queue's client is gone or busy.");
-                    }
-                    let pid = prompt.pid;
-                    self.queue_runners
-                        .push(Runner::new(prompt.queue, pid, prompt.approved));
-                    self.script_info("Queue started.");
-                    self.start_queue_entry(pid);
-                }
-            }
-            Some(false) => self.queue_page.prompt = None,
-            None => {}
-        }
     }
 
     fn start_queue_entry(&mut self, pid: u32) {
@@ -825,14 +409,13 @@ impl LoaderApp {
             _ => Value::Object(Default::default()),
         };
         self.start_store_script(PendingStart {
-                script: ready.script,
-                target,
-                replaces: None,
-                lib,
-                run: None,
-                launch: Launch { values, resume },
-            },
-        );
+            script: ready.script,
+            target,
+            replaces: None,
+            lib,
+            run: None,
+            launch: Launch { values, resume },
+        });
     }
 
     pub(super) fn queue_entry_started(&mut self, pid: u32, run: Option<u64>) {
@@ -1066,22 +649,1053 @@ fn limits_text(entry: &Entry) -> String {
     }
 }
 
-fn minutes_ui(ui: &mut egui::Ui, label: &str, value: &mut Option<u32>, index: usize, salt: &str) {
-    ui.horizontal(|ui| {
-        let mut on = value.is_some();
-        if ui.checkbox(&mut on, label).changed() {
-            *value = on.then_some(60);
+const SAVE_NAME_WIDTH: Pixels = px(160.0);
+const NUMBER_WIDTH: Pixels = px(110.0);
+const PROMPT_WIDTH: Pixels = px(480.0);
+
+struct SaveName {
+    input: Entity<InputState>,
+    hint: String,
+    _subscription: Subscription,
+}
+
+struct Limits {
+    index: usize,
+    goal: NumberField,
+    min: NumberField,
+    max: NumberField,
+}
+
+#[derive(Default)]
+struct Ui {
+    save_name: Option<SaveName>,
+    limits: Option<Limits>,
+    form: Option<((usize, String), crate::form::FormUi)>,
+}
+
+#[derive(Clone, Copy)]
+enum Move {
+    Up,
+    Down,
+    Duplicate,
+    Remove,
+}
+
+#[derive(Clone, Copy)]
+enum Bound {
+    AtLeast,
+    AtMost,
+}
+
+impl Bound {
+    fn label(self) -> &'static str {
+        match self {
+            Self::AtLeast => "At least",
+            Self::AtMost => "At most",
         }
-        if let Some(minutes) = value.as_mut() {
-            ui.push_id((salt, index), |ui| {
-                ui.add(
-                    egui::DragValue::new(minutes)
-                        .range(1..=queue::MAX_MINUTES)
-                        .suffix(" min"),
-                );
+    }
+
+    fn of(self, entry: &mut Entry) -> &mut Option<u32> {
+        match self {
+            Self::AtLeast => &mut entry.min_minutes,
+            Self::AtMost => &mut entry.max_minutes,
+        }
+    }
+
+    fn field(self, limits: &Limits) -> &NumberField {
+        match self {
+            Self::AtLeast => &limits.min,
+            Self::AtMost => &limits.max,
+        }
+    }
+}
+
+fn pick_goal(entry: &mut Entry, pick: Option<String>) {
+    match pick {
+        None => entry.goal = None,
+        Some(counter) => {
+            let target = entry.goal.as_ref().map_or(1.0, |g| g.target);
+            entry.goal = Some(Goal { counter, target });
+        }
+    }
+}
+
+fn edit_entry(
+    cx: &mut Context<LoaderApp>,
+    index: usize,
+    change: impl Fn(&mut Entry) + 'static,
+) -> impl Fn(&mut App) + 'static {
+    let app = cx.entity().downgrade();
+    move |cx| {
+        app.update(cx, |app, cx| {
+            if let Some(entry) = app.queues.current.entries.get_mut(index) {
+                change(entry);
+            }
+            cx.notify();
+        })
+        .ok();
+    }
+}
+
+impl Limits {
+    fn new(index: usize, window: &mut Window, cx: &mut Context<LoaderApp>) -> Self {
+        let app = cx.entity().downgrade();
+        let number = |change: fn(&mut Entry, f64)| {
+            let app = app.clone();
+            move |value: f64, cx: &mut App| {
+                app.update(cx, |app, cx| {
+                    if let Some(entry) = app.queues.current.entries.get_mut(index) {
+                        change(entry, value);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        };
+        let minutes = Range::new(1.0..=f64::from(queue::MAX_MINUTES)).integer();
+        Self {
+            index,
+            goal: NumberField::new(
+                Range::new(1.0..=1e9),
+                false,
+                number(|entry, value| {
+                    if let Some(goal) = entry.goal.as_mut() {
+                        goal.target = value;
+                    }
+                }),
+                window,
+                cx,
+            ),
+            min: NumberField::new(
+                minutes,
+                false,
+                number(|entry, value| {
+                    if entry.min_minutes.is_some() {
+                        entry.min_minutes = Some(value as u32);
+                    }
+                }),
+                window,
+                cx,
+            ),
+            max: NumberField::new(
+                minutes,
+                false,
+                number(|entry, value| {
+                    if entry.max_minutes.is_some() {
+                        entry.max_minutes = Some(value as u32);
+                    }
+                }),
+                window,
+                cx,
+            ),
+        }
+    }
+}
+
+fn row() -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x(theme::ITEM_GAP)
+        .gap_y(theme::LINE_GAP)
+}
+
+fn vertical_separator() -> Div {
+    div()
+        .flex_none()
+        .w(px(1.0))
+        .h(theme::INTERACT_HEIGHT)
+        .bg(theme::BORDER)
+}
+
+fn selectable(
+    id: impl Into<ElementId>,
+    label: String,
+    selected: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(theme::INTERACT_HEIGHT)
+        .px(theme::BUTTON_PADDING)
+        .cursor_pointer()
+        .when(selected, |this| this.bg(theme::SEL).text_color(theme::BLUE))
+        .hover(|style| style.bg(theme::SEL))
+        .on_click(on_click)
+        .child(label)
+}
+
+fn minutes_suffix() -> Div {
+    div().text_color(theme::COMMENT).child("min")
+}
+
+impl LoaderApp {
+    fn ask_queue_to_finish(&mut self, pid: u32) {
+        if let Some(runner) = self.queue_runners.iter_mut().find(|r| r.pid == pid) {
+            runner.finishing = true;
+        }
+    }
+
+    fn stop_queue(&mut self, pid: u32) {
+        self.end_queue(pid, "Queue stopped.".into());
+        if let Some(run) = self
+            .runs
+            .iter_mut()
+            .find(|r| r.target.as_ref().is_some_and(|t| t.client.pid == pid) && r.is_running())
+        {
+            run.stop();
+        }
+    }
+
+    fn load_saved_queue(&mut self, name: String) {
+        self.select_entry(None);
+        self.queues.load(&name);
+        self.queue_page.save_name = name;
+    }
+
+    fn save_queue(&mut self) {
+        self.sync_queue_form();
+        let name = if self.queue_page.save_name.trim().is_empty() {
+            self.queues.current.name.clone()
+        } else {
+            self.queue_page.save_name.clone()
+        };
+        match self.queues.save_as(&name) {
+            Ok(()) => self.info(format!("Saved the queue {}.", name.trim())),
+            Err(error) => self.error(error),
+        }
+    }
+
+    fn delete_saved_queue(&mut self) {
+        let name = self.queues.current.name.clone();
+        self.queues.delete(&name);
+        self.info(format!("Deleted the saved queue {name}."));
+    }
+
+    fn add_queue_entry(&mut self, script: &StoreScript) {
+        self.sync_queue_form();
+        self.queues
+            .current
+            .entries
+            .push(Entry::new(script.id.clone(), script.title.clone()));
+        let last = self.queues.current.entries.len() - 1;
+        self.select_entry(Some(last));
+    }
+
+    fn move_entry(&mut self, i: usize, what: Move) {
+        self.sync_queue_form();
+        self.queue_page.form = None;
+        let entries = &mut self.queues.current.entries;
+        match what {
+            Move::Remove => {
+                entries.remove(i);
+                self.queue_page.selected = None;
+            }
+            Move::Duplicate if entries.len() < queue::MAX_ENTRIES => {
+                entries.insert(i + 1, entries[i].clone());
+                self.queue_page.selected = Some(i + 1);
+            }
+            Move::Up if i > 0 => {
+                entries.swap(i, i - 1);
+                self.queue_page.selected = Some(i - 1);
+            }
+            Move::Down if i + 1 < entries.len() => {
+                entries.swap(i, i + 1);
+                self.queue_page.selected = Some(i + 1);
+            }
+            _ => {}
+        }
+    }
+
+    fn answer_queue_prompt(&mut self, start: bool) {
+        if !start {
+            self.queue_page.prompt = None;
+            return;
+        }
+        if let Some(prompt) = self.queue_page.prompt.take() {
+            if self.free_client(prompt.pid).is_none() {
+                return self.script_error("The queue's client is gone or busy.");
+            }
+            let pid = prompt.pid;
+            self.queue_runners
+                .push(Runner::new(prompt.queue, pid, prompt.approved));
+            self.script_info("Queue started.");
+            self.start_queue_entry(pid);
+        }
+    }
+
+    pub(super) fn render_queue(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let page = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .gap(theme::LINE_GAP)
+            .child(widgets::heading("Queue"));
+        if self.auth.me().is_none() {
+            return page
+                .child("Sign in to queue store scripts.")
+                .into_any_element();
+        }
+        if !self.store.loaded && !self.store.loading && self.store.error.is_none() {
+            self.fetch_scripts();
+        }
+        let running = self.render_running_queues(cx);
+        let saved = self.render_saved_queues(window, cx);
+        let options = self.render_queue_options(cx);
+        let add = self.render_add_entry(cx);
+        self.entry_form();
+        let entries = self.render_entries(cx);
+        let editor = self.render_entry_editor(window, cx);
+        let prompt = self.render_queue_prompt(window, cx);
+        page.children(running)
+            .child(saved.mt(px(8.0)))
+            .child(options.mt(px(8.0)))
+            .child(add.mt(px(8.0)))
+            .child(widgets::separator())
+            .child(
+                div()
+                    .id("queue")
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(theme::LINE_GAP)
+                            .child(entries)
+                            .child(widgets::separator())
+                            .children(editor),
+                    )
+                    .overflow_y_scrollbar(),
+            )
+            .children(prompt)
+            .into_any_element()
+    }
+
+    fn render_running_queues(&self, cx: &mut Context<Self>) -> Vec<Div> {
+        self.queue_runners
+            .iter()
+            .map(|runner| {
+                let pid = runner.pid;
+                row()
+                    .child(widgets::status_dot(theme::GREEN))
+                    .child(format!("Client {}: {}", pid, runner.progress()))
+                    .child(widgets::weak(crate::xp::duration(runner.started.elapsed())))
+                    .child(
+                        widgets::button(
+                            ("queue-finish", pid as usize),
+                            "Finish",
+                            true,
+                            cx.listener(move |app, _: &ClickEvent, _, cx| {
+                                app.ask_queue_to_finish(pid);
+                                cx.notify();
+                            }),
+                        )
+                        .tooltip(widgets::tooltip(
+                            "Lets the current script wrap up, then ends the queue.",
+                        )),
+                    )
+                    .child(
+                        widgets::button(
+                            ("queue-stop", pid as usize),
+                            "Stop",
+                            true,
+                            cx.listener(move |app, _: &ClickEvent, _, cx| {
+                                app.stop_queue(pid);
+                                cx.notify();
+                            }),
+                        )
+                        .tooltip(widgets::tooltip(
+                            "Stops the current script now and ends the queue.",
+                        )),
+                    )
+            })
+            .collect()
+    }
+
+    fn save_name_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let hint = &self.queues.current.name;
+        let save = self.queue_page.ui.save_name.get_or_insert_with(|| {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(hint.clone()));
+            let subscription =
+                cx.subscribe_in(&input, window, |app, input, event: &InputEvent, _, cx| {
+                    if let InputEvent::Change = event {
+                        app.queue_page.save_name = input.read(cx).value().to_string();
+                        cx.notify();
+                    }
+                });
+            SaveName {
+                input,
+                hint: hint.clone(),
+                _subscription: subscription,
+            }
+        });
+        if &save.hint != hint {
+            save.hint.clone_from(hint);
+            let hint = hint.clone();
+            save.input
+                .update(cx, |input, cx| input.set_placeholder(hint, window, cx));
+        }
+        let name = &self.queue_page.save_name;
+        if save.input.read(cx).value().as_ref() != name.as_str() {
+            let name = name.clone();
+            save.input
+                .update(cx, |input, cx| input.set_value(name, window, cx));
+        }
+        save.input.clone()
+    }
+
+    fn render_saved_queues(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let input = self.save_name_input(window, cx);
+        let app = cx.entity().downgrade();
+        let choices = self
+            .queues
+            .saved
+            .iter()
+            .map(|saved| {
+                let (app, name) = (app.clone(), saved.name.clone());
+                widgets::Choice::new(saved.name.clone(), false, move |_, cx| {
+                    let name = name.clone();
+                    app.update(cx, |app, cx| {
+                        app.load_saved_queue(name);
+                        cx.notify();
+                    })
+                    .ok();
+                })
+            })
+            .collect();
+        let saved = self
+            .queues
+            .saved
+            .iter()
+            .any(|q| q.name == self.queues.current.name);
+        row()
+            .child(widgets::combo(
+                "saved_queues",
+                "Load a saved queue",
+                choices,
+            ))
+            .child(Input::new(&input).small().w(SAVE_NAME_WIDTH))
+            .child(widgets::button(
+                "queue-save",
+                "Save",
+                true,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.save_queue();
+                    cx.notify();
+                }),
+            ))
+            .when(saved, |this| {
+                this.child(widgets::button(
+                    "queue-delete-saved",
+                    "Delete saved",
+                    true,
+                    cx.listener(|app, _: &ClickEvent, _, cx| {
+                        app.delete_saved_queue();
+                        cx.notify();
+                    }),
+                ))
+            })
+    }
+
+    fn render_queue_options(&self, cx: &mut Context<Self>) -> Div {
+        let queue = &self.queues.current;
+        let app = cx.entity().downgrade();
+        let set = |label: &'static str, selected: bool, apply: fn(&mut queue::Queue)| {
+            let app = app.clone();
+            widgets::Choice::new(label, selected, move |_, cx| {
+                app.update(cx, |app, cx| {
+                    apply(&mut app.queues.current);
+                    cx.notify();
+                })
+                .ok();
+            })
+        };
+        let repeat = {
+            let app = app.clone();
+            fields::checkbox(
+                "queue-repeat",
+                "Repeat",
+                queue.repeat,
+                true,
+                move |on, cx| {
+                    app.update(cx, |app, cx| {
+                        app.queues.current.repeat = on;
+                        cx.notify();
+                    })
+                    .ok();
+                },
+            )
+            .tooltip("Starts over from the first entry after the last one.")
+        };
+        let when_finished = widgets::combo(
+            "queue_when_finished",
+            match queue.when_finished {
+                WhenFinished::LogOut => "log out",
+                WhenFinished::StayLoggedIn => "stay logged in",
+            },
+            vec![
+                set(
+                    "log out",
+                    queue.when_finished == WhenFinished::LogOut,
+                    |q| q.when_finished = WhenFinished::LogOut,
+                ),
+                set(
+                    "stay logged in",
+                    queue.when_finished == WhenFinished::StayLoggedIn,
+                    |q| q.when_finished = WhenFinished::StayLoggedIn,
+                ),
+            ],
+        );
+        let on_change = widgets::combo(
+            "queue_on_change",
+            match queue.on_change {
+                OnChange::Stop => "stop the queue",
+                OnChange::Skip => "skip it",
+            },
+            vec![
+                set("stop the queue", queue.on_change == OnChange::Stop, |q| {
+                    q.on_change = OnChange::Stop
+                }),
+                set("skip it", queue.on_change == OnChange::Skip, |q| {
+                    q.on_change = OnChange::Skip
+                }),
+            ],
+        );
+        row()
+            .child(repeat)
+            .child("When finished:")
+            .child(when_finished)
+            .child(
+                div()
+                    .id("queue-on-change-label")
+                    .child("If a script changed:")
+                    .tooltip(widgets::tooltip(
+                        "Its price, its settings or a new community revision since the queue started.",
+                    )),
+            )
+            .child(on_change)
+    }
+
+    fn render_add_entry(&mut self, cx: &mut Context<Self>) -> Div {
+        let scripts = self.queueable_scripts();
+        let chosen = self
+            .queue_page
+            .add
+            .as_ref()
+            .and_then(|id| scripts.iter().find(|s| &s.id == id))
+            .cloned();
+        let app = cx.entity().downgrade();
+        let choices = scripts
+            .iter()
+            .map(|script| {
+                let (app, id) = (app.clone(), script.id.clone());
+                widgets::Choice::new(script.title.clone(), false, move |_, cx| {
+                    let id = id.clone();
+                    app.update(cx, |app, cx| {
+                        app.queue_page.add = Some(id);
+                        cx.notify();
+                    })
+                    .ok();
+                })
+            })
+            .collect();
+        let can_add = chosen.is_some() && self.queues.current.entries.len() < queue::MAX_ENTRIES;
+        let picked = chosen
+            .as_ref()
+            .map_or("Pick a queueable script".to_owned(), |s| s.title.clone());
+        let add = widgets::button(
+            "queue-add-entry",
+            "Add",
+            can_add,
+            cx.listener(move |app, _: &ClickEvent, _, cx| {
+                if let Some(script) = &chosen {
+                    app.add_queue_entry(script);
+                }
+                cx.notify();
+            }),
+        );
+        let (picker, target) = self.render_run_target(cx);
+        let problem = self
+            .queues
+            .current
+            .problem()
+            .or_else(|| self.run_block(target.as_ref()))
+            .or_else(|| {
+                self.queue_page
+                    .checking
+                    .map(|_| "Checking the queue…".into())
             });
+        let pid = target.map(|t| t.client.pid);
+        let start = widgets::button(
+            "queue-start",
+            "Start queue",
+            problem.is_none(),
+            cx.listener(move |app, _: &ClickEvent, _, cx| {
+                if let Some(pid) = pid {
+                    app.check_queue(pid);
+                }
+                cx.notify();
+            }),
+        )
+        .when_some(problem, |this, why| this.tooltip(widgets::tooltip(why)));
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .child(
+                row()
+                    .child(widgets::combo("queue_add", picked, choices))
+                    .child(add)
+                    .child(vertical_separator())
+                    .child(picker)
+                    .child(start),
+            )
+            .when(scripts.is_empty() && self.store.loaded, |this| {
+                this.child(widgets::weak(
+                    "None of your scripts can run in a queue yet.",
+                ))
+            })
+    }
+
+    fn render_entries(&self, cx: &mut Context<Self>) -> Div {
+        let entries = &self.queues.current.entries;
+        let rows = entries.iter().enumerate().map(|(i, entry)| {
+            let picked = self.queue_page.selected == Some(i);
+            let action = |what: Move, label: &'static str| {
+                fields::small_button(
+                    (label, i),
+                    label,
+                    true,
+                    cx.listener(move |app, _: &ClickEvent, _, cx| {
+                        app.move_entry(i, what);
+                        cx.notify();
+                    }),
+                )
+            };
+            row()
+                .child(selectable(
+                    ("queue-entry", i),
+                    format!("{}. {}", i + 1, entry.title),
+                    picked,
+                    cx.listener(move |app, _: &ClickEvent, _, cx| {
+                        app.select_entry(Some(i));
+                        cx.notify();
+                    }),
+                ))
+                .child(widgets::weak(limits_text(entry)))
+                .when(picked, |this| {
+                    this.child(action(Move::Up, "Up"))
+                        .child(action(Move::Down, "Down"))
+                        .child(action(Move::Duplicate, "Duplicate"))
+                        .child(action(Move::Remove, "Remove"))
+                })
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .children(rows)
+            .when(entries.is_empty(), |this| {
+                this.child(widgets::weak(
+                    "Add scripts to build a queue. Each entry keeps its own settings.",
+                ))
+            })
+    }
+
+    fn render_minutes(
+        &mut self,
+        index: usize,
+        bound: Bound,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let Some(entry) = self.queues.current.entries.get_mut(index) else {
+            return div();
+        };
+        let value = *bound.of(entry);
+        let label = bound.label();
+        let toggle = edit_entry(cx, index, move |entry| {
+            let value = bound.of(entry);
+            *value = if value.is_some() { None } else { Some(60) };
+        });
+        let field = self
+            .queue_page
+            .ui
+            .limits
+            .as_ref()
+            .map(|limits| bound.field(limits));
+        let input = value.zip(field).map(|(value, field)| {
+            field.sync(f64::from(value), window, cx);
+            field.input(true).w(NUMBER_WIDTH).suffix(minutes_suffix())
+        });
+        div()
+            .flex()
+            .items_center()
+            .gap(theme::ITEM_GAP)
+            .child(fields::checkbox(
+                (label, index),
+                label,
+                value.is_some(),
+                true,
+                move |_, cx| toggle(cx),
+            ))
+            .children(input)
+    }
+
+    fn render_entry_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+        let index = self.queue_page.selected?;
+        let entry = self.queues.current.entries.get(index)?;
+        let goals = self
+            .manifests
+            .get(&entry.script_id)
+            .map(|(_, m)| m.goals.clone())
+            .unwrap_or_default();
+        if self
+            .queue_page
+            .ui
+            .limits
+            .as_ref()
+            .is_none_or(|limits| limits.index != index)
+        {
+            self.queue_page.ui.limits = Some(Limits::new(index, window, cx));
         }
-    });
+        let entry = &self.queues.current.entries[index];
+        let title = entry.title.clone();
+        let current = entry
+            .goal
+            .as_ref()
+            .and_then(|g| goals.iter().find(|goal| goal.id == g.counter))
+            .map_or("none".to_owned(), |g| g.label.clone());
+        let target = entry.goal.as_ref().map(|g| g.target);
+        let mut pick = |label: String, selected: bool, counter: Option<String>| {
+            let change = edit_entry(cx, index, move |entry| pick_goal(entry, counter.clone()));
+            widgets::Choice::new(label, selected, move |_, cx| change(cx))
+        };
+        let choices = std::iter::once(pick("none".into(), target.is_none(), None))
+            .chain(
+                goals
+                    .iter()
+                    .map(|goal| pick(goal.label.clone(), false, Some(goal.id.clone()))),
+            )
+            .collect();
+        let goal_input = target.and_then(|target| {
+            let field = &self.queue_page.ui.limits.as_ref()?.goal;
+            field.sync(target, window, cx);
+            Some(field.input(true).w(NUMBER_WIDTH))
+        });
+        let goal = row()
+            .child("Goal:")
+            .child(widgets::combo(("queue_goal", index), current, choices))
+            .children(goal_input)
+            .when(goals.is_empty(), |this| {
+                this.child(widgets::weak("(this script names no goals)"))
+            });
+        let at_least = self.render_minutes(index, Bound::AtLeast, window, cx);
+        let at_most = self.render_minutes(index, Bound::AtMost, window, cx);
+        let settings = self.render_entry_form(index, &title, window, cx);
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(theme::LINE_GAP)
+                .child(widgets::strong(title))
+                .child(goal)
+                .child(at_least)
+                .child(at_most)
+                .child(div().mt(px(8.0)).child(settings)),
+        )
+    }
+
+    fn render_entry_form(
+        &mut self,
+        index: usize,
+        title: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let app = cx.entity().downgrade();
+        let Page { form, ui, .. } = &mut self.queue_page;
+        let Some((_, script_id, form)) = form.as_mut().filter(|(i, _, _)| *i == index) else {
+            return div()
+                .flex()
+                .items_center()
+                .gap(theme::ITEM_GAP)
+                .child(Spinner::new())
+                .child("Loading the script's settings…")
+                .into_any_element();
+        };
+        let key = (index, script_id.clone());
+        if ui.form.as_ref().is_none_or(|(shown, _)| shown != &key) {
+            let wanted = key.clone();
+            let form_ui = crate::form::FormUi::new(move |cx, change| {
+                app.update(cx, |app, cx| {
+                    if let Some((i, id, form)) = app.queue_page.form.as_mut()
+                        && (*i, id.as_str()) == (wanted.0, wanted.1.as_str())
+                    {
+                        change(form);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+            ui.form = Some((key, form_ui));
+        }
+        let Some((_, form_ui)) = ui.form.as_mut() else {
+            return div().into_any_element();
+        };
+        let layouts = self.layouts.get(title).unwrap_or(&EMPTY_LAYOUTS);
+        form.render(form_ui, layouts, window, cx)
+    }
+
+    fn render_queue_prompt(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let prompt = self.queue_page.prompt.as_ref()?;
+        use crate::api::models::{credits_label, rate_label};
+        let rows: Vec<[String; 3]> = prompt
+            .rows
+            .iter()
+            .map(|(title, price, most)| {
+                [
+                    title.clone(),
+                    rate_label(*price as f64),
+                    most.map_or_else(|| "no limit".to_owned(), |m| credits_label(m as f64)),
+                ]
+            })
+            .collect();
+        let heads = ["Script", "Per hour", "At most"];
+        let cell = |content: Div, stripe: bool| {
+            div()
+                .px(px(6.0))
+                .py(px(2.0))
+                .when(stripe, |this| this.bg(theme::BG_HL))
+                .child(content)
+        };
+        let grid = rows.iter().enumerate().fold(
+            heads.iter().fold(
+                div().mt(theme::LINE_GAP).grid().grid_cols_max_content(3),
+                |grid, head| grid.child(cell(widgets::strong(*head), false)),
+            ),
+            |grid, (i, row)| {
+                row.iter().fold(grid, |grid, text| {
+                    grid.child(cell(div().child(text.clone()), i % 2 == 1))
+                })
+            },
+        );
+        let unlimited =
+            prompt.queue.repeat || prompt.rows.iter().any(|(_, p, m)| *p > 0 && m.is_none());
+        let buttons = div()
+            .flex()
+            .gap(theme::ITEM_GAP)
+            .child(widgets::button(
+                "queue-prompt-start",
+                "Start",
+                true,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.answer_queue_prompt(true);
+                    cx.notify();
+                }),
+            ))
+            .child(widgets::button(
+                "queue-prompt-cancel",
+                "Cancel",
+                true,
+                cx.listener(|app, _: &ClickEvent, _, cx| {
+                    app.answer_queue_prompt(false);
+                    cx.notify();
+                }),
+            ));
+        let body = div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(theme::LINE_GAP)
+            .p(px(8.0))
+            .child(format!(
+                "{} on client {}{}",
+                prompt.queue.name,
+                prompt.pid,
+                if prompt.queue.repeat { ", repeating" } else { "" }
+            ))
+            .child(grid)
+            .when(unlimited, |this| {
+                this.child(widgets::weak(
+                    "Entries without a maximum time are billed for as long as they run.",
+                ))
+            })
+            .child(widgets::weak("If a script's price or settings change, or a community script gets a new revision, the queue follows the option you picked."))
+            .child(div().w_full().child(widgets::separator()))
+            .child(buttons);
+        let width = PROMPT_WIDTH
+            .min(window.viewport_size().width - px(32.0))
+            .max(px(0.0));
+        Some(
+            div()
+                .id("queue-prompt")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::alpha(gpui_kit::rgb(0x000000), 130.0 / 255.0))
+                .occlude()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .max_w(width)
+                        .bg(theme::BG_FLOAT)
+                        .border_1()
+                        .border_color(theme::BORDER)
+                        .child(
+                            div()
+                                .px(px(8.0))
+                                .py(theme::LINE_GAP)
+                                .text_size(theme::HEADING)
+                                .child("Start the queue?"),
+                        )
+                        .child(divider())
+                        .child(body),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+#[cfg(test)]
+fn queueable(title: &str, price: i64) -> StoreScript {
+    StoreScript {
+        queueable: true,
+        ..super::store_page::fake_script(title, price)
+    }
+}
+
+#[cfg(test)]
+fn fake_manifest() -> Manifest {
+    Manifest::parse(serde_json::json!({
+        "queueable": true,
+        "goals": [
+            { "id": "kills", "label": "Kills" },
+            { "id": "trips", "label": "Trips" }
+        ],
+        "settings": {
+            "title": "Bosses",
+            "fields": [
+                { "kind": "label", "text": "Fight", "heading": 2 },
+                { "kind": "choice", "id": "boss", "label": "Boss", "options": ["Giant mole", "Kalphite queen"], "default": "Giant mole" },
+                { "kind": "number", "id": "eat_at", "label": "Eat at % health", "min": 0, "max": 100, "integer": true, "default": 45 },
+                { "kind": "check", "id": "hop", "label": "Hop worlds when a player is near", "default": true },
+                { "kind": "text", "id": "note", "label": "Note", "default": "bank at the castle" }
+            ]
+        }
+    }))
+    .expect("a manifest")
+}
+
+#[cfg(test)]
+fn fake_queue() -> queue::Queue {
+    let manifest = fake_manifest();
+    let entry = |id: &str, title: &str| Entry {
+        spec_hash: spec_hash(&manifest),
+        ..Entry::new(id.into(), title.into())
+    };
+    queue::Queue {
+        name: "Evening".into(),
+        entries: vec![
+            Entry {
+                goal: Some(Goal {
+                    counter: "kills".into(),
+                    target: 150.0,
+                }),
+                min_minutes: Some(30),
+                max_minutes: Some(120),
+                ..entry("bosses", "Bosses")
+            },
+            Entry {
+                max_minutes: Some(90),
+                ..entry("miner", "Miner")
+            },
+            entry("tempoross", "Tempoross"),
+        ],
+        repeat: true,
+        when_finished: WhenFinished::StayLoggedIn,
+        on_change: OnChange::Skip,
+    }
+}
+
+#[cfg(test)]
+fn queue_page(app: &mut LoaderApp) {
+    app.tab = Tab::Queue;
+    app.store.loaded = true;
+    app.store.scripts = vec![
+        queueable("Bosses", 400_000),
+        queueable("Miner", 180_000),
+        queueable("Tempoross", 0),
+        super::store_page::fake_script("Not queueable", 0),
+    ];
+    app.targets = vec![super::store_page::fake_target(4242)];
+    for id in ["bosses", "miner", "tempoross"] {
+        app.manifests.insert(id.into(), (4, fake_manifest()));
+    }
+}
+
+#[cfg(test)]
+pub(super) fn snapshots() -> Vec<super::snapshots::State> {
+    vec![
+        ("queue-empty", |app| {
+            queue_page(app);
+            app.store.scripts.retain(|s| !s.queueable);
+        }),
+        ("queue-entries", |app| {
+            queue_page(app);
+            app.queues.current = fake_queue();
+            app.queues.saved = vec![fake_queue()];
+            app.queue_page.add = Some("miner".into());
+            app.queue_page.selected = Some(0);
+        }),
+        ("queue-running", |app| {
+            queue_page(app);
+            app.queues.current = fake_queue();
+            let mut runner = Runner::new(fake_queue(), 4242, HashMap::new());
+            runner.index = 1;
+            runner.pass = 2;
+            runner.started = Instant::now() - std::time::Duration::from_secs(47 * 60);
+            app.queue_runners.push(runner);
+        }),
+        ("queue-prompt", |app| {
+            queue_page(app);
+            let queue = fake_queue();
+            app.queues.current = queue.clone();
+            app.queue_page.prompt = Some(Prompt {
+                pid: 4242,
+                rows: vec![
+                    (
+                        "Bosses".into(),
+                        400_000,
+                        queue.entries[0].most_cost(400_000),
+                    ),
+                    ("Miner".into(), 180_000, queue.entries[1].most_cost(180_000)),
+                    ("Tempoross".into(), 0, None),
+                ],
+                approved: HashMap::new(),
+                queue,
+            });
+        }),
+    ]
 }
 
 #[cfg(test)]
@@ -1182,17 +1796,4 @@ mod tests {
                 .contains("no longer available")
         );
     }
-}
-
-impl LoaderApp {
-    pub(super) fn render_queue(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
-        not_ported("Queue")
-    }
-}
-
-#[cfg(test)]
-pub(super) fn snapshots() -> Vec<super::snapshots::State> {
-    vec![
-        ("queue", |app| app.tab = Tab::Queue),
-    ]
 }
