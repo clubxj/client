@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::Write as _,
     sync::{
@@ -37,7 +36,7 @@ use crate::pipe::Rows;
 use crate::script::{Launch, Script, ScriptEvent};
 use crate::session::{self, Kept, Prepared};
 use crate::store::{self, Confirmed, Store};
-use crate::theme::{icon_button, icon_button_width, slide_button};
+use crate::theme::{icon_button, icon_button_width};
 use crate::update;
 use crate::storage::Storage;
 use crate::wake::Wake;
@@ -61,7 +60,6 @@ mod store_page;
 mod terminal_page;
 
 use chrome::*;
-use output::*;
 use shared::*;
 
 enum Event {
@@ -1028,58 +1026,6 @@ impl Log {
         self.lines = lines;
     }
 
-    fn layout_job(
-        &self,
-        font: egui::FontId,
-        normal: egui::Color32,
-        warning: egui::Color32,
-        error: egui::Color32,
-    ) -> egui::text::LayoutJob {
-        let mut job = egui::text::LayoutJob {
-            text: self.text.clone(),
-            ..Default::default()
-        };
-        let mut section = |range: std::ops::Range<usize>, tone: Tone| {
-            job.sections.push(egui::text::LayoutSection {
-                leading_space: 0.0,
-                byte_range: egui::text::ByteIndex(range.start)..egui::text::ByteIndex(range.end),
-                format: egui::TextFormat::simple(
-                    font.clone(),
-                    match tone {
-                        Tone::Normal => normal,
-                        Tone::Warning => warning,
-                        Tone::Error => error,
-                    },
-                ),
-            });
-        };
-        let mut start = 0;
-        let mut run: Option<(usize, Tone)> = None;
-        for (i, &index) in self.view.iter().enumerate() {
-            let line = &self.lines[index];
-            if let Some((from, was)) = run.filter(|&(_, was)| was != line.tone) {
-                section(from..start, was);
-                run = None;
-            }
-            run.get_or_insert((start, line.tone));
-            start += line.text.len() + usize::from(i + 1 < self.view.len());
-        }
-        if let Some((from, was)) = run {
-            section(from..self.text.len(), was);
-        }
-        job
-    }
-
-    fn entry_of_line(&self) -> Vec<usize> {
-        self.view
-            .iter()
-            .enumerate()
-            .flat_map(|(entry, &index)| {
-                std::iter::repeat_n(entry, self.lines[index].text.matches('\n').count() + 1)
-            })
-            .collect()
-    }
-
     fn clear(&mut self) {
         *self = Self {
             revision: self.revision + 1,
@@ -1097,20 +1043,6 @@ fn line_tag(text: &str) -> Option<&str> {
     let rest = text.strip_prefix('[')?;
     let end = rest.find(']')?;
     (end > 0 && end <= 32 && !rest[..end].contains('[')).then(|| &rest[..end])
-}
-
-const SELECTION_SCROLL_MAX: f32 = 2400.0;
-const SELECTION_SCROLL_RAMP: f32 = 200.0;
-
-fn selection_scroll_speed(pointer: f32, visible: egui::Rangef, window: egui::Rangef) -> f32 {
-    let past = pointer - pointer.clamp(visible.min, visible.max);
-    let room = if past < 0.0 {
-        visible.min - window.min
-    } else {
-        window.max - visible.max
-    };
-    let share = (past.abs() / room.clamp(1.0, SELECTION_SCROLL_RAMP)).min(1.0);
-    past.signum() * share * SELECTION_SCROLL_MAX
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1191,7 +1123,7 @@ pub struct LoaderApp {
     log_collapsed: bool,
     followed_tab: (Tab, Option<u64>),
     loader_log: Log,
-    log_job: Option<LogJob>,
+    output_ui: output::Ui,
     breaks_tab: BreaksTab,
     feedback: feedback::Page,
     gpu: Option<String>,
@@ -1335,7 +1267,7 @@ impl LoaderApp {
             feedback: feedback::Page::default(),
             gpu,
             loader_log,
-            log_job: None,
+            output_ui: output::Ui::default(),
             tx,
             rx,
             wake,
@@ -4020,117 +3952,6 @@ mod tests {
         log.clear();
         assert!(log.revision > revision);
         assert_eq!(log.keep, keep / 2);
-    }
-
-    #[test]
-    fn a_dragged_selection_scrolls_as_fast_down_as_up_for_the_same_share_of_room() {
-        let visible = egui::Rangef::new(300.0, 590.0);
-        let window = egui::Rangef::new(0.0, 600.0);
-        let speed = |y| selection_scroll_speed(y, visible, window);
-        assert_eq!(speed(400.0), 0.0);
-        assert_eq!(
-            speed(300.0 - SELECTION_SCROLL_RAMP / 2.0),
-            -SELECTION_SCROLL_MAX / 2.0
-        );
-        assert_eq!(speed(595.0), SELECTION_SCROLL_MAX / 2.0);
-        assert_eq!(speed(0.0), -SELECTION_SCROLL_MAX);
-        assert_eq!(speed(600.0), SELECTION_SCROLL_MAX);
-        assert_eq!(speed(700.0), SELECTION_SCROLL_MAX);
-    }
-
-    #[test]
-    fn a_selection_dragged_above_the_output_keeps_scrolling_up() {
-        let ctx = egui::Context::default();
-        let text: String = (0..500)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut time = 0.0;
-        let mut frame = |events: Vec<egui::Event>| {
-            time += 0.016;
-            let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 600.0),
-                )),
-                events,
-                time: Some(time),
-                ..Default::default()
-            };
-            let mut offset = 0.0;
-            let mut output = ctx.run_ui(input, |ui| {
-                ui.add_space(300.0);
-                offset = egui::ScrollArea::vertical()
-                    .max_height(200.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        let mut read_only = text.as_str();
-                        let output = egui::TextEdit::multiline(&mut read_only).show(ui);
-                        scroll_selection_past_edge(ui, &output.response);
-                    })
-                    .state
-                    .offset
-                    .y;
-            });
-            output.textures_delta.clear();
-            offset
-        };
-        for _ in 0..3 {
-            frame(Vec::new());
-        }
-        let inside = egui::pos2(50.0, 400.0);
-        frame(vec![egui::Event::PointerMoved(inside)]);
-        let bottom = frame(vec![egui::Event::PointerButton {
-            pos: inside,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: egui::Modifiers::NONE,
-        }]);
-        for y in [380.0, 340.0, 300.0, 250.0] {
-            frame(vec![egui::Event::PointerMoved(egui::pos2(50.0, y))]);
-        }
-        let moved = frame(Vec::new());
-        let held = (0..10).map(|_| frame(Vec::new())).last().unwrap();
-        assert!(moved < bottom && held < moved, "{bottom} {moved} {held}");
-    }
-
-    #[test]
-    fn log_sections_cover_runs_of_one_color() {
-        let mut log = Log::new(*backend::LOG_LINES.start());
-        for (tone, text) in [
-            (Tone::Normal, "a"),
-            (Tone::Normal, "bb"),
-            (Tone::Error, "c\nd"),
-            (Tone::Warning, "w"),
-            (Tone::Normal, "e"),
-        ] {
-            log.push_tone(tone, text.into());
-        }
-        let (normal, warning, error) = (
-            egui::Color32::WHITE,
-            egui::Color32::YELLOW,
-            egui::Color32::RED,
-        );
-        let job = log.layout_job(egui::FontId::monospace(13.0), normal, warning, error);
-        let sections: Vec<_> = job
-            .sections
-            .iter()
-            .map(|s| {
-                (
-                    &job.text[s.byte_range.start.0..s.byte_range.end.0],
-                    s.format.color,
-                )
-            })
-            .collect();
-        assert_eq!(
-            sections,
-            [
-                ("a\nbb\n", normal),
-                ("c\nd\n", error),
-                ("w\n", warning),
-                ("e", normal)
-            ]
-        );
     }
 
     #[test]

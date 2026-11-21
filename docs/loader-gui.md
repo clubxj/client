@@ -79,9 +79,9 @@ The desktop app (`eframe`/egui). It never touches the client itself: a new capab
 
 - Sidebar drawer (window narrower than `SIDEBAR_MIN_WINDOW`): it overlays the page, so row hovers use `Ui::rect_contains_pointer` (layer-aware), never the raw pointer.
 - `theme::link_hovered` reads the hover from the last frame's response so text can be coloured before it's laid out.
-- Output panel: the `LayoutJob` is rebuilt only when tab, revision, font or colour changes; the galley (`LogJob::laid_out`) is kept while wrap width and pixels per point are unchanged and a one-space probe galley is still the one egui's cache returns, because egui replaces that cache when it rebuilds the font atlas.
-- Output tabs are capped (`backend::LOG_LINES`, 2000 to 10 000) because a tab is one `TextEdit` that egui re-lays out on every new line (~6 ms and 13 MB per 1000 lines). Trimmed a quarter at a time.
-- Selection drag past the edge scrolls (`scroll_selection_past_edge`) because egui's `TextEdit` only scrolls to the cursor on key moves. Speed is relative to room to the window edge since the output sits at the bottom.
+- Output panel (`app/output.rs`): the log view is a `uniform_list` of wrapped rows, so only visible rows are drawn. Each entry is wrapped once; an append wraps only the new entries (`Log::appended` tells an append from a rebuild because a rebuild or clear raises `revision` by more than the entries added). A tab switch, filter change, trim or clear re-wraps the whole tab and drops the selection; a new width only re-wraps it.
+- Output tabs are capped (`backend::LOG_LINES`, 2000 to 10 000), trimmed a quarter at a time. A trim or filter change rebuilds the tab's text and re-wraps it, and Copy all and Save copy the whole text.
+- GPUI has no selectable text, so the log view selects by itself: a selection is two (entry, byte) spots, rows hit-test by shaping the one row under the pointer, Ctrl+C copies it. Dragging past the edge keeps scrolling (`LogView::step_past_edge`); speed is relative to room to the window edge since the output sits at the bottom.
 - `theme::icon_button_width` sizes a group from all its possible labels so buttons never resize.
 - Inventory drag and drop uses `DragAndDrop::set_payload` on `drag_started`, not `dnd_drag_source`, whose drag-only sense swallows clicks.
 - Row widths for form rows are remembered in egui temp memory to decide wrapping next frame.
