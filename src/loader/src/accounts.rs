@@ -1,6 +1,15 @@
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
-use eframe::egui;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::{
+    AnyElement, App, AppContext, ClickEvent, Context, Div, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Pixels, StatefulInteractiveElement, Styled,
+    Subscription, Window, canvas, div, prelude::FluentBuilder, px,
+};
 use injector::bank_pin::{hash_name, parse_pin};
 use ring::{
     aead::{AES_256_GCM, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey},
@@ -9,7 +18,8 @@ use ring::{
 use serde::{Deserialize, Serialize};
 
 use crate::session::{hex_decode, hex_encode};
-use crate::theme::ROW_HEIGHT;
+use crate::ui::theme::{self, BUTTON_PADDING, INTERACT_HEIGHT, ITEM_GAP, LINE_GAP, ROW_HEIGHT};
+use crate::ui::widgets;
 
 const KEYRING_SERVICE: &str = "volcren-loader";
 const KEYRING_USER: &str = "accounts-key";
@@ -17,9 +27,9 @@ const FILE_NAME: &str = "accounts.bin";
 const AAD: &[u8] = b"volcren-accounts-v1";
 const PIN_LEN: usize = 4;
 const HASH_SHOWN: usize = 12;
-const MARGIN: f32 = 16.0;
-const INPUT_WIDTH: f32 = 300.0;
-const MIN_TEXT_WIDTH: f32 = 90.0;
+const MARGIN: Pixels = px(16.0);
+const INPUT_WIDTH: Pixels = px(300.0);
+const MIN_TEXT_WIDTH: Pixels = px(90.0);
 const ACCOUNT_REQUIRED: &str = "Enter the account name.";
 const PIN_INVALID: &str = "The bank pin is exactly 4 digits.";
 const LAMP_SKILLS: [&str; 24] = [
@@ -184,18 +194,6 @@ struct Editing {
     index: usize,
     field: Field,
     text: String,
-    fresh: bool,
-}
-
-impl Editing {
-    fn start(index: usize, field: Field, text: String) -> Self {
-        Self {
-            index,
-            field,
-            text,
-            fresh: true,
-        }
-    }
 }
 
 impl Column {
@@ -215,10 +213,6 @@ struct Draft {
     account: String,
     pin: String,
     error: Option<String>,
-}
-
-pub enum Action {
-    ReadClientName,
 }
 
 #[derive(Default)]
@@ -325,11 +319,6 @@ impl Accounts {
         Ok(())
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, client: bool) -> Option<Action> {
-        self.page_ui(ui);
-        self.dialog_ui(ui.ctx(), client)
-    }
-
     pub fn client_name(&mut self, result: Result<Option<String>, String>) {
         self.reading = false;
         let Some(draft) = &mut self.draft else { return };
@@ -345,377 +334,629 @@ impl Accounts {
         }
     }
 
-    fn page_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(why) = &self.locked {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!("Saved accounts can't be opened: {why}."),
-            );
-            ui.label("Nothing is shown or saved so the file isn't overwritten. Fix the keyring, or delete accounts.bin in the Volcren data folder to start over.");
-            return;
-        }
-        ui.add_enabled_ui(self.draft.is_none(), |ui| {
-            if ui.button("Add account").clicked() {
-                self.draft = Some(Draft::default());
-            }
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("Encrypted on this machine. Account names are not stored.")
-                    .weak(),
-            );
-            if let Some(error) = &self.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            ui.add_space(MARGIN);
-            if self.working.is_empty() {
-                ui.label(egui::RichText::new("No accounts saved yet.").weak());
-            } else {
-                self.list_ui(ui);
-            }
-        });
+    fn add(&mut self) {
+        self.draft = Some(Draft::default());
     }
 
-    fn list_ui(&mut self, ui: &mut egui::Ui) {
-        let mut delete = None;
-        let mut save = None;
-        let mut edit_start = None;
-        let mut finished = None;
-        let mut change_account = None;
-        let mut lamp_skill = None;
-        let Self {
-            entries,
-            working,
-            editing,
-            deleting,
-            ..
-        } = self;
-        let font = egui::TextStyle::Button.resolve(ui.style());
-        let button_width = crate::theme::button_width(ui, &font, &["Save", "Delete", "Sure?"]);
-        let button_size = egui::vec2(button_width, 0.0);
-        let spacing = ui.spacing().item_spacing;
-        let row_actions = 2.0 * button_width + spacing.x;
-        let stacked = ui.available_width() < 4.0 * MIN_TEXT_WIDTH + 5.0 * spacing.x + row_actions;
-        let actions_width = if stacked { button_width } else { row_actions };
-        let row_height = if stacked {
-            ROW_HEIGHT.max(2.0 * ui.spacing().interact_size.y + spacing.y)
-        } else {
-            ROW_HEIGHT
+    fn start_edit(&mut self, index: usize, field: Field) {
+        self.finish_edit(true);
+        let Some(entry) = self.working.get(index) else {
+            return;
         };
-        let text_column = || {
-            egui_extras::Column::remainder()
-                .at_least(MIN_TEXT_WIDTH)
-                .clip(true)
+        let text = match field {
+            Field::Name => entry.name.clone(),
+            Field::Pin => entry.pin.clone(),
         };
-        egui_extras::TableBuilder::new(ui)
-            .striped(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(text_column())
-            .column(text_column())
-            .column(text_column())
-            .column(text_column())
-            .column(egui_extras::Column::exact(actions_width))
-            .header(ROW_HEIGHT, |header| {
-                crate::theme::table_header(
-                    header,
-                    ["Name", "Account hash", "Bank pin", "Lamp skill", ""],
-                )
-            })
-            .body(|body| {
-                body.rows(row_height, working.len(), |mut row| {
-                    let index = row.index();
-                    let entry = &working[index];
-                    for column in [Column::Name, Column::Hash, Column::Pin] {
-                        row.col(|ui| {
-                            let field = column.field();
-                            if let Some(edit) = editing
-                                .as_mut()
-                                .filter(|e| e.index == index && Some(e.field) == field)
-                            {
-                                if let Some(done) = edit_cell(ui, edit) {
-                                    finished = Some(done);
-                                }
-                                return;
-                            }
-                            let (shown, hover) = match column {
-                                Column::Name => (entry.name.clone(), "Click to rename".to_owned()),
-                                Column::Hash => (
-                                    format!("{}…", &entry.hash[..HASH_SHOWN.min(entry.hash.len())]),
-                                    format!("{}\nClick to change the account", entry.hash),
-                                ),
-                                Column::Pin => (
-                                    "*".repeat(entry.pin.len()),
-                                    "Click to show and change the pin".to_owned(),
-                                ),
-                            };
-                            if click_cell(ui, &shown).on_hover_text(hover).clicked() {
-                                match column {
-                                    Column::Hash => change_account = Some(index),
-                                    Column::Name => {
-                                        edit_start = Some(Editing::start(
-                                            index,
-                                            Field::Name,
-                                            entry.name.clone(),
-                                        ));
-                                    }
-                                    Column::Pin => {
-                                        edit_start = Some(Editing::start(
-                                            index,
-                                            Field::Pin,
-                                            entry.pin.clone(),
-                                        ));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    row.col(|ui| {
-                        let mut chosen = entry.lamp_skill.clone();
-                        let shown = if chosen.is_empty() {
-                            "None"
-                        } else {
-                            &entry.lamp_skill
-                        };
-                        egui::ComboBox::from_id_salt(("lamp_skill", index))
-                            .selected_text(shown)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut chosen, String::new(), "None");
-                                for skill in LAMP_SKILLS {
-                                    ui.selectable_value(&mut chosen, skill.to_owned(), skill);
-                                }
-                            })
-                            .response
-                            .on_hover_text(
-                                "What a random event's lamp is spent on. None keeps the lamp.",
-                            );
-                        if chosen != entry.lamp_skill {
-                            lamp_skill = Some((index, chosen));
-                        }
-                    });
-                    row.col(|ui| {
-                        let armed = *deleting == Some(index);
-                        let changed = entries.get(index) != Some(entry);
-                        let buttons = |ui: &mut egui::Ui| {
-                            let delete_button =
-                                egui::Button::new(if armed { "Sure?" } else { "Delete" })
-                                    .min_size(button_size);
-                            let save_button = egui::Button::new("Save").min_size(button_size);
-                            if stacked {
-                                if ui.add_enabled(changed, save_button).clicked() {
-                                    save = Some(index);
-                                }
-                                if ui.add(delete_button).clicked() {
-                                    delete = Some(index);
-                                }
-                            } else {
-                                if ui.add(delete_button).clicked() {
-                                    delete = Some(index);
-                                }
-                                if ui.add_enabled(changed, save_button).clicked() {
-                                    save = Some(index);
-                                }
-                            }
-                        };
-                        if stacked {
-                            ui.vertical(buttons);
-                        } else {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                buttons,
-                            );
-                        }
-                    });
-                });
-            });
-        if let Some((index, skill)) = lamp_skill
-            && let Some(entry) = self.working.get_mut(index)
+        self.editing = Some(Editing { index, field, text });
+        self.deleting = None;
+    }
+
+    fn finish_edit(&mut self, commit: bool) {
+        if let Some(edit) = self.editing.take()
+            && commit
         {
-            entry.lamp_skill = skill;
+            self.error = self.apply(&edit).err();
         }
-        match (finished, self.editing.take()) {
-            (Some(true), Some(edit)) => self.error = self.apply(&edit).err(),
-            (Some(_), _) => {}
-            (None, edit) => self.editing = edit,
-        }
-        if let Some(edit) = edit_start {
-            self.editing = Some(edit);
-            self.deleting = None;
-        }
-        if let Some(index) = change_account {
-            self.draft = Some(Draft {
-                target: Some(index),
-                ..Draft::default()
-            });
-            self.editing = None;
-            self.deleting = None;
-        }
-        if let Some(index) = save {
-            self.entries[index] = self.working[index].clone();
+    }
+
+    fn change_account(&mut self, index: usize) {
+        self.draft = Some(Draft {
+            target: Some(index),
+            ..Draft::default()
+        });
+        self.editing = None;
+        self.deleting = None;
+    }
+
+    fn save(&mut self, index: usize) {
+        if let Some(entry) = self.working.get(index) {
+            self.entries[index] = entry.clone();
             self.persist();
         }
-        if let Some(index) = delete {
-            if self.deleting == Some(index) {
-                self.entries.remove(index);
-                self.working.remove(index);
-                self.deleting = None;
-                self.editing = None;
-                self.persist();
-            } else {
-                self.deleting = Some(index);
-            }
+    }
+
+    fn delete(&mut self, index: usize) {
+        if self.deleting == Some(index) {
+            self.entries.remove(index);
+            self.working.remove(index);
+            self.deleting = None;
+            self.editing = None;
+            self.persist();
+        } else {
+            self.deleting = Some(index);
         }
     }
 
-    fn dialog_ui(&mut self, ctx: &egui::Context, client: bool) -> Option<Action> {
-        let mut draft = self.draft.take()?;
-        let mut decision = None;
-        let mut action = None;
-        let can_read = client && !self.reading;
-        let changing = draft.target.is_some();
-        egui::Window::new(if changing {
-            "Change account"
+    fn set_lamp_skill(&mut self, index: usize, skill: String) {
+        if let Some(entry) = self.working.get_mut(index) {
+            entry.lamp_skill = skill;
+        }
+    }
+
+    fn close_dialog(&mut self, save: bool) {
+        let Some(mut draft) = self.draft.take() else {
+            return;
+        };
+        if save && let Err(why) = self.submit(&draft) {
+            draft.error = Some(why);
+            self.draft = Some(draft);
+        }
+    }
+
+    fn escape(&mut self) -> bool {
+        if self.draft.is_some() {
+            self.close_dialog(false);
+        } else if self.editing.is_some() {
+            self.finish_edit(false);
         } else {
-            "Add account"
-        })
-        .id(egui::Id::new(("accounts-dialog", changing)))
-        .collapsible(false)
-        .auto_sized()
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            let fields = egui::Grid::new("add-account")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    if !changing {
-                        ui.label("Name");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut draft.name)
-                                .hint_text("e.g. Ironman (it's just for you)")
-                                .desired_width(INPUT_WIDTH),
-                        );
-                        ui.end_row();
-                    }
-                    ui.label("Account");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut draft.account)
-                            .hint_text("In-game name (not stored)")
-                            .desired_width(INPUT_WIDTH),
-                    );
-                    ui.end_row();
-                    if !changing {
-                        ui.label("Bank pin");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut draft.pin)
-                                .password(true)
-                                .hint_text("4 digits")
-                                .char_limit(PIN_LEN)
-                                .desired_width(INPUT_WIDTH),
-                        );
-                        ui.end_row();
+            return false;
+        }
+        true
+    }
+}
+
+fn read(accounts: &RwLock<Accounts>) -> RwLockReadGuard<'_, Accounts> {
+    accounts.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn pin_allowed(text: &str, _: &mut App) -> bool {
+    text.chars().count() <= PIN_LEN && text.chars().all(|c| c.is_ascii_digit())
+}
+
+fn sync(input: &Entity<InputState>, text: &str, window: &mut Window, cx: &mut App) {
+    if input.read(cx).value().as_ref() != text {
+        let text = text.to_owned();
+        input.update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+}
+
+type DraftField = fn(&mut Draft) -> &mut String;
+
+pub struct Ui {
+    name: Entity<InputState>,
+    account: Entity<InputState>,
+    pin: Entity<InputState>,
+    edit_name: Entity<InputState>,
+    edit_pin: Entity<InputState>,
+    width: Rc<Cell<Pixels>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Ui {
+    pub fn new<V: 'static>(
+        accounts: &Arc<RwLock<Accounts>>,
+        home: FocusHandle,
+        active: impl Fn(&V) -> bool + 'static,
+        window: &mut Window,
+        cx: &mut Context<V>,
+    ) -> Self {
+        let input =
+            |placeholder: &'static str, pin: bool, window: &mut Window, cx: &mut Context<V>| {
+                cx.new(|cx| {
+                    let input = InputState::new(window, cx).placeholder(placeholder);
+                    if pin {
+                        input.validate(pin_allowed)
+                    } else {
+                        input
                     }
                 })
-                .response
-                .rect
-                .width();
-            draft.pin.retain(|c| c.is_ascii_digit());
-            if let Some(error) = &draft.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            ui.add_space(6.0);
-            let row = egui::vec2(fields, ui.spacing().interact_size.y);
-            ui.allocate_ui_with_layout(
-                row,
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    let load =
-                        ui.add_enabled(can_read, egui::Button::new("Load account from client"));
-                    let load = if can_read {
-                        load.on_hover_text(
-                            "Fill in the name of the account logged in on the selected client",
-                        )
-                    } else {
-                        load.on_disabled_hover_text(
-                            "Select a client with the agent loaded, and log in",
-                        )
-                    };
-                    if load.clicked() {
-                        action = Some(Action::ReadClientName);
+            };
+        let name = input("e.g. Ironman (it's just for you)", false, window, cx);
+        let account = input("In-game name (not stored)", false, window, cx);
+        let pin = input("4 digits", true, window, cx);
+        pin.update(cx, |pin, cx| pin.set_masked(true, window, cx));
+        let edit_name = input("name", false, window, cx);
+        let edit_pin = input("4 digits", true, window, cx);
+        let mut subscriptions = Vec::new();
+        let draft_fields: [(&Entity<InputState>, DraftField); 3] = [
+            (&name, |draft| &mut draft.name),
+            (&account, |draft| &mut draft.account),
+            (&pin, |draft| &mut draft.pin),
+        ];
+        for (input, field) in draft_fields {
+            let accounts = accounts.clone();
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |_, input, event: &InputEvent, _, cx| {
+                    if let InputEvent::Change = event
+                        && let Some(draft) = &mut crate::script::write(&accounts).draft
+                    {
+                        *field(draft) = input.read(cx).value().to_string();
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Save").clicked() {
-                            decision = Some(true);
-                        }
-                        if ui.button("Cancel").clicked() {
-                            decision = Some(false);
-                        }
-                    });
                 },
-            );
-        });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            decision = Some(false);
+            ));
         }
-        match decision {
-            Some(true) => {
-                if let Err(why) = self.submit(&draft) {
-                    draft.error = Some(why);
-                    self.draft = Some(draft);
-                }
+        for (input, field) in [(&edit_name, Field::Name), (&edit_pin, Field::Pin)] {
+            let accounts = accounts.clone();
+            let home = home.clone();
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |_, input, event: &InputEvent, window, cx| {
+                    let mut accounts = crate::script::write(&accounts);
+                    let Some(edit) = accounts.editing.as_mut().filter(|edit| edit.field == field)
+                    else {
+                        return;
+                    };
+                    match event {
+                        InputEvent::Change => edit.text = input.read(cx).value().to_string(),
+                        InputEvent::PressEnter { .. } => {
+                            accounts.finish_edit(true);
+                            window.focus(&home, cx);
+                        }
+                        InputEvent::Blur if !input.focus_handle(cx).is_focused(window) => {
+                            accounts.finish_edit(true);
+                        }
+                        _ => return,
+                    }
+                    cx.notify();
+                },
+            ));
+        }
+        let keys = accounts.clone();
+        subscriptions.push(cx.observe_keystrokes(move |view, event, window, cx| {
+            if event.action.is_none()
+                && event.keystroke.key == "escape"
+                && active(view)
+                && crate::script::write(&keys).escape()
+            {
+                window.focus(&home, cx);
+                cx.notify();
             }
-            Some(false) => {}
-            None => self.draft = Some(draft),
+        }));
+        Self {
+            name,
+            account,
+            pin,
+            edit_name,
+            edit_pin,
+            width: Rc::new(Cell::new(window.viewport_size().width)),
+            _subscriptions: subscriptions,
         }
-        if action.is_some() {
-            self.reading = true;
+    }
+
+    fn edit_input(&self, field: Field) -> &Entity<InputState> {
+        match field {
+            Field::Name => &self.edit_name,
+            Field::Pin => &self.edit_pin,
         }
-        action
+    }
+
+    fn sync(&self, accounts: &Accounts, window: &mut Window, cx: &mut App) {
+        if let Some(draft) = &accounts.draft {
+            sync(&self.name, &draft.name, window, cx);
+            sync(&self.account, &draft.account, window, cx);
+            sync(&self.pin, &draft.pin, window, cx);
+        }
+        if let Some(edit) = &accounts.editing {
+            sync(self.edit_input(edit.field), &edit.text, window, cx);
+        }
     }
 }
 
-fn click_cell(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), ui.available_height().max(ROW_HEIGHT)),
-        egui::Sense::click(),
-    );
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let color = if response.hovered() {
-        ui.visuals().strong_text_color()
+fn change<V: 'static>(
+    accounts: &Arc<RwLock<Accounts>>,
+    cx: &mut Context<V>,
+    apply: impl Fn(&mut Accounts) + 'static,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let accounts = accounts.clone();
+    cx.listener(move |_, _: &ClickEvent, _, cx| {
+        apply(&mut crate::script::write(&accounts));
+        cx.notify();
+    })
+}
+
+pub fn render<V: 'static>(
+    accounts: &Arc<RwLock<Accounts>>,
+    ui: &Ui,
+    client: bool,
+    on_read: impl Fn(&mut V, &mut Context<V>) + 'static,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> AnyElement {
+    let state = read(accounts);
+    ui.sync(&state, window, cx);
+    let width = ui.width.clone();
+    let view = cx.entity_id();
+    let probe = canvas(
+        move |bounds, _, cx| {
+            if width.replace(bounds.size.width) != bounds.size.width {
+                cx.notify(view);
+            }
+        },
+        |_, (), _, _| {},
+    )
+    .absolute()
+    .inset_0();
+    let page = div()
+        .flex_1()
+        .min_h_0()
+        .relative()
+        .flex()
+        .flex_col()
+        .child(probe);
+    if let Some(why) = &state.locked {
+        return page
+            .gap(LINE_GAP)
+            .child(widgets::error(format!("Saved accounts can't be opened: {why}.")))
+            .child("Nothing is shown or saved so the file isn't overwritten. Fix the keyring, or delete accounts.bin in the Volcren data folder to start over.")
+            .into_any_element();
+    }
+    let enabled = state.draft.is_none();
+    let body = div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(LINE_GAP)
+        .when(!enabled, |this| this.opacity(0.5))
+        .child(widgets::button(
+            "add-account",
+            "Add account",
+            enabled,
+            change(accounts, cx, Accounts::add),
+        ))
+        .child(
+            widgets::weak("Encrypted on this machine. Account names are not stored.")
+                .mt(theme::ITEM_GAP),
+        )
+        .children(state.error.clone().map(widgets::error))
+        .child(
+            div()
+                .mt(MARGIN)
+                .w_full()
+                .child(if state.working.is_empty() {
+                    widgets::weak("No accounts saved yet.").into_any_element()
+                } else {
+                    list(accounts, &state, ui, enabled, window, cx).into_any_element()
+                }),
+        );
+    let dialog = state.draft.as_ref().map(|draft| {
+        dialog(
+            accounts,
+            draft,
+            ui,
+            client && !state.reading,
+            on_read,
+            window,
+            cx,
+        )
+    });
+    page.child(body).children(dialog).into_any_element()
+}
+
+fn list<V: 'static>(
+    accounts: &Arc<RwLock<Accounts>>,
+    state: &Accounts,
+    ui: &Ui,
+    enabled: bool,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> Div {
+    let button_width =
+        widgets::widest(window, &["Save", "Delete", "Sure?"], theme::BODY) + BUTTON_PADDING * 2.0;
+    let row_actions = button_width * 2.0 + ITEM_GAP;
+    let stacked = ui.width.get() < MIN_TEXT_WIDTH * 4.0 + ITEM_GAP * 5.0 + row_actions;
+    let actions_width = if stacked { button_width } else { row_actions };
+    let row_height = if stacked {
+        ROW_HEIGHT.max(INTERACT_HEIGHT * 2.0 + LINE_GAP)
     } else {
-        ui.visuals().text_color()
+        ROW_HEIGHT
     };
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, rect.width());
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
-    let galley = ui.painter().layout_job(job);
-    let top_left = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
-    ui.painter().galley(top_left, galley, color);
-    response
+    let text_column = || {
+        div()
+            .flex_1()
+            .min_w(MIN_TEXT_WIDTH)
+            .h_full()
+            .flex()
+            .items_center()
+            .overflow_hidden()
+    };
+    let row = |height: Pixels| div().flex().w_full().h(height).gap(ITEM_GAP);
+    let header = ["Name", "Account hash", "Bank pin", "Lamp skill"]
+        .into_iter()
+        .fold(row(ROW_HEIGHT), |header, title| {
+            header.child(text_column().child(widgets::strong(title)))
+        })
+        .child(div().flex_none().w(actions_width));
+    let rows = state.working.iter().enumerate().map(|(index, entry)| {
+        let cells = [Column::Name, Column::Hash, Column::Pin].map(|column| {
+            let field = column.field();
+            if let Some(edit) = state
+                .editing
+                .as_ref()
+                .filter(|edit| edit.index == index && Some(edit.field) == field)
+            {
+                return text_column().child(
+                    div()
+                        .w_full()
+                        .child(Input::new(ui.edit_input(edit.field)).small()),
+                );
+            }
+            let (id, shown, hover) = match column {
+                Column::Name => ("name", entry.name.clone(), "Click to rename".to_owned()),
+                Column::Hash => (
+                    "hash",
+                    format!("{}…", &entry.hash[..HASH_SHOWN.min(entry.hash.len())]),
+                    format!("{}\nClick to change the account", entry.hash),
+                ),
+                Column::Pin => (
+                    "pin",
+                    "*".repeat(entry.pin.len()),
+                    "Click to show and change the pin".to_owned(),
+                ),
+            };
+            let cell = div()
+                .id(id)
+                .size_full()
+                .flex()
+                .items_center()
+                .text_color(theme::FG_DARK)
+                .child(div().w_full().truncate().child(shown))
+                .tooltip(widgets::tooltip(hover));
+            let cell = if enabled {
+                let accounts = accounts.clone();
+                let input = field.map(|field| ui.edit_input(field).clone());
+                cell.cursor_pointer()
+                    .hover(|style| style.text_color(theme::FG))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, window, cx| {
+                        let mut accounts = crate::script::write(&accounts);
+                        match field {
+                            None => accounts.change_account(index),
+                            Some(field) => accounts.start_edit(index, field),
+                        }
+                        if let (Some(input), Some(edit)) = (&input, &accounts.editing) {
+                            let text = edit.text.clone();
+                            input.update(cx, |input, cx| {
+                                input.set_value(text, window, cx);
+                                input.focus(window, cx);
+                            });
+                        }
+                        cx.notify();
+                    }))
+            } else {
+                cell
+            };
+            text_column().child(cell)
+        });
+        let app = cx.entity().downgrade();
+        let skills = if enabled {
+            std::iter::once(("None", String::new()))
+                .chain(
+                    LAMP_SKILLS
+                        .into_iter()
+                        .map(|skill| (skill, skill.to_owned())),
+                )
+                .map(|(label, skill)| {
+                    let (accounts, app) = (accounts.clone(), app.clone());
+                    let selected = skill == entry.lamp_skill;
+                    widgets::Choice::new(label, selected, move |_, cx| {
+                        crate::script::write(&accounts).set_lamp_skill(index, skill.clone());
+                        app.update(cx, |_, cx| cx.notify()).ok();
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let shown = if entry.lamp_skill.is_empty() {
+            "None".to_owned()
+        } else {
+            entry.lamp_skill.clone()
+        };
+        let lamp = text_column().child(
+            div()
+                .id("lamp-skill")
+                .child(widgets::combo(("lamp-skill", index), shown, skills))
+                .tooltip(widgets::tooltip(
+                    "What a random event's lamp is spent on. None keeps the lamp.",
+                )),
+        );
+        let armed = state.deleting == Some(index);
+        let changed = state.entries.get(index) != Some(entry);
+        let save = widgets::button(
+            "save",
+            "Save",
+            enabled && changed,
+            change(accounts, cx, move |accounts| accounts.save(index)),
+        )
+        .min_w(button_width)
+        .justify_center();
+        let delete = widgets::button(
+            "delete",
+            if armed { "Sure?" } else { "Delete" },
+            enabled,
+            change(accounts, cx, move |accounts| accounts.delete(index)),
+        )
+        .min_w(button_width)
+        .justify_center();
+        let actions = div()
+            .flex_none()
+            .w(actions_width)
+            .flex()
+            .when(stacked, |this| {
+                this.flex_col().justify_center().gap(LINE_GAP)
+            })
+            .when(!stacked, |this| {
+                this.items_center().justify_end().gap(ITEM_GAP)
+            })
+            .child(save)
+            .child(delete);
+        row(row_height)
+            .id(("account", index))
+            .when(index % 2 == 0, |this| this.bg(theme::BG_FLOAT))
+            .children(cells)
+            .child(lamp)
+            .child(actions)
+    });
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .child(header)
+        .children(rows)
 }
 
-fn edit_cell(ui: &mut egui::Ui, edit: &mut Editing) -> Option<bool> {
-    let hint = match edit.field {
-        Field::Name => "name",
-        Field::Pin => "4 digits",
-    };
-    let mut input = egui::TextEdit::singleline(&mut edit.text)
-        .hint_text(hint)
-        .desired_width(ui.available_width());
-    if edit.field == Field::Pin {
-        input = input.char_limit(PIN_LEN);
+fn dialog<V: 'static>(
+    accounts: &Arc<RwLock<Accounts>>,
+    draft: &Draft,
+    ui: &Ui,
+    can_read: bool,
+    on_read: impl Fn(&mut V, &mut Context<V>) + 'static,
+    window: &mut Window,
+    cx: &mut Context<V>,
+) -> Div {
+    let changing = draft.target.is_some();
+    let mut fields = vec![("Account", &ui.account)];
+    if !changing {
+        fields.insert(0, ("Name", &ui.name));
+        fields.push(("Bank pin", &ui.pin));
     }
-    let response = ui.add(input);
-    if edit.field == Field::Pin {
-        edit.text.retain(|c| c.is_ascii_digit());
+    let labels: Vec<&str> = fields.iter().map(|(label, _)| *label).collect();
+    let label_width = widgets::widest(window, &labels, theme::BODY).ceil();
+    let grid = fields.into_iter().fold(
+        div().flex().flex_col().gap(ITEM_GAP),
+        |grid, (label, input)| {
+            grid.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(div().flex_none().w(label_width).child(label))
+                    .child(div().w(INPUT_WIDTH).child(Input::new(input).small())),
+            )
+        },
+    );
+    let read_accounts = accounts.clone();
+    let load = widgets::button(
+        "read-client-name",
+        "Load account from client",
+        can_read,
+        cx.listener(move |view, _: &ClickEvent, _, cx| {
+            crate::script::write(&read_accounts).reading = true;
+            on_read(view, cx);
+            cx.notify();
+        }),
+    )
+    .tooltip(widgets::tooltip(if can_read {
+        "Fill in the name of the account logged in on the selected client"
+    } else {
+        "Select a client with the agent loaded, and log in"
+    }));
+    let decide = div()
+        .flex()
+        .gap(ITEM_GAP)
+        .child(widgets::button(
+            "cancel",
+            "Cancel",
+            true,
+            change(accounts, cx, |accounts| accounts.close_dialog(false)),
+        ))
+        .child(widgets::button(
+            "save",
+            "Save",
+            true,
+            change(accounts, cx, |accounts| accounts.close_dialog(true)),
+        ));
+    let card = div()
+        .id("accounts-dialog")
+        .occlude()
+        .flex()
+        .flex_col()
+        .bg(theme::BG_FLOAT)
+        .border_1()
+        .border_color(theme::BORDER)
+        .child(
+            div()
+                .px(px(8.0))
+                .py(LINE_GAP)
+                .child(widgets::heading(if changing {
+                    "Change account"
+                } else {
+                    "Add account"
+                })),
+        )
+        .child(div().h(px(1.0)).bg(theme::BORDER))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(LINE_GAP)
+                .p(px(8.0))
+                .child(grid)
+                .children(draft.error.clone().map(widgets::error))
+                .child(
+                    div()
+                        .mt(px(6.0))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(ITEM_GAP)
+                        .child(load)
+                        .child(decide),
+                ),
+        );
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(card)
+}
+
+#[cfg(test)]
+impl Accounts {
+    pub fn locked(why: &str) -> Self {
+        Self {
+            locked: Some(why.to_owned()),
+            ..Self::default()
+        }
     }
-    if edit.fresh {
-        response.request_focus();
-        edit.fresh = false;
-        return None;
+}
+
+#[cfg(test)]
+pub fn snapshot_editing(accounts: &RwLock<Accounts>) {
+    let mut accounts = crate::script::write(accounts);
+    accounts.working[1].lamp_skill = "Mining".into();
+    accounts.start_edit(0, Field::Pin);
+    accounts.deleting = Some(2);
+}
+
+#[cfg(test)]
+pub fn snapshot_adding(accounts: &RwLock<Accounts>) {
+    let mut accounts = crate::script::write(accounts);
+    accounts.add();
+    if let Some(draft) = &mut accounts.draft {
+        draft.name = "Alt".into();
+        draft.pin = "12".into();
+        draft.error = Some(PIN_INVALID.into());
     }
-    if !response.lost_focus() {
-        return None;
-    }
-    Some(!ui.input(|i| i.key_pressed(egui::Key::Escape)))
+}
+
+#[cfg(test)]
+pub fn snapshot_changing(accounts: &RwLock<Accounts>) {
+    crate::script::write(accounts).change_account(1);
 }
 
 #[cfg(test)]

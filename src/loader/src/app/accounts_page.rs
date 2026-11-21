@@ -1,13 +1,8 @@
 use super::*;
 
 impl LoaderApp {
-    pub(super) fn accounts_ui(&mut self, ui: &mut egui::Ui) {
-        let target = self.selected_loaded_target();
-        let action = crate::script::write(&self.accounts).ui(ui, target.is_some());
-        if let Some(crate::accounts::Action::ReadClientName) = action
-            && let Some(target) = target.cloned()
-        {
-            let ctx = ui.ctx().clone();
+    fn read_client_name(&mut self) {
+        if let Some(target) = self.selected_loaded_target().cloned() {
             self.background(move |settings| {
                 Event::AccountName(
                     backend::state(&target, &settings).map(|state| state.account_name),
@@ -15,17 +10,82 @@ impl LoaderApp {
             });
         }
     }
+
+    pub(super) fn render_accounts(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let accounts = self.accounts.clone();
+        let client = self.selected_loaded_target().is_some();
+        let home = self.chrome.focus.clone();
+        let ui = self.accounts_ui.get_or_insert_with(|| {
+            crate::accounts::Ui::new(
+                &accounts,
+                home,
+                |app: &LoaderApp| app.tab == Tab::Accounts,
+                window,
+                cx,
+            )
+        });
+        crate::accounts::render(
+            &accounts,
+            ui,
+            client,
+            |app: &mut LoaderApp, _| app.read_client_name(),
+            window,
+            cx,
+        )
+    }
 }
 
-impl LoaderApp {
-    pub(super) fn render_accounts(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> AnyElement {
-        not_ported("Accounts")
+#[cfg(test)]
+fn entry(name: &str, account: &str, pin: &str, lamp_skill: &str) -> crate::accounts::Entry {
+    crate::accounts::Entry {
+        name: name.into(),
+        hash: injector::bank_pin::hash_name(account),
+        pin: pin.into(),
+        lamp_skill: lamp_skill.into(),
     }
+}
+
+#[cfg(test)]
+fn saved(app: &mut LoaderApp) {
+    app.tab = Tab::Accounts;
+    app.accounts = Arc::new(RwLock::new(crate::accounts::Accounts::with_entries(vec![
+        entry("Main", "first account", "1234", "Slayer"),
+        entry("Ironman (just for me)", "second account", "9876", ""),
+        entry("Skiller", "third account", "0000", "Woodcutting"),
+    ])));
 }
 
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("accounts", |app| app.tab = Tab::Accounts),
+        ("accounts-empty", |app| {
+            app.tab = Tab::Accounts;
+            app.accounts = Arc::new(RwLock::new(crate::accounts::Accounts::with_entries(
+                Vec::new(),
+            )));
+        }),
+        ("accounts-saved", saved),
+        ("accounts-editing", |app| {
+            saved(app);
+            crate::accounts::snapshot_editing(&app.accounts);
+        }),
+        ("accounts-adding", |app| {
+            saved(app);
+            crate::accounts::snapshot_adding(&app.accounts);
+        }),
+        ("accounts-changing", |app| {
+            saved(app);
+            crate::accounts::snapshot_changing(&app.accounts);
+        }),
+        ("accounts-locked", |app| {
+            app.tab = Tab::Accounts;
+            app.accounts = Arc::new(RwLock::new(crate::accounts::Accounts::locked(
+                "the system keyring isn't available",
+            )));
+        }),
     ]
 }
