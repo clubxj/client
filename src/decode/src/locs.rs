@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod request {
-    pub const PLAYER_PLANE: i32 = -1;
+    pub const PLAYER_PLANE: i32 = 0xff;
     pub const ALL_PLANES: i32 = 4;
     pub const CLICKABLE_ONLY: i32 = 0x100;
     pub const PLANES: i32 = 0xff;
