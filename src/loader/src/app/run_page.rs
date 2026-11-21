@@ -128,8 +128,14 @@ impl LoaderApp {
         let state = self.run().map_or(RunState::Ended, Run::state);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            crate::theme::status_dot(ui, state.color());
-            ui.label(egui::RichText::new(state.label()).color(state.color()));
+            let color = state.color();
+            let color = egui::Color32::from_rgb(
+                (color.r * 255.0) as u8,
+                (color.g * 255.0) as u8,
+                (color.b * 255.0) as u8,
+            );
+            crate::theme::status_dot(ui, color);
+            ui.label(egui::RichText::new(state.label()).color(color));
         });
         self.answer_form(run_id, outcome);
         if update {

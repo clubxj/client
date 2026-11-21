@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use eframe::egui;
+use gpui_kit::{Div, FontWeight, ParentElement, Pixels, Rgba, Styled, div, px};
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
     StoreScript,
     models::{credits_label, normalize_share_code, rate_label},
 };
+use crate::ui::{theme, widgets};
 
 const MAX_CONFIRMED: usize = 500;
 
@@ -56,19 +57,19 @@ pub enum Action {
     OpenSite(String),
 }
 
-const MIN_DETAILS_WIDTH: f32 = 240.0;
+const MIN_DETAILS_WIDTH: Pixels = px(240.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Placement {
+pub enum Placement {
     Beside,
     Stacked,
     Below,
 }
 
 impl Placement {
-    fn of(room: f32, buttons: usize, button_width: f32) -> Self {
-        let row = crate::theme::button_group_width(buttons, button_width);
-        let column = crate::theme::button_group_width(1, button_width);
+    pub fn of(room: Pixels, buttons: usize, button_width: Pixels) -> Self {
+        let row = group_width(buttons, button_width);
+        let column = group_width(1, button_width);
         if room - row >= MIN_DETAILS_WIDTH {
             Self::Beside
         } else if buttons > 1 && room - column >= MIN_DETAILS_WIDTH {
@@ -78,14 +79,41 @@ impl Placement {
         }
     }
 }
-const ICON_WEBSITE: &str = "\u{f0ac}";
-const ICON_ADD_FUNDS: &str = "\u{f09d}";
+
+pub fn group_width(buttons: usize, button_width: Pixels) -> Pixels {
+    (button_width + px(1.0)) * buttons as f32 + px(1.0)
+}
+
+pub const ICON_WEBSITE: &str = "\u{f0ac}";
+pub const ICON_ADD_FUNDS: &str = "\u{f09d}";
+pub const COMMUNITY_COLOR: Rgba = Rgba {
+    r: 0xff as f32 / 255.0,
+    g: 0x9e as f32 / 255.0,
+    b: 0x64 as f32 / 255.0,
+    a: 1.0,
+};
 
 pub fn origin_label(script: &StoreScript) -> &'static str {
     if script.community {
         "community"
     } else {
         "official"
+    }
+}
+
+pub fn origin_color(script: &StoreScript) -> Rgba {
+    if script.community {
+        COMMUNITY_COLOR
+    } else {
+        theme::BLUE
+    }
+}
+
+pub fn origin_hint(script: &StoreScript) -> &'static str {
+    if script.community {
+        "Written by a community member, not reviewed by staff. You're warned before it runs."
+    } else {
+        "Written by a scripter."
     }
 }
 
@@ -98,21 +126,25 @@ pub fn price_texts(script: &StoreScript) -> Option<(String, String)> {
     })
 }
 
-pub fn price_ui(ui: &mut egui::Ui, script: &StoreScript) {
+pub fn price(script: &StoreScript) -> Div {
     match price_texts(script) {
-        Some((hour, minute)) => {
-            crate::theme::credits(ui, egui::RichText::new(hour).strong().size(16.0), "/h");
-            crate::theme::credits(ui, egui::RichText::new(minute).small(), "/min");
-        }
-        None => {
-            ui.label(
-                egui::RichText::new("Free")
-                    .strong()
-                    .color(crate::theme::GREEN),
-            );
-        }
+        Some((hour, minute)) => div()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(theme::LINE_GAP)
+            .child(
+                widgets::credits(hour, "/h", false)
+                    .text_size(theme::HEADING)
+                    .font_weight(FontWeight::BOLD),
+            )
+            .child(widgets::credits(minute, "/min", false).text_size(theme::SMALL)),
+        None => widgets::strong("Free").text_color(theme::GREEN),
     }
 }
+
+const INVALID_SHARE_CODE: &str =
+    "A share code is 64 characters: the digits 0-9 and the letters a-f.";
 
 impl Store {
     pub fn categories(&self) -> Vec<String> {
@@ -136,185 +168,19 @@ impl Store {
         })
     }
 
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        me: &crate::api::Me,
-        run_block: Option<&str>,
-        has_site: bool,
-    ) -> Option<Action> {
-        let mut action = None;
-        let width = ui.available_width();
-        ui.horizontal_wrapped(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Search scripts").desired_width((width * 0.4).clamp(100.0, 220.0)));
-            egui::ComboBox::from_id_salt("store-category")
-                .selected_text(if self.category.is_empty() { "All categories" } else { &self.category })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.category, String::new(), "All categories");
-                    for category in self.categories() {
-                        ui.selectable_value(&mut self.category, category.clone(), category);
-                    }
-                });
-            if ui.add_enabled(!self.loading, egui::Button::new("Refresh")).clicked() {
-                action = Some(Action::Refresh);
-            }
-            if me.can_browse_community()
-                && ui
-                    .checkbox(&mut self.community, "Community")
-                    .on_hover_text("List every community script you can see. They stay out of the default list.")
-                    .changed()
-            {
-                action = Some(Action::Refresh);
-            }
-            if self.loading {
-                ui.spinner();
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            let editing = ui.add_enabled(
-                !self.redeeming,
-                egui::TextEdit::singleline(&mut self.code)
-                    .hint_text("Paste a share code")
-                    .desired_width((width - 190.0).clamp(120.0, 420.0))
-                    .password(false),
-            );
-            let submitted = editing.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui
-                .add_enabled(
-                    !self.redeeming && !self.code.trim().is_empty(),
-                    egui::Button::new("Redeem"),
-                )
-                .clicked()
-                || submitted)
-                && !self.redeeming
-            {
-                match normalize_share_code(&self.code) {
-                    Some(code) => action = Some(Action::Redeem(code)),
-                    None => {
-                        self.redeem_result = Some((
-                            false,
-                            "A share code is 64 characters: the digits 0-9 and the letters a-f."
-                                .into(),
-                        ))
-                    }
-                }
-            }
-            if self.redeeming {
-                ui.spinner();
-            }
-            if let Some((ok, message)) = &self.redeem_result {
-                let color = if *ok {
-                    crate::theme::GREEN
-                } else {
-                    ui.visuals().error_fg_color
-                };
-                ui.colored_label(color, message);
-            }
-        });
-        ui.add_space(4.0);
-        if let Some(error) = &self.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        if self.loaded && self.scripts.is_empty() && self.error.is_none() {
-            ui.label("No scripts available.");
-        }
+    pub fn can_redeem(&self) -> bool {
+        !self.redeeming && !self.code.trim().is_empty()
+    }
 
-        let (mut run, mut remove, mut start_remove, mut cancel_remove) = (None, None, None, false);
-        let mut open_site = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for script in self.visible() {
-                ui.add_space(8.0);
-                crate::theme::card().show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    let blocked = run_block.map(str::to_owned).or_else(|| script.blocked(me.microcredits, me.min_balance_minutes));
-                    let add_funds = has_site && script.short_of_funds(me.microcredits, me.min_balance_minutes);
-                    let button_width = crate::theme::icon_button_width(ui, &[(ICON_WEBSITE, "Website"), (crate::app::ICON_START, "Run"), (ICON_ADD_FUNDS, "Add funds")]);
-                    let buttons = 1 + usize::from(has_site);
-                    let full = ui.available_width();
-                    let spacing = ui.spacing().item_spacing;
-                    let placement = Placement::of(full - spacing.x, buttons, button_width);
-                    let vertical = placement == Placement::Stacked;
-                    let size = crate::theme::button_group_size(ui, buttons, button_width, vertical);
-                    let details_width = if placement == Placement::Below { full } else { (full - size.x - spacing.x).max(0.0) };
-                    let top_left = ui.cursor().min;
-                    let details = ui
-                        .allocate_ui_with_layout(egui::vec2(details_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            ui.set_width(details_width);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(egui::RichText::new(&script.title).strong().size(16.0));
-                                ui.label(egui::RichText::new(format!("by {}", script.author)).weak());
-                                ui.label(egui::RichText::new(&script.stage).small());
-                                let tag = egui::RichText::new(origin_label(script)).small();
-                                if script.community {
-                                    ui.label(tag.color(egui::Color32::from_rgb(0xff, 0x9e, 0x64)))
-                                        .on_hover_text("Written by a community member, not reviewed by staff. You're warned before it runs.");
-                                } else {
-                                    ui.label(tag.color(crate::theme::BLUE)).on_hover_text("Written by a scripter.");
-                                }
-                                if script.granted {
-                                    ui.label(egui::RichText::new("shared with you").small().color(crate::theme::GREEN));
-                                }
-                            });
-                            ui.label(format!("{} online", script.online));
-                            price_ui(ui, script);
-                            if !script.description.is_empty() {
-                                ui.label(egui::RichText::new(&script.description).weak());
-                            }
-                            if script.granted {
-                                ui.horizontal(|ui| {
-                                    if self.removing.as_deref() == Some(script.id.as_str()) {
-                                        ui.label("Remove it from your account? You'll need a new code to get it back.");
-                                        if ui.button("Remove").clicked() {
-                                            remove = Some(Box::new(script.clone()));
-                                        }
-                                        if ui.button("Keep").clicked() {
-                                            cancel_remove = true;
-                                        }
-                                    } else if ui.small_button("Remove from my account").clicked() {
-                                        start_remove = Some(script.id.clone());
-                                    }
-                                });
-                            }
-                        })
-                        .response
-                        .rect;
-                    let at = match placement {
-                        Placement::Below => egui::pos2(top_left.x, details.bottom() + spacing.y),
-                        _ => egui::pos2(top_left.x + full - size.x, details.bottom().max(top_left.y + size.y) - size.y),
-                    };
-                    crate::theme::button_group_at(ui, egui::Rect::from_min_size(at, size), vertical, |ui| {
-                            if has_site && crate::theme::icon_button(ui, ICON_WEBSITE, "Website", button_width, true).on_hover_text("Opens the script's page on the website.").clicked() {
-                                open_site = Some(format!("/scripts/{}", script.url));
-                            }
-                            if add_funds {
-                                let reason = script.blocked(me.microcredits, me.min_balance_minutes).unwrap_or_default();
-                                if crate::theme::icon_button(ui, ICON_ADD_FUNDS, "Add funds", button_width, true).on_hover_text(reason).clicked() {
-                                    open_site = Some("/credits".to_owned());
-                                }
-                                return;
-                            }
-                            let button = crate::theme::icon_button(ui, crate::app::ICON_START, "Run", button_width, blocked.is_none());
-                            let button = match &blocked {
-                                Some(reason) => button.on_disabled_hover_text(reason),
-                                None => button,
-                            };
-                            if button.clicked() {
-                                run = Some(Box::new(script.clone()));
-                            }
-                    });
-                });
-            }
-        });
-        if start_remove.is_some() {
-            self.removing = start_remove;
+    pub fn redeem(&mut self) -> Option<Action> {
+        if self.redeeming {
+            return None;
         }
-        if cancel_remove {
-            self.removing = None;
+        let code = normalize_share_code(&self.code);
+        if code.is_none() {
+            self.redeem_result = Some((false, INVALID_SHARE_CODE.into()));
         }
-        run.map(Action::Run)
-            .or(remove.map(Action::RemoveGrant))
-            .or(open_site.map(Action::OpenSite))
-            .or(action)
+        code.map(Action::Redeem)
     }
 }
 
@@ -393,6 +259,32 @@ mod tests {
             price_texts(&script("a", 70_000, &[])),
             Some(("0.07\u{a0}CREDIT".into(), "0.001167\u{a0}CREDIT".into()))
         );
+    }
+
+    #[test]
+    fn card_buttons_move_under_the_details_as_the_card_narrows() {
+        let width = px(80.0);
+        assert_eq!(Placement::of(px(500.0), 2, width), Placement::Beside);
+        assert_eq!(Placement::of(px(330.0), 2, width), Placement::Stacked);
+        assert_eq!(Placement::of(px(330.0), 1, width), Placement::Beside);
+        assert_eq!(Placement::of(px(300.0), 2, width), Placement::Below);
+    }
+
+    #[test]
+    fn only_a_well_formed_share_code_is_redeemed() {
+        let mut store = Store {
+            code: "not a code".into(),
+            ..Store::default()
+        };
+        assert!(store.redeem().is_none());
+        assert_eq!(
+            store.redeem_result,
+            Some((false, INVALID_SHARE_CODE.into()))
+        );
+        store.code = "ab".repeat(32);
+        assert!(matches!(store.redeem(), Some(Action::Redeem(code)) if code == "ab".repeat(32)));
+        store.redeeming = true;
+        assert!(store.redeem().is_none() && !store.can_redeem());
     }
 
     #[test]
