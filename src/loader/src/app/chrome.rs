@@ -142,7 +142,6 @@ impl LoaderApp {
                     async {}
                 })
                 .detach();
-                app.tick();
                 app
             })
         })?;
@@ -188,11 +187,7 @@ impl LoaderApp {
                 }
                 if now {
                     due = None;
-                    let ticked = app.update(cx, |app, cx| {
-                        app.tick();
-                        cx.notify();
-                    });
-                    if ticked.is_err() {
+                    if app.update(cx, |_, cx| cx.notify()).is_err() {
                         return;
                     }
                 }
@@ -858,6 +853,7 @@ const SIDEBAR_HANDLE_WIDTH_PX: Pixels = px(SIDEBAR_HANDLE_WIDTH);
 
 impl Render for LoaderApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.tick();
         if self.quit {
             cx.quit();
         }
