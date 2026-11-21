@@ -36,7 +36,7 @@ use crate::libs::Lib;
 use crate::pipe::Rows;
 use crate::script::{Launch, Script, ScriptEvent};
 use crate::session::{self, Kept, Prepared};
-use crate::store::{self, Confirmed, Store};
+use crate::store::{Confirmed, Store};
 use crate::theme::{icon_button, icon_button_width, slide_button};
 use crate::update;
 use crate::storage::Storage;
@@ -408,13 +408,13 @@ impl RunState {
         }
     }
 
-    fn color(self) -> egui::Color32 {
+    fn color(self) -> Rgba {
         match self {
-            Self::Running => crate::theme::GREEN,
-            Self::Waiting => crate::theme::BLUE,
-            Self::Paused => crate::theme::YELLOW,
-            Self::Stopping => crate::theme::RED,
-            Self::Ended => crate::theme::COMMENT,
+            Self::Running => crate::ui::theme::GREEN,
+            Self::Waiting => crate::ui::theme::BLUE,
+            Self::Paused => crate::ui::theme::YELLOW,
+            Self::Stopping => crate::ui::theme::RED,
+            Self::Ended => crate::ui::theme::COMMENT,
         }
     }
 }
@@ -1174,6 +1174,7 @@ pub struct LoaderApp {
     api: Api,
     auth: Auth,
     store: Store,
+    store_page: Option<store_page::Ui>,
     accounts: Arc<RwLock<crate::accounts::Accounts>>,
     http_whitelist: Arc<RwLock<crate::whitelist::Whitelist>>,
     whitelist_page: crate::whitelist::Page,
@@ -1300,6 +1301,7 @@ impl LoaderApp {
             api: Api::new(config.clone()),
             auth: Auth::Restoring,
             store: Store::default(),
+            store_page: None,
             accounts: Arc::new(RwLock::new(crate::accounts::Accounts::load())),
             http_whitelist: Arc::new(RwLock::new(crate::whitelist::Whitelist::new(
                 storage.get(HTTP_WHITELIST_KEY)

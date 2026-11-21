@@ -390,6 +390,27 @@ impl Script {
         self.reply(&injector::antiban::skip_line(kind, index), "skip")
     }
 
+    #[cfg(test)]
+    pub fn stand_in(paused: bool, stopping: bool, finished: bool) -> Self {
+        let mut child = std::process::Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("cat runs");
+        let stdin = child.stdin.take().expect("piped");
+        Self {
+            process: Process::new(child),
+            client: None,
+            stdin: Arc::new(Mutex::new(stdin)),
+            output: channel().1,
+            stderr: Arc::default(),
+            finished,
+            paused,
+            stop_requested: stopping.then(Instant::now),
+            stop_ignored_reported: false,
+        }
+    }
+
     pub fn is_running(&self) -> bool {
         !self.finished
     }
