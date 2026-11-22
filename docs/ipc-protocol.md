@@ -5,7 +5,7 @@ Shared-memory contract between the agent (writer, in the client) and the injecto
 ## Protocol version
 
 - Any change to a layout, a message id, a `worker_kind`, or a field's meaning bumps `PROTOCOL_VERSION` (`lib.rs`).
-- Update together in one change: the agent writer, the readers in `src/decode` and `src/injector/src/win.rs`, the layout tests (`cargo test -p ipc`), and `lib/host.luau` if Luau-visible types change.
+- Update together in one change: the agent writer, the readers in `src/decode` and `src/injector/src/win.rs`, the layout tests (`cargo test -p ipc`), and `sdk/luau/modules/host.luau` if Luau-visible types change.
 - `Header` and the state block both carry the version; readers reject a mismatch as `Incompatible`, which means a stale agent or injector (reload the agent).
 
 ## Concurrency invariants

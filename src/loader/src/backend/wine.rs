@@ -237,6 +237,10 @@ pub fn load(target: &Target, settings: &Settings, cursor: &Cursor) -> Result<Loa
     run_on(Lane::Main, &target.location, &helper, &args)
 }
 
+pub fn agent_version(target: &Target, settings: &Settings) -> Result<String, String> {
+    run_on(Lane::Main, &target.location, &helper(settings)?, &["agent-version"])
+}
+
 pub fn unload(target: &Target, settings: &Settings) -> Result<(), String> {
     call(target, settings, "unload", &[])
 }
@@ -443,13 +447,13 @@ pub fn script_command(
     target: &Target,
     settings: &Settings,
     script: Option<&Path>,
-    lib: Option<&Path>,
+    sdk: Option<&Path>,
 ) -> Result<Command, String> {
     let mut command = wine_command(&target.location, &helper(settings)?);
     let prefix = &target.location.prefix;
     let script = script.and_then(|s| windows_path(prefix, s).ok());
-    let lib = lib.and_then(|l| windows_path(prefix, l).ok());
-    super::run_args(&mut command, script.as_deref(), lib.as_deref());
+    let sdk = sdk.and_then(|l| windows_path(prefix, l).ok());
+    super::run_args(&mut command, script.as_deref(), sdk.as_deref());
     command.arg(target.client.pid.to_string());
     Ok(command)
 }

@@ -1,0 +1,209 @@
+--!strict
+local Host = require("@volcren/host")
+local game_state = Host.game_state
+local widget = Host.widget
+type Skill = Host.Skill
+local Geometry = require("@volcren/geometry")
+local Log = require("@volcren/log")
+local Mouse = require("@volcren/mouse")
+local SidePanels = require("@volcren/side_panels")
+local Box = Geometry.Box
+local Stats = {}
+
+Stats.GROUP = 320
+
+Stats.CHILDREN = {
+	attack = 1,
+	strength = 2,
+	defence = 3,
+	ranged = 4,
+	prayer = 5,
+	magic = 6,
+	runecraft = 7,
+	construction = 8,
+	hitpoints = 9,
+	agility = 10,
+	herblore = 11,
+	thieving = 12,
+	crafting = 13,
+	fletching = 14,
+	slayer = 15,
+	hunter = 16,
+	mining = 17,
+	smithing = 18,
+	fishing = 19,
+	cooking = 20,
+	firemaking = 21,
+	woodcutting = 22,
+	farming = 23,
+	sailing = 24,
+	total = 25,
+} :: { [string]: number }
+
+export type SkillName =
+	"Attack"
+	| "Strength"
+	| "Defence"
+	| "Ranged"
+	| "Prayer"
+	| "Magic"
+	| "Runecraft"
+	| "Construction"
+	| "Hitpoints"
+	| "Agility"
+	| "Herblore"
+	| "Thieving"
+	| "Crafting"
+	| "Fletching"
+	| "Slayer"
+	| "Hunter"
+	| "Mining"
+	| "Smithing"
+	| "Fishing"
+	| "Cooking"
+	| "Firemaking"
+	| "Woodcutting"
+	| "Farming"
+	| "Sailing"
+
+Stats.Skill = table.freeze({
+	Attack = "Attack",
+	Strength = "Strength",
+	Defence = "Defence",
+	Ranged = "Ranged",
+	Prayer = "Prayer",
+	Magic = "Magic",
+	Runecraft = "Runecraft",
+	Construction = "Construction",
+	Hitpoints = "Hitpoints",
+	Agility = "Agility",
+	Herblore = "Herblore",
+	Thieving = "Thieving",
+	Crafting = "Crafting",
+	Fletching = "Fletching",
+	Slayer = "Slayer",
+	Hunter = "Hunter",
+	Mining = "Mining",
+	Smithing = "Smithing",
+	Fishing = "Fishing",
+	Cooking = "Cooking",
+	Firemaking = "Firemaking",
+	Woodcutting = "Woodcutting",
+	Farming = "Farming",
+	Sailing = "Sailing",
+}) :: {
+	Attack: "Attack",
+	Strength: "Strength",
+	Defence: "Defence",
+	Ranged: "Ranged",
+	Prayer: "Prayer",
+	Magic: "Magic",
+	Runecraft: "Runecraft",
+	Construction: "Construction",
+	Hitpoints: "Hitpoints",
+	Agility: "Agility",
+	Herblore: "Herblore",
+	Thieving: "Thieving",
+	Crafting: "Crafting",
+	Fletching: "Fletching",
+	Slayer: "Slayer",
+	Hunter: "Hunter",
+	Mining: "Mining",
+	Smithing: "Smithing",
+	Fishing: "Fishing",
+	Cooking: "Cooking",
+	Firemaking: "Firemaking",
+	Woodcutting: "Woodcutting",
+	Farming: "Farming",
+	Sailing: "Sailing",
+}
+
+function Stats.total_experience(skills: { Skill }?): number?
+	if skills == nil then
+		return nil
+	end
+	local total = 0
+	for _, skill in ipairs(skills) do
+		total += skill.xp
+	end
+	return total
+end
+
+function Stats.total_level(skills: { Skill }?): number?
+	if skills == nil then
+		return nil
+	end
+	local total = 0
+	for _, skill in ipairs(skills) do
+		total += skill.real_level
+	end
+	return total
+end
+
+function Stats.get(name: string): Skill?
+	local state = game_state()
+	local wanted = string.lower(name)
+	for _, skill in ipairs(state.skills or {}) do
+		if string.lower(skill.name) == wanted then
+			return skill
+		end
+	end
+	return nil
+end
+
+function Stats.level(name: string): number?
+	local skill = Stats.get(name)
+	return if skill then skill.level else nil
+end
+
+function Stats.real_level(name: string): number?
+	local skill = Stats.get(name)
+	return if skill then skill.real_level else nil
+end
+
+function Stats.xp(name: string): number?
+	local skill = Stats.get(name)
+	return if skill then skill.xp else nil
+end
+
+local function skill_child(name: string): number?
+	local child = Stats.CHILDREN[string.lower(name)]
+	if child == nil then
+		Log.log("Stats", `unknown skill {name}`)
+	end
+	return child
+end
+
+function Stats.hover(name: string): boolean
+	local child = skill_child(name)
+	if child == nil then
+		return false
+	end
+	if SidePanels.open(SidePanels.STATS) ~= true then
+		return false
+	end
+	local box = widget(Stats.GROUP, child)
+	if box == nil or box.hidden then
+		return false
+	end
+	Mouse.move(Box.new(box.x + 2, box.y + 2, box.x + box.width - 2, box.y + box.height - 2))
+	return true
+end
+
+function Stats.hover_async(name: string): boolean
+	local child = skill_child(name)
+	if child == nil then
+		return false
+	end
+	local box = widget(Stats.GROUP, child)
+	if box == nil then
+		return false
+	end
+	if not SidePanels.open_async(SidePanels.STATS) then
+		return false
+	end
+	Mouse.move_async(Box.new(box.x + 2, box.y + 2, box.x + box.width - 2, box.y + box.height - 2))
+	return true
+end
+
+return Stats

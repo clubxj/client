@@ -9,8 +9,7 @@ path = "src/main.rs"
 required-features = ["agent"]
 
 [features]
-default = ["embedded-lib", "agent"]
-embedded-lib = []
+default = ["agent"]
 agent = []
 
 [dependencies]

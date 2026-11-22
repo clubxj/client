@@ -1,0 +1,32 @@
+# Varbits
+
+Read varbits: values stored in a few bits of a varp. The varp and bits are looked up from the game files.
+
+```luau
+local Varbits = require("@volcren/varbits")
+```
+
+## Constants
+
+Definition:
+```luau
+Varbits.SPELLBOOK = 4070
+Varbits.BUSY = 12393
+Varbits.GRICOLLER_CAN_CHARGES = 4908
+```
+`SPELLBOOK`: 0 standard, 1 ancient, 2 lunar, 3 arceuus. `BUSY`: 1 during an uninterruptible action (knocked down, untying a rope); walk clicks do nothing until 0. `GRICOLLER_CAN_CHARGES`: the Gricoller's can's charges, 0 to 1000; the item id stays the same at every fill level. `injector varbits-of <pid> <varp>` lists a varp's varbits by name.
+
+## Varbits.get
+
+Definition:
+```luau
+function Varbits.get(id: number): number?
+```
+A varbit's value, or `nil` when unavailable.
+
+Example:
+```luau
+local Varbits = require("@volcren/varbits")
+
+print("spellbook:", Varbits.get(Varbits.SPELLBOOK))
+```

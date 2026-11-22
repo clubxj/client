@@ -14,14 +14,14 @@ pub use imp::*;
 fn run_args(
     command: &mut std::process::Command,
     script: Option<impl AsRef<std::ffi::OsStr>>,
-    lib: Option<impl AsRef<std::ffi::OsStr>>,
+    sdk: Option<impl AsRef<std::ffi::OsStr>>,
 ) {
     command.arg("run");
     if let Some(script) = script {
         command.arg("--script").arg(script);
-        if let Some(lib) = lib {
-            command.arg("--lib").arg(lib);
-        }
+    }
+    if let Some(sdk) = sdk {
+        command.arg("--sdk").arg(sdk);
     }
 }
 
@@ -31,7 +31,7 @@ pub const LOG_LINES: std::ops::RangeInclusive<usize> = 2000..=10_000;
 #[serde(default)]
 pub struct Settings {
     pub helper: String,
-    pub lib_dir: String,
+    pub sdk_dir: String,
     pub antiban: injector::antiban::Config,
     pub transports: injector::transports::Settings,
     pub include_system_info: bool,
@@ -47,7 +47,7 @@ impl Default for Settings {
             .unwrap_or_default();
         Self {
             helper: detect(&exe_dir, "injector.exe"),
-            lib_dir: String::new(),
+            sdk_dir: String::new(),
             antiban: Default::default(),
             transports: Default::default(),
             include_system_info: true,
@@ -78,6 +78,13 @@ fn detect(exe_dir: &Path, name: &str) -> String {
 }
 
 impl Settings {
+    pub fn with_helper(&self, helper: &Path) -> Self {
+        Self {
+            helper: helper.display().to_string(),
+            ..self.clone()
+        }
+    }
+
     pub fn fill_missing(&mut self) {
         self.resolve_paths(Self::default());
         self.log_lines = self.log_lines.clamp(*LOG_LINES.start(), *LOG_LINES.end());

@@ -18,6 +18,10 @@ fn default_grace() -> u32 {
     DEFAULT_FINISH_GRACE_MINUTES
 }
 
+fn default_auto_forward() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -29,6 +33,8 @@ pub struct Manifest {
     pub settings: Option<Value>,
     #[serde(default = "default_grace")]
     pub finish_grace_minutes: u32,
+    #[serde(default = "default_auto_forward")]
+    pub auto_forward: bool,
 }
 
 impl Default for Manifest {
@@ -38,6 +44,7 @@ impl Default for Manifest {
             goals: Vec::new(),
             settings: None,
             finish_grace_minutes: DEFAULT_FINISH_GRACE_MINUTES,
+            auto_forward: true,
         }
     }
 }
@@ -139,11 +146,13 @@ mod tests {
             "queueable": true,
             "goals": [{ "id": "kills", "label": "Kills" }],
             "finish_grace_minutes": 10,
+            "auto_forward": false,
             "settings": { "fields": [{ "id": "eat_at", "kind": "number", "default": 50 }] }
         }))
         .unwrap();
         assert!(manifest.queueable);
         assert_eq!(manifest.finish_grace_minutes, 10);
+        assert!(!manifest.auto_forward);
         assert_eq!(manifest.goal("kills").unwrap().label, "Kills");
         assert_eq!(manifest.defaults(), json!({ "eat_at": 50 }));
     }
@@ -153,6 +162,7 @@ mod tests {
         for bad in [
             json!({ "queuable": true }),
             json!({ "queueable": "yes" }),
+            json!({ "auto_forward": "no" }),
             json!({ "finish_grace_minutes": 0 }),
             json!({ "finish_grace_minutes": 121 }),
             json!({ "goals": [{ "id": "Kills", "label": "Kills" }] }),

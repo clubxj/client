@@ -1089,159 +1089,36 @@ impl Sandbox<'_> {
     }
 }
 
-#[cfg(feature = "embedded-lib")]
-macro_rules! lib_module {
-    ($name:literal, $path:literal) => {
-        (
-            $name,
-            $path,
-            include_str!(concat!("../../../../lib/", $path)),
-        )
-    };
+include!(concat!(env!("OUT_DIR"), "/sdk_modules.rs"));
+
+const SDK_ALIAS: &str = "@volcren/";
+
+fn sdk_module_name(path: &str) -> Option<&str> {
+    path.strip_prefix(SDK_ALIAS).filter(|name| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
-#[cfg(feature = "embedded-lib")]
-const LIB_MODULES: &[(&str, &str, &str)] = &[
-    lib_module!("host", "host.luau"),
-    lib_module!("game_state", "main/game_state.luau"),
-    lib_module!("position", "main/position.luau"),
-    lib_module!("titlescreen", "main/interfaces/login/titlescreen.luau"),
-    lib_module!("login", "main/interfaces/login/login.luau"),
-    lib_module!(
-        "login_world_switcher",
-        "main/interfaces/login/login_world_switcher.luau"
-    ),
-    lib_module!("logout", "main/interfaces/gametabs/logout.luau"),
-    lib_module!(
-        "worldswitcher",
-        "main/interfaces/gametabs/worldswitcher.luau"
-    ),
-    lib_module!("stats", "main/interfaces/gametabs/stats.luau"),
-    lib_module!(
-        "welcome_screen",
-        "main/interfaces/login/welcome_screen.luau"
-    ),
-    lib_module!("inventory", "main/interfaces/gametabs/inventory.luau"),
-    lib_module!("wornitems", "main/interfaces/gametabs/wornitems.luau"),
-    lib_module!("side_panels", "main/interfaces/gametabs/side_panels.luau"),
-    lib_module!("combat_achievements", "main/combat_achievements.luau"),
-    lib_module!("magic", "main/interfaces/gametabs/magic.luau"),
-    lib_module!("journal", "main/interfaces/gametabs/journal.luau"),
-    lib_module!("prayer", "main/interfaces/gametabs/prayer.luau"),
-    lib_module!("npcs", "main/entities/npcs.luau"),
-    lib_module!("objects", "main/entities/objects.luau"),
-    lib_module!("ground_items", "main/entities/ground_items.luau"),
-    lib_module!("projectiles", "main/entities/projectiles.luau"),
-    lib_module!("spot_anims", "main/entities/spot_anims.luau"),
-    lib_module!("clickbox", "main/clickbox.luau"),
-    lib_module!("varps", "main/varps.luau"),
-    lib_module!("varbits", "main/varbits.luau"),
-    lib_module!("player", "main/player.luau"),
-    lib_module!("handoff", "main/handoff.luau"),
-    lib_module!("projection", "main/projection/projection.luau"),
-    lib_module!("camera", "main/camera.luau"),
-    lib_module!("walker", "main/walker.luau"),
-    lib_module!("debug_draw", "main/debug_draw.luau"),
-    lib_module!("pinball", "main/pinball.luau"),
-    lib_module!("safespot", "main/safespot.luau"),
-    lib_module!("combat_safespot", "main/combat_safespot.luau"),
-    lib_module!("players", "main/entities/players.luau"),
-    lib_module!("bankmain", "main/interfaces/mainscreen/bankmain.luau"),
-    lib_module!(
-        "bankpin_keypad",
-        "main/interfaces/mainscreen/bankpin_keypad.luau"
-    ),
-    lib_module!("depositbox", "main/interfaces/mainscreen/depositbox.luau"),
-    lib_module!("toplevel", "main/interfaces/mainscreen/toplevel.luau"),
-    lib_module!("chartering", "main/interfaces/mainscreen/chartering.luau"),
-    lib_module!("mushtree", "main/interfaces/mainscreen/mushtree.luau"),
-    lib_module!("quetzal", "main/interfaces/mainscreen/quetzal.luau"),
-    lib_module!("spirittree", "main/interfaces/mainscreen/spirittree.luau"),
-    lib_module!("minecart", "main/interfaces/mainscreen/minecart.luau"),
-    lib_module!("gnomeglider", "main/interfaces/mainscreen/gnomeglider.luau"),
-    lib_module!("balloon", "main/interfaces/mainscreen/balloon.luau"),
-    lib_module!("obelisk", "main/interfaces/mainscreen/obelisk.luau"),
-    lib_module!("nexus", "main/interfaces/mainscreen/nexus.luau"),
-    lib_module!("house", "main/house.luau"),
-    lib_module!("mounted", "main/interfaces/mainscreen/mounted.luau"),
-    lib_module!("canoe", "main/interfaces/mainscreen/canoe.luau"),
-    lib_module!("fairyring", "main/interfaces/mainscreen/fairyring.luau"),
-    lib_module!("certer", "main/interfaces/mainscreen/certer.luau"),
-    lib_module!("minigames", "main/interfaces/mainscreen/minigames.luau"),
-    lib_module!(
-        "jewellerybox",
-        "main/interfaces/mainscreen/jewellerybox.luau"
-    ),
-    lib_module!("lamp", "main/interfaces/mainscreen/lamp.luau"),
-    lib_module!("anvil", "main/interfaces/mainscreen/anvil.luau"),
-    lib_module!(
-        "surprise_exam",
-        "main/interfaces/mainscreen/surprise_exam.luau"
-    ),
-    lib_module!(
-        "itemretrieval",
-        "main/interfaces/mainscreen/itemretrieval.luau"
-    ),
-    lib_module!("occult_altar", "main/occult_altar.luau"),
-    lib_module!("randoms", "main/antiban/randoms.luau"),
-    lib_module!("scrollbook", "main/interfaces/mainscreen/scrollbook.luau"),
-    lib_module!("shopmain", "main/interfaces/mainscreen/shopmain.luau"),
-    lib_module!("boltpouch", "main/interfaces/mainscreen/boltpouch.luau"),
-    lib_module!("runepouch", "main/interfaces/mainscreen/runepouch.luau"),
-    lib_module!("bankpouch", "main/interfaces/mainscreen/bankpouch.luau"),
-    lib_module!("widgets", "main/interfaces/widgets.luau"),
-    lib_module!("chatbox", "main/interfaces/chatbox/chatbox.luau"),
-    lib_module!(
-        "recommend_survey",
-        "main/interfaces/chatbox/recommend_survey.luau"
-    ),
-    lib_module!("skillmulti", "main/interfaces/chatbox/skillmulti.luau"),
-    lib_module!("make", "main/interfaces/chatbox/make.luau"),
-    lib_module!("chat", "main/interfaces/chatbox/chat.luau"),
-    lib_module!("chat_tabs", "main/interfaces/chatbox/chat_tabs.luau"),
-    lib_module!("chat_options", "main/interfaces/chatbox/chat_options.luau"),
-    lib_module!("minimenu", "main/interfaces/minimenu.luau"),
-    lib_module!("minimap", "main/interfaces/minimap.luau"),
-    lib_module!("interact", "main/interact.luau"),
-    lib_module!("inv", "main/interfaces/inv.luau"),
-    lib_module!("item", "utils/item.luau"),
-    lib_module!("item_data", "utils/item_data.luau"),
-    lib_module!("game_val", "utils/game_val.luau"),
-    lib_module!("draw", "utils/draw.luau"),
-    lib_module!("random", "utils/math/random.luau"),
-    lib_module!("biometrics", "main/antiban/biometrics.luau"),
-    lib_module!("antiban", "main/antiban/antiban.luau"),
-    lib_module!("antiban_tasks", "main/antiban/antiban_tasks.luau"),
-    lib_module!("transports", "main/transports.luau"),
-    lib_module!("quests", "main/quests.luau"),
-    lib_module!("diaries", "main/diaries.luau"),
-    lib_module!("cs2", "utils/cs2.luau"),
-    lib_module!("geometry", "utils/math/geometry.luau"),
-    lib_module!("mouse", "utils/input/mouse.luau"),
-    lib_module!("track", "utils/input/track.luau"),
-    lib_module!("keyboard", "utils/input/keyboard.luau"),
-    lib_module!("ticks", "utils/ticks.luau"),
-    lib_module!("stats_report", "utils/stats_report.luau"),
-    lib_module!("log", "utils/log.luau"),
-    lib_module!("npc_health", "main/entities/npc_health.luau"),
-    lib_module!("special_attack", "main/interfaces/special_attack.luau"),
-    lib_module!("combat", "main/interfaces/gametabs/combat.luau"),
-    lib_module!("ferox", "main/ferox.luau"),
-    lib_module!("layout_item", "main/layout_item.luau"),
-    lib_module!("equipment_layout", "main/equipment_layout.luau"),
-    lib_module!("inventory_layout", "main/inventory_layout.luau"),
-    lib_module!("prayer_layout", "main/prayer_layout.luau"),
-    lib_module!("consumables", "main/consumables.luau"),
-];
-
-#[cfg(not(feature = "embedded-lib"))]
-const LIB_MODULES: &[(&str, &str, &str)] = &[];
-
-fn module_name(path: &str) -> &str {
-    let file = path.rsplit('/').next().unwrap_or(path);
-    file.strip_suffix(".luau")
-        .or_else(|| file.strip_suffix(".lua"))
-        .unwrap_or(file)
+fn sdk_source(name: &str, sdk_dir: Option<&Path>) -> Result<String, String> {
+    match sdk_dir {
+        Some(dir) => {
+            let file = dir.join("modules").join(format!("{name}.luau"));
+            std::fs::read_to_string(&file).map_err(|e| {
+                format!(
+                    "module '{SDK_ALIAS}{name}': cannot read {}: {e}",
+                    file.display()
+                )
+            })
+        }
+        None => SDK_MODULES
+            .iter()
+            .find(|&&(module, _)| module == name)
+            .map(|&(_, source)| source.to_owned())
+            .ok_or_else(|| format!("module '{SDK_ALIAS}{name}' isn't in the SDK")),
+    }
 }
 
 #[cfg(windows)]
@@ -1304,38 +1181,6 @@ fn find_module(
         .ok_or_else(|| candidates.into())
 }
 
-fn embedded_module(path: &str) -> Result<(&'static str, String), String> {
-    let name = module_name(path);
-    let &(_, file, source) = LIB_MODULES
-        .iter()
-        .find(|&&(n, _, _)| n == name)
-        .ok_or_else(|| {
-            let known: Vec<&str> = LIB_MODULES.iter().map(|&(n, _, _)| n).collect();
-            format!("module '{path}' not found, lib has: {}", known.join(", "))
-        })?;
-    let source = match std::env::var_os("VOLCREN_LIB_DIR") {
-        Some(dir) => std::fs::read_to_string(Path::new(&dir).join(file))
-            .map_err(|e| format!("VOLCREN_LIB_DIR: cannot read {file}: {e}"))?,
-        None => source.to_string(),
-    };
-    Ok((file, source))
-}
-
-fn lib_alias(path: &str) -> Option<&str> {
-    path.strip_prefix("@lib/").filter(|rest| !rest.is_empty())
-}
-
-fn lib_relative(path: &str) -> Option<&str> {
-    let mut rest = path;
-    let mut stepped = false;
-    while let Some(next) = rest.strip_prefix("../").or_else(|| rest.strip_prefix("./")) {
-        rest = next;
-        stepped = true;
-    }
-    rest.strip_prefix("lib/")
-        .filter(|r| stepped && !r.is_empty())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn run_with_modules(
     name: &str,
@@ -1343,7 +1188,7 @@ pub fn run_with_modules(
     pid: Option<u32>,
     print: impl FnMut(String) + 'static,
     script_path: Option<&Path>,
-    lib_dir: Option<&Path>,
+    sdk_dir: Option<&Path>,
     modules: HashMap<String, String>,
 ) -> mlua::Result<()> {
     let lua = Lua::new_with(
@@ -1377,77 +1222,60 @@ pub fn run_with_modules(
             .collect(),
         None => HashMap::new(),
     };
-    let script_chunk = script_path.map(|_| format!("={name}"));
-    let lib_root = lib_dir
-        .map(Path::to_path_buf)
-        .or_else(|| script_dir.map(|d| d.join("../lib")));
-    let lib_dir = lib_dir.map(Path::to_path_buf);
+    let sdk_dir = sdk_dir.map(Path::to_path_buf);
 
     let loaded = lua.create_table()?;
     s.set(
         "require",
         lua.create_function(move |lua, path: String| {
-            let alias = lib_alias(&path).map(str::to_string);
-            let path = match &alias {
-                Some(rest) => format!("../lib/{rest}"),
-                None => path,
-            };
-            let relative = path.starts_with("./") || path.starts_with("../");
+            let runtime = mlua::Error::RuntimeError;
+            if let Some(module) = sdk_module_name(&path) {
+                let cached: mlua::Value = loaded.get(path.as_str())?;
+                if !cached.is_nil() {
+                    return Ok(cached);
+                }
+                let source = sdk_source(module, sdk_dir.as_deref()).map_err(runtime)?;
+                let value: mlua::Value = lua.load(source).set_name(format!("={path}")).eval()?;
+                loaded.set(path, value.clone())?;
+                return Ok(value);
+            }
+            if !(path.starts_with("./") || path.starts_with("../")) {
+                return Err(runtime(format!(
+                    "cannot require '{path}': paths start with '{SDK_ALIAS}', './' or '../'"
+                )));
+            }
             let from = lua
                 .inspect_stack(1, |d| d.source().source.map(|s| s.into_owned()))
                 .flatten();
-            let from_script = from.is_some() && from == script_chunk;
             let dir = from
                 .and_then(|chunk| dirs.borrow().get(&chunk).cloned())
-                .filter(|_| relative);
-
-            let found = match (&alias, &lib_root, &lib_dir, lib_relative(&path)) {
-                (Some(rest), Some(root), _, _) => Some(find_module(root, rest, &memory)),
-                (_, _, Some(lib), Some(rest)) if from_script => {
-                    Some(find_module(lib, rest, &memory))
-                }
-                _ => dir.map(|dir| find_module(&dir, &path, &memory)),
-            };
-            let key = match &found {
-                Some(Ok(file)) => file.display().to_string(),
-                _ => module_name(&path).to_string(),
-            };
+                .ok_or_else(|| {
+                    runtime(format!(
+                        "cannot require '{path}': only a script file and its own files can require relative paths"
+                    ))
+                })?;
+            let file = find_module(&dir, &path, &memory).map_err(|tried| {
+                let tried: Vec<String> = tried.iter().map(|p| p.display().to_string()).collect();
+                runtime(format!(
+                    "module '{path}' not found, tried: {}",
+                    tried.join(", ")
+                ))
+            })?;
+            let key = file.display().to_string();
             let cached: mlua::Value = loaded.get(key.as_str())?;
             if !cached.is_nil() {
                 return Ok(cached);
             }
-
-            let (chunk, source) = match found {
-                Some(Ok(file)) => {
-                    let source = match memory.get(&file) {
-                        Some(text) => text.clone(),
-                        None => std::fs::read_to_string(&file).map_err(|e| {
-                            mlua::Error::RuntimeError(format!("cannot read {key}: {e}"))
-                        })?,
-                    };
-                    dirs.borrow_mut().insert(
-                        format!("={key}"),
-                        file.parent().map(Path::to_path_buf).unwrap_or_default(),
-                    );
-                    (key.clone(), source)
-                }
-                found => {
-                    let (file, source) =
-                        embedded_module(&path).map_err(|embedded| match found {
-                            Some(Err(tried)) => {
-                                let tried: Vec<String> =
-                                    tried.iter().map(|p| p.display().to_string()).collect();
-                                mlua::Error::RuntimeError(format!(
-                                    "module '{path}' not found, tried: {}",
-                                    tried.join(", ")
-                                ))
-                            }
-                            _ => mlua::Error::RuntimeError(embedded),
-                        })?;
-                    (format!("lib/{file}"), source)
-                }
+            let source = match memory.get(&file) {
+                Some(text) => text.clone(),
+                None => std::fs::read_to_string(&file)
+                    .map_err(|e| runtime(format!("cannot read {key}: {e}")))?,
             };
-            let value: mlua::Value = lua.load(source).set_name(format!("={chunk}")).eval()?;
+            dirs.borrow_mut().insert(
+                format!("={key}"),
+                file.parent().map(Path::to_path_buf).unwrap_or_default(),
+            );
+            let value: mlua::Value = lua.load(source).set_name(format!("={key}")).eval()?;
             loaded.set(key, value.clone())?;
             Ok(value)
         })?,
@@ -2138,7 +1966,7 @@ mod tests {
         name: &str,
         source: &str,
         script_path: Option<&Path>,
-        lib_dir: Option<&Path>,
+        sdk_dir: Option<&Path>,
         modules: HashMap<String, String>,
     ) -> (Vec<String>, mlua::Result<()>) {
         let lines = Rc::new(RefCell::new(Vec::new()));
@@ -2149,7 +1977,7 @@ mod tests {
             None,
             move |line| collected.borrow_mut().push(line),
             script_path,
-            lib_dir,
+            sdk_dir,
             modules,
         );
         (Rc::try_unwrap(lines).unwrap().into_inner(), result)
@@ -2162,10 +1990,10 @@ mod tests {
     fn run_script_at(
         path: &Path,
         source: &str,
-        lib_dir: Option<&Path>,
+        sdk_dir: Option<&Path>,
     ) -> (Vec<String>, mlua::Result<()>) {
         let name = path.file_name().unwrap().to_string_lossy();
-        run_collect(&name, source, Some(path), lib_dir, HashMap::new())
+        run_collect(&name, source, Some(path), sdk_dir, HashMap::new())
     }
 
     #[test]
@@ -2465,10 +2293,7 @@ mod tests {
 
     #[test]
     fn modules_given_in_memory_are_required_without_files() {
-        let dir = scratch(
-            "requires_memory",
-            &[("lib/host.luau", "return { name = 'host' }")],
-        );
+        let dir = scratch("requires_memory", &[]);
         let script = dir.join("scripts/run.luau");
         std::fs::create_dir_all(script.parent().unwrap()).unwrap();
         let modules = HashMap::from([
@@ -2482,10 +2307,10 @@ mod tests {
                 "return { name = 'deeper' }".to_owned(),
             ),
         ]);
-        let source = "local Util = require('./util')\nprint(Util.name, Util.other, require('../lib/host').name, require('./util') == Util)";
+        let source = "local Util = require('./util')\nprint(Util.name, Util.other, type(require('@volcren/host')), require('./util') == Util)";
         let (lines, result) = run_collect("run.luau", source, Some(&script), None, modules);
         result.unwrap();
-        assert_eq!(lines, ["util\tdeeper\thost\ttrue"]);
+        assert_eq!(lines, ["util\tdeeper\ttable\ttrue"]);
         assert!(
             !dir.join("scripts/util.luau").exists(),
             "nothing is written out"
@@ -2498,19 +2323,19 @@ mod tests {
         let dir = scratch(
             "requires_resolve",
             &[
-                ("lib/host.luau", "return { name = 'host' }"),
+                ("shared/host.luau", "return { name = 'host' }"),
                 (
-                    "lib/main/walker.luau",
+                    "shared/main/walker.luau",
                     "local Host = require('../host')\nreturn { host = Host, lazy = function() return require('./extra') end }",
                 ),
-                ("lib/main/extra/init.luau", "return { name = 'extra' }"),
+                ("shared/main/extra/init.luau", "return { name = 'extra' }"),
             ],
         );
         let script = dir.join("scripts/run.luau");
         let (lines, result) = run_script_at(
             &script,
-            "local Walker = require('../lib/main/walker')\n\
-             print(Walker.host == require('../lib/host'), Walker.host.name, Walker.lazy().name)",
+            "local Walker = require('../shared/main/walker')\n\
+             print(Walker.host == require('../shared/host'), Walker.host.name, Walker.lazy().name)",
             None,
         );
         result.unwrap();
@@ -2518,90 +2343,80 @@ mod tests {
     }
 
     #[test]
-    fn lib_modules_require_each_other_through_the_alias() {
+    fn sdk_modules_load_once_however_they_are_reached() {
+        let (lines, result) = run_lines(
+            "local Walker = require('@volcren/walker')\n\
+             print(Walker == require('@volcren/walker'), require('@volcren/host') == require('@volcren/host'))",
+        );
+        result.unwrap();
+        assert_eq!(lines, ["true\ttrue"]);
+    }
+
+    #[test]
+    fn an_sdk_folder_replaces_the_embedded_modules() {
         let dir = scratch(
-            "lib_alias_from_lib",
+            "requires_sdk_dir",
             &[
-                ("lib/host.luau", "return { name = 'host' }"),
+                ("sdk/modules/host.luau", "return { name = 'mine' }"),
                 (
-                    "lib/main/deep/walker.luau",
-                    "return { host = require('@lib/host'), same = require('@lib/main/other') }",
+                    "sdk/modules/walker.luau",
+                    "return { host = require('@volcren/host') }",
                 ),
-                ("lib/main/other.luau", "return { name = 'other' }"),
+                ("sdk/modules/bad.luau", "\nerror('boom')"),
             ],
         );
+        let sdk = dir.join("sdk");
         let script = dir.join("scripts/run.luau");
         let (lines, result) = run_script_at(
             &script,
-            "local W = require('@lib/main/deep/walker')\n\
-             print(W.host == require('../lib/host'), W.host.name, W.same.name)",
-            None,
+            "print(require('@volcren/host').name, require('@volcren/walker').host.name)",
+            Some(&sdk),
         );
-        result.unwrap();
-        assert_eq!(lines, ["true\thost\tother"]);
-    }
-
-    #[test]
-    fn lib_alias_names_the_path_inside_the_lib() {
-        assert_eq!(lib_alias("@lib/main/walker"), Some("main/walker"));
-        assert_eq!(lib_alias("../lib/host"), None);
-        assert_eq!(lib_alias("@library/host"), None);
-        assert_eq!(lib_alias("@lib/"), None);
-    }
-
-    #[test]
-    fn lib_relative_names_the_path_inside_the_lib() {
-        assert_eq!(lib_relative("../lib/main/walker"), Some("main/walker"));
-        assert_eq!(lib_relative("./lib/host"), Some("host"));
-        assert_eq!(lib_relative("../../lib/host"), Some("host"));
-        assert_eq!(lib_relative("lib/host"), None);
-        assert_eq!(lib_relative("../library/host"), None);
-        assert_eq!(lib_relative("../lib/"), None);
-        assert_eq!(lib_relative("./extra"), None);
-    }
-
-    #[test]
-    fn a_lib_folder_replaces_the_lib_beside_the_script() {
-        let dir = scratch(
-            "requires_lib_dir",
-            &[
-                ("lib/host.luau", "return { name = 'beside' }"),
-                ("mine/host.luau", "return { name = 'mine' }"),
-                (
-                    "mine/main/walker.luau",
-                    "local Host = require('../host')\nreturn { host = Host }",
-                ),
-            ],
-        );
-        let source = "print(require('../lib/host').name, require('../lib/main/walker').host.name)";
-        let script = dir.join("scripts/run.luau");
-
-        let (lines, result) = run_script_at(&script, source, Some(&dir.join("mine")));
         result.unwrap();
         assert_eq!(lines, ["mine\tmine"]);
 
-        let (lines, result) = run_script_at(&script, "print(require('../lib/host').name)", None);
-        result.unwrap();
-        assert_eq!(lines, ["beside"]);
+        let (_, result) = run_script_at(&script, "require('@volcren/bad')", Some(&sdk));
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("@volcren/bad:2: boom"), "{error}");
+
+        let (_, result) = run_script_at(&script, "require('@volcren/nope')", Some(&sdk));
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("module '@volcren/nope': cannot read") && error.contains("nope.luau"),
+            "{error}"
+        );
     }
 
     #[test]
-    fn a_module_missing_from_the_lib_folder_is_an_error_naming_it() {
-        let dir = scratch(
-            "requires_lib_dir_missing",
-            &[
-                ("mine/host.luau", "return {}"),
-                ("lib/nope.luau", "return {}"),
-            ],
-        );
-        let (_, result) = run_script_at(
-            &dir.join("scripts/run.luau"),
-            "require('../lib/nope')",
-            Some(&dir.join("mine")),
-        );
+    fn requires_must_name_an_sdk_module_or_a_relative_file() {
+        for path in [
+            "walker",
+            "@lib/host",
+            "@volcren/",
+            "@volcren/../host",
+            "@volcren/main/walker",
+        ] {
+            let (_, result) = run_lines(&format!("require('{path}')"));
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains("paths start with '@volcren/', './' or '../'"),
+                "{path}: {error}"
+            );
+        }
+        let (_, result) = run_lines("require('@volcren/nope')");
         let error = result.unwrap_err().to_string();
         assert!(
-            error.contains("module '../lib/nope' not found, tried:") && error.contains("mine"),
+            error.contains("module '@volcren/nope' isn't in the SDK"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn relative_requires_need_a_script_file() {
+        let (_, result) = run_lines("require('./util')");
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("only a script file and its own files can require relative paths"),
             "{error}"
         );
     }
@@ -2609,10 +2424,10 @@ mod tests {
     #[test]
     fn missing_relative_requires_name_what_was_tried() {
         let dir = scratch("requires_missing", &[]);
-        let (_, result) = run_script_at(&dir.join("run.luau"), "require('../lib/nope')", None);
+        let (_, result) = run_script_at(&dir.join("run.luau"), "require('../shared/nope')", None);
         let error = result.unwrap_err().to_string();
         assert!(
-            error.contains("module '../lib/nope' not found, tried:"),
+            error.contains("module '../shared/nope' not found, tried:"),
             "{error}"
         );
         assert!(error.contains("nope.luau"), "{error}");
@@ -2620,8 +2435,8 @@ mod tests {
 
     #[test]
     fn errors_in_disk_modules_name_their_file() {
-        let dir = scratch("requires_errors", &[("lib/bad.luau", "\nerror('boom')")]);
-        let (_, result) = run_script_at(&dir.join("run.luau"), "require('./lib/bad')", None);
+        let dir = scratch("requires_errors", &[("shared/bad.luau", "\nerror('boom')")]);
+        let (_, result) = run_script_at(&dir.join("run.luau"), "require('./shared/bad')", None);
         let error = result.unwrap_err().to_string();
         assert!(error.contains("bad.luau:2: boom"), "{error}");
     }
@@ -2648,24 +2463,22 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn requires_lib_modules() {
         let (lines, result) = run_lines(
-            "local GameState = require('game_state')\n\
+            "local GameState = require('@volcren/game_state')\n\
              print(GameState.LOGGED_IN, GameState.name(GameState.LOGGED_IN))\n\
-             local Position = require('position')\n\
+             local Position = require('@volcren/position')\n\
              print(Position.new(0, 0, 3213, 3428):chunk():id())\n\
-             print(require('game_state') == GameState)",
+             print(require('@volcren/game_state') == GameState)",
         );
         assert_eq!(lines, ["30\tlogged in", "12853", "true"]);
         assert!(result.is_ok());
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn skills_sums_experience() {
         let (lines, result) = run_lines(
-            "local Stats = require('stats')\n\
+            "local Stats = require('@volcren/stats')\n\
              print(Stats.total_experience(nil))\n\
              print(Stats.total_experience({ { name = 'Attack', level = 1, real_level = 1, xp = 0 } }))\n\
              print(Stats.total_experience({\n\
@@ -2692,10 +2505,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn login_screen_buttons_follow_the_clients_layout() {
         let (lines, result) = run_lines(
-            "local TitleScreen = require('titlescreen')\n\
+            "local TitleScreen = require('@volcren/titlescreen')\n\
              local login = { screen = 24, panel_x = 318, box_x = 520, center_x = 700, y = 171 }\n\
              local b = TitleScreen.button(login, 'try_again')\n\
              print(b.label, b.x1, b.y1, b.x2, b.y2, b.center_x, b.center_y)\n\
@@ -2729,10 +2541,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn lobby_needs_a_client_and_knows_its_screen() {
         let (lines, result) = run_lines(
-            "local WelcomeScreen = require('welcome_screen')\n\
+            "local WelcomeScreen = require('@volcren/welcome_screen')\n\
              print(WelcomeScreen.is_open({ game_state = 30, root_interface = 165 }), WelcomeScreen.is_open({ game_state = 30, root_interface = 161 }))\n\
              print(pcall(WelcomeScreen.play))\n\
              print(widget(378, 72))",
@@ -2748,53 +2559,29 @@ mod tests {
     }
 
     #[test]
-    fn every_lib_module_loads() {
-        let source: String = LIB_MODULES
+    fn every_sdk_module_loads() {
+        let source: String = SDK_MODULES
             .iter()
-            .map(|(name, _, _)| format!("assert(type(require('{name}')) == 'table', '{name}')\n"))
+            .map(|(name, _)| {
+                format!("assert(type(require('@volcren/{name}')) == 'table', '{name}')\n")
+            })
             .collect();
         let (_, result) = run_lines(&source);
         assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
-    fn every_lib_file_is_a_lib_module() {
-        fn files(dir: &std::path::Path, found: &mut Vec<String>, root: &std::path::Path) {
-            for entry in std::fs::read_dir(dir).unwrap().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    files(&path, found, root);
-                } else if path.extension().is_some_and(|e| e == "luau") {
-                    let relative = path.strip_prefix(root).unwrap();
-                    found.push(relative.to_string_lossy().replace('\\', "/"));
-                }
-            }
-        }
-        let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../lib");
-        let mut found = vec!["host.luau".to_owned()];
-        files(&lib.join("main"), &mut found, &lib);
-        files(&lib.join("utils"), &mut found, &lib);
-        let missing: Vec<&String> = found
-            .iter()
-            .filter(|file| !LIB_MODULES.iter().any(|(_, path, _)| path == file))
-            .collect();
-        assert!(missing.is_empty(), "not in LIB_MODULES: {missing:?}");
-    }
-
-    #[test]
-    #[cfg(feature = "embedded-lib")]
     fn items_match_by_id_or_name() {
         let (lines, result) = run_lines(
-            "local Item = require('item')\n\
+            "local Item = require('@volcren/item')\n\
              print(table.concat(Item.spread('Prayer potion(4..2)'), ','))\n\
              print(#Item.spread('Bucket'), Item.spread(1925)[1], Item.has_amount('Amulet of glory(6)'))\n\
              local m = Item.matcher({ 'bucket', 1929, '954', 'Prayer potion(1..2)' })\n\
              print(Item.matches(m, 1925, 'Bucket'), Item.matches(m, 1929, nil), Item.matches(m, 954, nil), Item.matches(m, 311, 'Harpoon'))\n\
              print(Item.matches(m, 1, 'PRAYER POTION(2)'), Item.needs_names(m), Item.needs_names(Item.matcher(311)))\n\
-             print(require('inventory').count('Bucket'))\n\
-             print(pcall(require('bankmain').is_open))\n\
-             print(pcall(require('walker').click_tile, { x = 3156, y = 2841 }))",
+             print(require('@volcren/inventory').count('Bucket'))\n\
+             print(pcall(require('@volcren/bankmain').is_open))\n\
+             print(pcall(require('@volcren/walker').click_tile, { x = 3156, y = 2841 }))",
         );
         assert_eq!(
             lines[..5],
@@ -2817,22 +2604,21 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn pure_lib_helpers() {
         let (lines, result) = run_lines(
-            "local SidePanels = require('side_panels')\n\
+            "local SidePanels = require('@volcren/side_panels')\n\
              print(SidePanels.resolve('Inventory'), SidePanels.resolve(13), SidePanels.resolve('bank'))\n\
-             local Varps = require('varps')\n\
+             local Varps = require('@volcren/varps')\n\
              print(Varps.poison_state(0), Varps.poison_state(6), Varps.poison_state(1000000))\n\
              local c = Varps.changes({ [0] = 1, [173] = 0 }, { [0] = 1, [173] = 1 })\n\
              print(c[173].before, c[173].after, c[0])\n\
-             local Widgets = require('widgets')\n\
+             local Widgets = require('@volcren/widgets')\n\
              local w = { x = 565, y = 292, width = 229, height = 90 }\n\
              print(Widgets.center(w))\n\
              print(Widgets.contains(w, 565, 292), Widgets.contains(w, 794, 292))\n\
-             local Stats = require('stats')\n\
+             local Stats = require('@volcren/stats')\n\
              print(Stats.total_level({ { real_level = 99 }, { real_level = 1 } }))\n\
-             local Players = require('players')\n\
+             local Players = require('@volcren/players')\n\
              print(Players.distance({ x = 0, y = 0 }, { x = 3, y = -5 }))",
         );
         assert!(
@@ -2856,19 +2642,18 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn lib_readers_need_a_client() {
         let (lines, result) = run_lines(
-            "print(pcall(require('player').name))\n\
-             print(require('varps').get(173))\n\
-             print(pcall(require('side_panels').open, 'stats'))\n\
-             print(pcall(require('ticks').wait, 1))\n\
-             print(pcall(require('mouse').teleport, { x = 1, y = 2 }))\n\
-             print(pcall(require('mouse').move, { x = 1, y = 2 }))\n\
-             print(pcall(require('mouse').hold))\n\
-             print(pcall(require('mouse').scroll, 2, true))\n\
-             print(pcall(require('keyboard').key_press, require('keyboard').keys.RETURN))\n\
-             print(pcall(require('keyboard').send, 'hi'))",
+            "print(pcall(require('@volcren/player').name))\n\
+             print(require('@volcren/varps').get(173))\n\
+             print(pcall(require('@volcren/side_panels').open, 'stats'))\n\
+             print(pcall(require('@volcren/ticks').wait, 1))\n\
+             print(pcall(require('@volcren/mouse').teleport, { x = 1, y = 2 }))\n\
+             print(pcall(require('@volcren/mouse').move, { x = 1, y = 2 }))\n\
+             print(pcall(require('@volcren/mouse').hold))\n\
+             print(pcall(require('@volcren/mouse').scroll, 2, true))\n\
+             print(pcall(require('@volcren/keyboard').key_press, require('@volcren/keyboard').keys.RETURN))\n\
+             print(pcall(require('@volcren/keyboard').send, 'hi'))",
         );
         assert_eq!(lines[1], "nil\tno client selected");
         for line in lines
@@ -2886,10 +2671,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn biometrics_follow_the_username() {
         let (lines, result) = run_lines(
-            "local B = require('biometrics')\n\
+            "local B = require('@volcren/biometrics')\n\
              print(B.hash_string('player'), B.murmur2a('abcd', 7), B.murmur2a('', 0), B.murmur2a('abcdefghijklmnopqrs', 0))\n\
              B.setup('player')\n\
              local h = B.hash()\n\
@@ -2912,10 +2696,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn breaks_follow_the_loaders_config_and_keep_their_time_when_it_changes() {
         let (lines, result) = run_lines(
-            "local A = require('antiban')\n\
+            "local A = require('@volcren/antiban')\n\
              local function plan(json) test_set_antiban(json); assert(A.sync_config()) end\n\
              plan('{\"breaks\":[{\"interval\":600000,\"length\":60000,\"randomness\":0.0,\"logout_chance\":0.0}],\"sleeps\":[{}]}')\n\
              assert(not A.sync_config())\n\
@@ -2945,7 +2728,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn transports_come_from_the_loader_and_spell_names_split_into_option() {
         let (lines, result) = run_lines(
             "assert(transports().source == 'none' and #transports().transports == 0)\n\
@@ -2953,7 +2735,7 @@ mod tests {
              local data = transports()\n\
              assert(data.source == 'cache' and data.version == 1 and #data.transports == 1)\n\
              assert(data.transports[1].varbits[1].id == 4070 and data.transports[1].origin == nil)\n\
-             local T = require('transports')\n\
+             local T = require('@volcren/transports')\n\
              local a, ao = T.split('Varrock Teleport: Grand Exchange')\n\
              assert(a == 'Varrock Teleport' and ao == 'Grand Exchange')\n\
              local b, bo = T.split('Teleport to House (Inside)')\n\
@@ -3008,13 +2790,12 @@ mod tests {
         assert_eq!(lines.last().map(String::as_str), Some("ok"), "{lines:?}");
     }
 
-    #[cfg(feature = "embedded-lib")]
     const CHOOSER_STAGE: &str = r#"
-local Host = require('@lib/host')
-local T = require('@lib/main/transports')
-local Magic = require('@lib/main/interfaces/gametabs/magic')
-local Journal = require('@lib/main/interfaces/gametabs/journal')
-local Player = require('@lib/main/player')
+local Host = require('@volcren/host')
+local T = require('@volcren/transports')
+local Magic = require('@volcren/magic')
+local Journal = require('@volcren/journal')
+local Player = require('@volcren/player')
 Player.position = function() return { x = 1, y = 1, plane = 0 } end
 Magic.spell = function(name) return name end
 Magic.can_cast = function() return true end
@@ -3043,7 +2824,6 @@ local far = tile(3800, 3000)
 local island = tile(5400, 3000)
 "#;
 
-    #[cfg(feature = "embedded-lib")]
     fn chooser_test(body: &str) {
         let (lines, result) = run_lines(&format!("{CHOOSER_STAGE}\n{body}\nprint('ok')"));
         assert!(result.is_ok(), "{result:?} {lines:?}");
@@ -3051,7 +2831,6 @@ local island = tile(5400, 3000)
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn the_chooser_walks_when_near_teleports_when_far_and_skips_unmet_rows() {
         chooser_test(
             r#"
@@ -3070,7 +2849,6 @@ assert(T.choose(home, far, { exclude = { ['Good Teleport'] = true } }) == nil, '
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn water_is_crossed_by_a_ship_and_a_goal_the_planner_reaches_is_walked() {
         chooser_test(
             r#"
@@ -3092,14 +2870,13 @@ assert(T.choose(shore, across) == nil, 'cut off by landmass but the planner gets
         );
     }
 
-    #[cfg(feature = "embedded-lib")]
     const RANDOMS_STAGE: &str = r#"
-local Host = require('@lib/host')
-local ChatOptions = require('@lib/main/interfaces/chatbox/chat_options')
-local Lamp = require('@lib/main/interfaces/mainscreen/lamp')
-local Npcs = require('@lib/main/entities/npcs')
-local Randoms = require('@lib/main/antiban/randoms')
-local Tasks = require('@lib/main/antiban/antiban_tasks')
+local Host = require('@volcren/host')
+local ChatOptions = require('@volcren/chat_options')
+local Lamp = require('@volcren/lamp')
+local Npcs = require('@volcren/npcs')
+local Randoms = require('@volcren/randoms')
+local Tasks = require('@volcren/antiban_tasks')
 Randoms.GENIE_SETTLE_MS = 0
 Randoms.GENIE_TIMEOUT_MS = 50
 Randoms.POLL_MS = 1
@@ -3130,7 +2907,6 @@ Lamp.use = function(skill) stage.used = skill table.remove(stage.inventory, lamp
 local function genie(player) return { id = Randoms.GENIE, index = 1, name = 'Genie', interacting_player = player } end
 "#;
 
-    #[cfg(feature = "embedded-lib")]
     fn randoms_test(body: &str) {
         let (lines, result) = run_lines(&format!("{RANDOMS_STAGE}\n{body}\nprint('ok')"));
         assert!(result.is_ok(), "{result:?} {lines:?}");
@@ -3138,7 +2914,6 @@ local function genie(player) return { id = Randoms.GENIE, index = 1, name = 'Gen
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_random_event_is_only_handled_when_it_is_ours() {
         randoms_test(
             r#"
@@ -3157,11 +2932,10 @@ assert(stage.talked == 1, 'the task handles ours')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn giles_is_handled_by_the_certers_quiz() {
         randoms_test(
             r#"
-local Certer = require('@lib/main/interfaces/mainscreen/certer')
+local Certer = require('@volcren/certer')
 local opened, solved = 0, 0
 Certer.open = function(npc) assert(npc.id == Randoms.GILES) opened += 1 return true end
 Certer.solve = function() solved += 1 return true end
@@ -3181,12 +2955,11 @@ assert(Randoms.handle() == false, 'and it says so when it could not be')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn the_certers_answer_comes_from_the_pictures_model() {
         let (lines, result) = run_lines(
             r#"
-local Host = require('@lib/host')
-local Toplevel = require('@lib/main/interfaces/mainscreen/toplevel')
+local Host = require('@volcren/host')
+local Toplevel = require('@volcren/toplevel')
 Toplevel.is_open = function() return true end
 local model = 8833
 local texts = { 'A helmet.', 'A fish.', 'A bowl.' }
@@ -3195,7 +2968,7 @@ Host.widget = function(_, child)
     if child >= 1 and child <= 3 then return { text = texts[child], hidden = false } end
     if child >= 8 and child <= 10 then return { hidden = false } end
 end
-local Certer = require('@lib/main/interfaces/mainscreen/certer')
+local Certer = require('@volcren/certer')
 assert(Certer.correct().letter == 'A', 'armour is the helmet')
 model = 8829
 assert(Certer.correct().letter == 'B', 'food is the fish')
@@ -3216,7 +2989,6 @@ print('ok')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn the_genies_lamp_goes_on_the_accounts_skill_or_is_kept() {
         randoms_test(
             r#"
@@ -3237,11 +3009,10 @@ assert(Randoms.handle() == false and stage.used == nil, 'no lamp came')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn carpets_are_preferred_and_free_with_the_desert_hard_diary() {
         chooser_test(
             r#"
-local Diaries = require('@lib/main/diaries')
+local Diaries = require('@volcren/diaries')
 local hard = false
 Diaries.tier = function(region, tier) assert(region == 'desert' and tier == 'hard') return hard end
 stage.rows = { row('magic_carpets', '1: Oasis', tile(3000, 3000), tile(3060, 3000), { menu = 'Travel Rug Merchant 17', duration = 30, items = 'COINS=200' }) }
@@ -3262,7 +3033,6 @@ assert(T.choose(home, oasis, { exclude = { ride = true } }) == nil, 'and it can 
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn types_the_user_turned_off_are_left_out_and_can_be_required() {
         chooser_test(
             r#"
@@ -3286,11 +3056,10 @@ assert(pcall(T.require_enabled, 'home_teleports'), 'and one that is on is fine')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_goal_with_no_way_stops_the_walk() {
         chooser_test(
             r#"
-local Walker = require('@lib/main/walker')
+local Walker = require('@volcren/walker')
 Walker.here = function() return home end
 local walked = 0
 stage.plan_reaches = false
@@ -3307,7 +3076,6 @@ assert(T.walkable(shore, tile(5010, 3000)), 'the planner can find a close way th
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_comments_requirement_binds_by_its_variable_and_unlocks_are_read() {
         chooser_test(
             r#"
@@ -3363,7 +3131,6 @@ assert(T.items_met({ items = '13393=1&UNLOCK_XERICS_HONOUR=1' }, { [13393] = 1 }
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_far_hop_is_a_trip_with_its_requirements() {
         chooser_test(
             r#"
@@ -3384,7 +3151,6 @@ assert(T.runners[c.kind] == T.runners.ride)
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_way_out_through_a_one_way_door_is_a_walk() {
         chooser_test(
             r#"
@@ -3400,7 +3166,6 @@ assert(T.choose(inside, outside) ~= nil, 'with no way on foot the spell is the w
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn an_item_on_an_object_needs_the_item_and_climbs_put_on_what_they_need() {
         chooser_test(
             r#"
@@ -3412,8 +3177,8 @@ stage.inventory = { { id = 954, quantity = 1, slot = 0 } }
 local c = T.choose(home, far)
 assert(c and c.kind == 'item_on', 'with one it is a trip')
 assert(T.runners.item_on ~= nil)
-local Inventory = require('@lib/main/interfaces/gametabs/inventory')
-local Minimenu = require('@lib/main/interfaces/minimenu')
+local Inventory = require('@volcren/inventory')
+local Minimenu = require('@volcren/minimenu')
 Inventory.hover_slot = function() end
 Minimenu.entries = function() return { { option = 'Wield' }, { option = 'Drop' } } end
 local worn_now = {}
@@ -3440,7 +3205,6 @@ assert(T.wear_for_climb(tile(1, 1), tile(2, 2), 'Climb'), 'a climb that needs no
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_row_that_needs_nothing_put_on_wins_on_the_same_tiles() {
         chooser_test(
             r#"
@@ -3466,7 +3230,6 @@ assert(#T.allowed_climbs() == 0, 'with neither there is no way')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn portals_are_trips_but_not_the_house_or_the_pvp_arena() {
         chooser_test(
             r#"
@@ -3493,11 +3256,10 @@ assert(T.choose(home, far) == nil, 'and so can the user')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn obelisks_need_the_diary_and_the_wilderness() {
         chooser_test(
             r#"
-local Diaries = require('@lib/main/diaries')
+local Diaries = require('@volcren/diaries')
 local here, there = tile(3156, 3620), tile(3307, 3916)
 local start = row('wilderness_obelisks', '', tile(3155, 3620), nil, { menu = 'Activate Obelisk 14829' })
 stage.rows = { start, row('wilderness_obelisks', '6: Level 50 Wilderness', nil, there) }
@@ -3514,13 +3276,12 @@ assert(T.choose(home, there) == nil, 'from safety, no')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn the_house_is_a_place_on_the_way_and_what_is_missing_is_dropped() {
         chooser_test(
             r#"
 local scene = {}
 Host.locs = function(plane) return if plane == 0 then scene else {} end
-local House = require('@lib/main/house')
+local House = require('@volcren/house')
 local inside = tile(1858, 7051)
 local tablet = row('teleportation_items', 'Teleport to House tablet: Inside the house', nil, inside, { items = '8013=1', consumable = true })
 local barrows = row('teleportation_portals_poh', 'Barrows Portal', inside, far, { menu = 'Enter Barrows Portal 37591' })
@@ -3559,7 +3320,7 @@ c = T.choose(from_inside, tile(3000, 1200))
 assert(c == nil or c.option ~= 'Corporeal Beast', 'not a boss room')
 c = T.choose(from_inside, tile(3000, 500))
 assert(c and c.kind == 'house' and c.spell == 'glory' and c.option == 'Edgeville', 'and the glory it now sees')
-local Nexus = require('@lib/main/interfaces/mainscreen/nexus')
+local Nexus = require('@volcren/nexus')
 Nexus.open = function() return true end
 Nexus.find = function() return nil end
 Nexus.close = function() return true end
@@ -3573,15 +3334,14 @@ assert(c == nil or c.option ~= 'Barrows', 'so it is left out')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_house_ring_and_tree_count_once_a_visit_has_shown_them() {
         chooser_test(
             r#"
 local scene = {}
 Host.locs = function(plane) return if plane == 0 then scene else {} end
-local House = require('@lib/main/house')
+local House = require('@volcren/house')
 local inside = tile(1858, 7051)
-local Fairyring = require('@lib/main/interfaces/mainscreen/fairyring')
+local Fairyring = require('@volcren/fairyring')
 Fairyring.can_use = function() return true end
 stage.rows = {
     row('teleportation_items', 'Teleport to House tablet: Inside the house', nil, inside, { items = '8013=1', consumable = true }),
@@ -3622,13 +3382,12 @@ assert(c and c.kind == 'item', 'from outside a visit makes a tablet and the tree
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn the_ferox_enclave_can_be_a_goal_but_not_a_way_through_the_wilderness() {
         chooser_test(
             r#"
 local enclave = tile(3150, 3635)
 stage.rows = { row('teleportation_spells', 'Good Teleport', nil, enclave) }
-local Ferox = require('@lib/main/ferox')
+local Ferox = require('@volcren/ferox')
 assert(Ferox.contains(3150, 3635) and not Ferox.contains(3150, 3700))
 assert(T.choose(home, enclave) ~= nil, 'to go to the Enclave')
 assert(T.choose(home, tile(3148, 3630)) ~= nil, 'or inside it')
@@ -3639,11 +3398,10 @@ assert(T.choose(home, tile(3100, 3500)) == nil, 'and it is no way through to som
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn canoes_are_dropped_when_a_station_says_there_is_no_axe() {
         chooser_test(
             r#"
-local Canoe = require('@lib/main/interfaces/mainscreen/canoe')
+local Canoe = require('@volcren/canoe')
 local Log_row = row('canoes', 'The Clock Tower', tile(3000, 3000), far, { skills = { { name = 'Woodcutting', level = 27 } }, duration = 30 })
 stage.rows = { Log_row }
 Player.position = function() return tile(3000, 3000) end
@@ -3673,11 +3431,10 @@ assert(T.choose(home, far) == nil, 'and so can the user')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn balloons_need_a_log_held_or_stored() {
         chooser_test(
             r#"
-local Balloon = require('@lib/main/interfaces/mainscreen/balloon')
+local Balloon = require('@volcren/balloon')
 local chat = {}
 Host.chat_messages = function() return chat end
 assert(next(Balloon.stored()) == nil, 'nothing said yet')
@@ -3719,7 +3476,6 @@ assert(T.choose(home, tile(3000, 2200)) == nil, 'and still not a kind said to be
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn minigame_teleports_wait_for_their_cooldown() {
         chooser_test(
             r#"
@@ -3745,7 +3501,6 @@ assert(T.choose(home, far) ~= nil, 'and again after 20')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn the_wilderness_is_only_entered_when_asked() {
         chooser_test(
             r#"
@@ -3771,7 +3526,6 @@ assert(T.choose(tile(3000, 3000), tile(3160, 3930)) ~= nil, 'or every plan')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn items_count_when_worn() {
         chooser_test(
             r#"
@@ -3787,7 +3541,6 @@ assert(c and c.kind == 'item' and c.spell == 'Ring' and c.option == 'Far', 'a wo
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn gated_rows_are_told_to_the_planner_and_ways_across_join_landmasses() {
         chooser_test(
             r#"
@@ -3813,21 +3566,20 @@ assert(T.choose(from, to) == nil, 'the stile joins the landmasses: walking is po
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_network_pairs_its_starts_with_its_ends() {
         chooser_test(
             r#"
 stage.rows = {
     row('quetzals', '', tile(3005, 3000), nil, { menu = 'Travel Quetzal 13350' }),
     row('quetzals', '', tile(3006, 3000), nil, { menu = 'Travel Quetzal 13350' }),
-    row('quetzals', '1: Here', nil, tile(3004, 3000), { duration = 6 }),
-    row('quetzals', '2: Far', nil, tile(3800, 3000), { duration = 6 }),
-    row('quetzals', '3: Quest', nil, tile(3801, 3000), { duration = 1, varbits = { { id = 1, op = '=', value = 9 } } }),
+    row('quetzals', '1: Civitas illa Fortis', nil, tile(3004, 3000), { duration = 6 }),
+    row('quetzals', '2: The Teomat', nil, tile(3800, 3000), { duration = 6 }),
+    row('quetzals', '3: Sunset Coast', nil, tile(3801, 3000), { duration = 1, varbits = { { id = 1, op = '=', value = 9 } } }),
 }
 local c = T.choose(home, far)
 assert(c and c.kind == 'quetzals', 'by the network')
-assert(c.transport.label == 'Far' and c.transport.origin.x == 3005, 'the first start of the structure, the end whose test holds')
-assert(c.id == 'quetzals 3005,3000 Far')
+assert(c.transport.label == 'The Teomat' and c.transport.origin.x == 3005, 'the first start of the structure, the end whose test holds')
+assert(c.id == 'quetzals 3005,3000 The Teomat')
 T.RETRY_PAUSE_MS = 0
 T.runners.quetzals = function() return false end
 assert(not T.use(c) and T.failed_lately(c))
@@ -3837,7 +3589,6 @@ assert(T.choose(home, far) == nil, 'a failed trip is out of the next plan')
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn a_retry_never_repeats_a_trip_that_landed_late() {
         chooser_test(
             r#"
@@ -3854,10 +3605,9 @@ assert(not T.failed_lately(piece))
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn consumables_work_out_heals_boosts_drains_and_ranges_from_given_levels() {
         let (lines, result) = run_lines(
-            "local C = require('consumables')\n\
+            "local C = require('@volcren/consumables')\n\
              local function at(hp, real)\n\
                local l = {}\n\
                for _, s in ipairs({ 'Attack', 'Strength', 'Defence', 'Ranged', 'Magic', 'Prayer', 'Herblore', 'Cooking', 'Fishing' }) do\n\
@@ -3896,10 +3646,9 @@ assert(not T.failed_lately(piece))
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn cs2_scripts_and_database_rows_decode_and_bad_bytes_are_refused() {
         let (lines, result) = run_lines(
-            "local Cs2 = require('cs2')\n\
+            "local Cs2 = require('@volcren/cs2')\n\
              local code = '\\0' .. string.pack('>I2i4', 0, 7) .. string.pack('>I2i4', 60, 0) .. string.pack('>I2i4', 25, 99) .. string.pack('>I2B', 21, 0)\n\
              local tables = string.char(1) .. string.pack('>I2', 1) .. string.pack('>i4i4', 5, 1)\n\
              local bytes = code .. string.pack('>i4', 4) .. string.rep('\\0', 12) .. tables .. string.pack('>I2', #tables)\n\
@@ -3920,10 +3669,9 @@ assert(not T.failed_lately(piece))
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn random_draws_stay_in_range() {
         let (lines, result) = run_lines(
-            "local Random = require('random')\n\
+            "local Random = require('@volcren/random')\n\
              for _ = 1, 20000 do\n\
                  local l, m, r = Random.left(10, 20), Random.mean(10, 20), Random.right(10, 20)\n\
                  assert(l >= 10 and l < 20 and m >= 10 and m <= 20 and r > 10 and r <= 20, `{l} {m} {r}`)\n\
@@ -3943,10 +3691,9 @@ assert(not T.failed_lately(piece))
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn shape_points_land_inside() {
         let (lines, result) = run_lines(
-            "local G = require('geometry')\n\
+            "local G = require('@volcren/geometry')\n\
              local box = G.Box.new(100, 200, 160, 230)\n\
              local circle = G.Circle.new(400, 300, 25)\n\
              local quad = G.Quad.new({ x = 500, y = 100 }, { x = 560, y = 130 }, { x = 530, y = 190 }, { x = 470, y = 160 })\n\
@@ -3979,10 +3726,9 @@ assert(not T.failed_lately(piece))
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn keyboard_keys_match_simba() {
         let (lines, result) = run_lines(
-            "local K = require('keyboard')\n\
+            "local K = require('@volcren/keyboard')\n\
              print(K.keys.RETURN, K.keys.LEFT, K.keys.F12, K.keys.LSHIFT, K.keys.OEM_102, #K.ARROWS, #K.FKEYS)\n\
              print(K.is_key_down(K.keys.SHIFT), K.interval_min(), K.interval_max())",
         );
@@ -3994,7 +3740,7 @@ assert(not T.failed_lately(piece))
     fn require_rejects_unknown_modules() {
         let (_, result) = run_lines("require('os')");
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("module 'os' not found"), "{error}");
+        assert!(error.contains("cannot require 'os'"), "{error}");
     }
 
     #[test]
@@ -4045,10 +3791,9 @@ assert(not T.failed_lately(piece))
     }
 
     #[test]
-    #[cfg(feature = "embedded-lib")]
     fn login_needs_a_client_too() {
         let (lines, result) = run_lines(
-            "local Login = require('login')\n\
+            "local Login = require('@volcren/login')\n\
              print(pcall(Login.login))",
         );
         assert_eq!(lines.len(), 1);

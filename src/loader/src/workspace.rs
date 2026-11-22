@@ -6,7 +6,7 @@ const AGENTS: &str = "# VOLCREN workspace
 
 This folder is for writing and running VOLCREN scripts with an AI agent. The `volcren` MCP server in `.mcp.json` is the loader itself (`loader mcp`): it runs Luau on your game clients and searches the script library's docs. Its instructions explain how to use it.
 
-- Scripts are strict Luau and use the library through `require(\"@lib/...\")`. `.luaurc` points `@lib` at the library the loader uses.
+- Scripts are strict Luau and use the SDK through `require(\"@volcren/<module>\")`. `.luaurc` points `@volcren` at the SDK the loader ships.
 - `runs/<pid>.luau` holds the last snippet the agent ran on each client.
 - Every run acts on a real account. Ask before anything that spends coins or risks items.
 - Runs started by the agent stop when the agent exits.
@@ -18,16 +18,6 @@ pub fn dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "Can't find a data folder on this system.".into())
 }
 
-pub fn lib_dir(settings: &Settings) -> Result<PathBuf, String> {
-    let custom = settings.lib_dir.trim();
-    if !custom.is_empty() {
-        return Ok(PathBuf::from(custom));
-    }
-    crate::session::cache_root()
-        .map(|root| root.join("lib"))
-        .ok_or_else(|| "Can't find a cache folder on this system.".into())
-}
-
 pub fn prepare(settings: &Settings) -> Result<PathBuf, String> {
     let dir = dir()?;
     let exe =
@@ -35,7 +25,8 @@ pub fn prepare(settings: &Settings) -> Result<PathBuf, String> {
     let mcp = serde_json::json!({
         "mcpServers": { "volcren": { "command": exe, "args": ["mcp"] } }
     });
-    let luaurc = serde_json::json!({ "aliases": { "lib": lib_dir(settings)? } });
+    let modules = crate::sdk::dir(settings)?.join("modules");
+    let luaurc = serde_json::json!({ "aliases": { "volcren": modules } });
     write(&dir.join(".mcp.json"), &pretty(&mcp))?;
     write(&dir.join(".luaurc"), &pretty(&luaurc))?;
     write(&dir.join("AGENTS.md"), AGENTS)?;

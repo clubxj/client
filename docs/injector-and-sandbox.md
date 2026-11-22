@@ -1,6 +1,6 @@
 # injector (`src/injector`)
 
-Library and CLI for everything outside the client: find clients, inject the agent, read what it publishes, send input, run Luau scripts. Script-facing globals are documented in `lib/docs/host.md`; this doc covers the Rust side.
+Library and CLI for everything outside the client: find clients, inject the agent, read what it publishes, send input, run Luau scripts. Script-facing globals are documented in `sdk/luau/docs/host.md`; this doc covers the Rust side.
 
 - Real code only on Windows. Elsewhere `sandbox.rs`'s `offline` module stubs every call with "clients can only be reached from Windows or Wine", so the loader builds natively. On Linux the real work is `injector.exe` under Wine. The native binary is never shipped: it only exists so the loader's tests in `script.rs` can run Luau with no client.
 - **The agent is embedded.** With the `agent` feature (default on) and a Windows target, `build.rs` runs a nested `cargo build -p agent` with the outer profile and `main.rs` `include_bytes!`s the result, so `injector.exe` can only load the agent it was built with. Stable Cargo can't depend on a built cdylib (artifact dependencies are nightly-only). The nested build uses its own target dir, `target/embedded-agent`, because the outer build holds the lock on `target`. The binary requires the feature; the loader links the library without it, so the Windows loader's MSVC build never needs the MinGW agent and always injects through `injector.exe load`.
@@ -63,7 +63,7 @@ Library and CLI for everything outside the client: find clients, inject the agen
 
 ## `run` protocol (`main.rs::run_script`)
 
-Usage: `injector run [--script <path> [--lib <dir>]] [pid]`. Lines are `\u{1e}`-prefixed (constants in `form.rs`, `http.rs`, `prices.rs`, `antiban.rs`, `transports.rs`); stdout entries end with `form::ENTRY_END` (`\0`).
+Usage: `injector run [--script <path>] [--sdk <dir>] [pid]`. Lines are `\u{1e}`-prefixed (constants in `form.rs`, `http.rs`, `prices.rs`, `antiban.rs`, `transports.rs`); stdout entries end with `form::ENTRY_END` (`\0`).
 
 - Header lines before the script, any order: `PINS` (enables PIN and lamp lookups), `HTTP` (enables the HTTP handler; otherwise "HTTP requests aren't available"), `ANTIBAN`, `PRICES <url>`, `TRANSPORT_SETTINGS`, `DEBUG <0|1>`, `TRANSPORTS`, `SETTINGS <json>` (the values `settings()` returns), `RESUME <break plan>` (the previous queue entry's last `BREAKS` plan, read once by `antiban_resume()`).
 - Settings are fixed before the script starts: there is no form request. Without a `SETTINGS` line, `run` uses the defaults of `manifest.json` beside `--script` (an empty table without one); an invalid manifest stops the run before the script starts.
@@ -73,17 +73,16 @@ Usage: `injector run [--script <path> [--lib <dir>]] [pid]`. Lines are `\u{1e}`-
 
 ## `require`
 
-- `./x`, `../x`: relative to the requiring file; tries `x.luau`, `x.lua`, `x/init.luau`, from `MODULES` memory first, then disk. Cached by normalized path.
-- `@lib/<path>`: lib root is `--lib`, else `../lib` beside the script. From the script itself, `../lib/...` paths resolve in `--lib` too.
-- Bare names, or no `--script`: the embedded lib (`LIB_MODULES`, `include_str!` from sibling `lib/`, `embedded-lib` feature, default on). Stale until rebuild; new lib files must be added to `LIB_MODULES`; `VOLCREN_LIB_DIR` overrides from disk. Release builds use `--no-default-features` (no embedded lib), since the loader always passes `--script` (and `--lib` when it has one, `loader/src/backend/mod.rs`).
+- `@volcren/<name>`: the SDK module `sdk/luau/modules/<name>.luau`, built into the injector (`build.rs` generates `SDK_MODULES` from that folder, so a new module needs no listing), or read from `<dir>/modules/` when `--sdk <dir>` is given, to iterate without a rebuild. Names are lowercase letters, digits and `_`; anything else is an error. Cached by name, so every path to a module yields one table.
+- `./x`, `../x`: relative to the requiring file; tries `x.luau`, `x.lua`, `x/init.luau`, from `MODULES` memory first, then disk. Cached by normalized path. Only the script file and files it reached this way have a folder, so SDK modules and hand runs without `--script` can't require relative paths.
+- Anything else is an error: there are no bare names or other aliases.
 
 ## Cross-repo contracts
 
-- **`HOST_API`** (`lib.rs`): bump when adding or changing a sandbox global. Pair with `lib/HOST_API`, bumped in the lib commit that starts using it; `lib/tools/check-host-api.sh` fails the lib release when `host.luau` gains a global without a bump.
-- **`HOST_API_MIN`** (`lib.rs`): the oldest lib API this injector still runs. Raise it to the new `HOST_API` when a global is removed or changes meaning (22 dropped `project`'s `via`), so no older lib is paired with an injector that can't serve it.
-- **Lib selection** (`loader/src/libs.rs::choose`): the loader takes the newest lib release whose `requires_host` is between `HOST_API_MIN` and `HOST_API`, warning when a newer one was skipped. The cached lib is used offline only if its `requires_host` (`.requires_host` beside `.version`) is in that range too. A missed bump pairs a lib with an injector that lacks the global; a missed `HOST_API_MIN` bump pairs one with an injector that changed a global under it.
-- **`PROTOCOL_VERSION`** (`ipc`): any IPC layout change bumps it and updates agent, injector and `lib/host.luau` together. `Connection::problem` reports a mismatch.
-- **Adding a global**: implement and bind in `sandbox.rs`, add the `offline` stub, bump `HOST_API`, add type/wrapper to `lib/host.luau` and document it in `lib/docs/host.md`.
+- **The SDK ships inside the injector**, so a script always runs against the SDK built with the globals it calls; there is no version pairing to keep. A global and its `host.luau` wrapper change in the same commit.
+- **Old injectors keep running.** Store revisions are pinned to the release they were checked against, and newer loaders run them with that release's `injector.exe` ([loader-gui.md](loader-gui.md)). So these must keep working between a newer loader and every older injector still pinned: the commands `list`, `agent-version` and `load` with their JSON answers, and the whole `run` protocol below (arguments, header lines, `MODULES`/`SCRIPT`, the stdin lines after the script and every stdout line the loader reads). Change them only by adding. When a change can't be additive, retire the older releases in the database (`scripts.retire_injector`) so no loader is asked to run them. Everything else the loader reads (`serve` answers, in-process reads) only has to match its own release.
+- **`PROTOCOL_VERSION`** (`ipc`): any IPC layout change bumps it and updates agent, injector and `sdk/luau/modules/host.luau` together. `Connection::problem` reports a mismatch.
+- **Adding a global**: implement and bind in `sandbox.rs`, add the `offline` stub, add type/wrapper to `sdk/luau/modules/host.luau` and document it in `sdk/luau/docs/host.md`.
 - Loader line formats (`form.rs`, `http.rs`, `prices.rs`, `antiban.rs`) are shared code with `src/loader`; change both sides together. See [loader-gui.md](loader-gui.md).
 
 ## CLI

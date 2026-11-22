@@ -6,6 +6,17 @@ f=$(jq -r '.tool_response.filePath // .tool_input.file_path // empty')
 root=$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$root" || exit 0
 out=""
+if [[ $f == "$root"/sdk/luau/*.luau ]]; then
+	cd "$root/sdk/luau" || exit 0
+	rel=${f#"$root"/sdk/luau/}
+	stylua --config-path tools/stylua.toml "$rel" >/dev/null 2>&1
+	out=$(luau-analyze "$rel" 2>&1 | grep -E '^\S+\([0-9]+,[0-9]+\): ' | grep -v ': TypeError' || true)
+	if [[ -n "$out" ]]; then
+		printf 'Lint issues in %s:\n%s\n' "$f" "$out" >&2
+		exit 2
+	fi
+	exit 0
+fi
 [[ $f == *.rs && $f != "$root"/target/* && $f != "$root"/archive/* ]] || exit 0
 dir=$(dirname "$f")
 while [[ $dir != "$root" && ! -f $dir/Cargo.toml ]]; do dir=$(dirname "$dir"); done

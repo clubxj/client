@@ -29,7 +29,6 @@ use crate::api::{
     models::{API_VERSION, Ended, Quote, RecentSession, Scored},
 };
 use crate::feedback;
-use crate::libs::Lib;
 use crate::pipe::Rows;
 use crate::script::{Launch, Script, ScriptEvent};
 use crate::session::{self, Kept, Prepared};
@@ -212,7 +211,6 @@ struct StoreRun {
     script_id: String,
     community: bool,
     closed: Receiver<()>,
-    lib_version: String,
     price: i64,
     rank: i64,
     fee: i64,
@@ -274,6 +272,7 @@ struct Run {
     xp_reading: bool,
     editors: crate::layouts::Editors,
     agent: bool,
+    injector: Option<crate::injectors::Pinned>,
 }
 
 impl Run {
@@ -312,6 +311,7 @@ impl Run {
             xp_reading: false,
             editors: Default::default(),
             agent: false,
+            injector: None,
         }
     }
 
@@ -479,6 +479,22 @@ fn run_pause_label(paused: bool) -> (&'static str, &'static str) {
     PAUSE_BUTTONS[usize::from(paused)]
 }
 
+fn swap_agent(
+    target: &Target,
+    settings: &Settings,
+    cursor: &injector::Cursor,
+    pinned: &crate::injectors::Pinned,
+) -> Result<(), String> {
+    let pinned_settings = settings.with_helper(&pinned.path);
+    let wanted = backend::agent_version(target, &pinned_settings)?;
+    if target.client.version.as_deref() == Some(wanted.as_str()) {
+        return Ok(());
+    }
+    backend::load(target, &pinned_settings, cursor)
+        .map(|_| ())
+        .map_err(|e| format!("Couldn't load the agent of injector {}: {e}", pinned.version))
+}
+
 const RESTORING_SIGN_IN: &str = "Checking for a saved sign-in…";
 const WAITING_FOR_BROWSER: &str = "Waiting for you to sign in in the browser…";
 
@@ -488,9 +504,9 @@ struct PendingStart {
     script: StoreScript,
     target: Target,
     replaces: Option<u64>,
-    lib: Lib,
     run: Option<u64>,
     launch: Launch,
+    injector: crate::injectors::Pinned,
 }
 
 struct StartPrompt {
@@ -1560,11 +1576,12 @@ impl LoaderApp {
         self.active_run = Some(id);
         self.log_tab = LogTab::Run(id);
         self.remember_form(id);
+        let helper = self.settings.helper.clone();
         self.api_job(move |api| Event::RestartQuoted {
             run: id,
             result: session::restart_quote(
                 &api,
-                session::cache_root().as_deref(),
+                std::path::Path::new(&helper),
                 &session_id,
                 &script_id,
                 community,
@@ -1576,12 +1593,12 @@ impl LoaderApp {
     fn restart_quoted(&mut self, id: u64, restart: session::Restart) {
         let session::Restart {
             mut script,
-            quoted: session::Quoted { me, quote, lib },
+            quoted: session::Quoted { me, quote, injector },
             manifest,
         } = restart;
         self.refresh_me(me);
-        let lib = match lib {
-            Ok(lib) => lib,
+        let injector = match injector {
+            Ok(injector) => injector,
             Err(error) => return self.script_error(format!("Couldn't restart: {error}")),
         };
         if let Some(fetched) = manifest {
@@ -1621,9 +1638,9 @@ impl LoaderApp {
             script,
             target,
             replaces: Some(id),
-            lib,
             run: None,
             launch: Launch::with(values),
+            injector,
         };
         self.start_at_quote(start, Some(old_price), quote);
     }
@@ -1646,8 +1663,9 @@ impl LoaderApp {
         values: serde_json::Value,
     ) {
         self.starting = Some(target.client.pid);
+        let helper = self.settings.helper.clone();
         self.api_job(move |api| Event::RunQuoted {
-            result: session::quote(&api, session::cache_root().as_deref(), &script.id),
+            result: session::quote(&api, std::path::Path::new(&helper), &script.id),
             script: Box::new(script),
             target: Box::new(target),
             run,
@@ -1758,16 +1776,30 @@ impl LoaderApp {
             script,
             target,
             replaces,
-            lib,
             run,
             launch,
+            injector,
         } = start;
         let pid = target.client.pid;
         self.starting = Some(pid);
         self.info(format!("Starting {}…", script.title));
         let warned = script.community.then_some(script.revision).flatten();
+        let (settings, cursor) = (self.settings.clone(), self.cursor);
         self.api_job(move |api| {
-            let result = session::prepare(&api, &script, lib, warned);
+            let bundled = std::path::PathBuf::from(&settings.helper);
+            let swap = |pinned: &crate::injectors::Pinned| {
+                swap_agent(&target, &settings, &cursor, pinned)
+            };
+            let result = session::prepare(
+                &api,
+                &script,
+                warned,
+                &session::Start {
+                    injector: &injector,
+                    bundled: &bundled,
+                    swap_agent: &swap,
+                },
+            );
             Event::StoreStarted {
                 pid,
                 script: Box::new(script),
@@ -2003,9 +2035,6 @@ impl LoaderApp {
                 .and_then(|r| r.target.as_ref())
                 .and_then(|t| t.client.version.clone())
                 .or_else(|| self.agent_version.clone()),
-            lib: run
-                .and_then(|r| r.store.as_ref())
-                .map(|s| s.lib_version.clone()),
             gpu: self.gpu.clone(),
         }
     }
@@ -2600,6 +2629,22 @@ impl LoaderApp {
         });
     }
 
+    fn load_current_agent_back(&mut self, pid: u32) {
+        let pinned = self
+            .runs
+            .iter()
+            .rev()
+            .find(|run| run.pid() == Some(pid))
+            .is_some_and(|run| run.injector.is_some() && !run.is_running());
+        if !pinned {
+            return;
+        }
+        if let Some(target) = self.target_of(pid).cloned() {
+            self.info(format!("Loading the current agent back into {pid}…"));
+            self.load(target);
+        }
+    }
+
     fn read_state(&mut self, target: Target, read: Read) {
         let pid = target.client.pid;
         if read.is_varp() {
@@ -2786,11 +2831,11 @@ impl LoaderApp {
                 Event::RunQuoted { script, target, run, values, result } => {
                     self.starting = None;
                     match result {
-                        Ok(session::Quoted { me, quote, lib }) => {
+                        Ok(session::Quoted { me, quote, injector }) => {
                             self.refresh_me(me);
-                            match lib {
-                                Ok(lib) => {
-                                    let start = PendingStart { script: *script, target: *target, replaces: None, lib, run, launch: Launch::with(values) };
+                            match injector {
+                                Ok(injector) => {
+                                    let start = PendingStart { script: *script, target: *target, replaces: None, run, launch: Launch::with(values), injector };
                                     self.start_at_quote(start, None, quote);
                                 }
                                 Err(error) => self.start_failed(&script.title, error),
@@ -3166,6 +3211,10 @@ impl LoaderApp {
                 if finished {
                     self.runs[index].ended = Some(Instant::now());
                     self.keep_run_record(index);
+                    let pid = self.runs[index].pid();
+                    if let Some(pid) = pid.filter(|pid| !self.queue_runners.iter().any(|r| r.pid == *pid)) {
+                        self.load_current_agent_back(pid);
+                    }
                 }
             }
         }
@@ -3555,7 +3604,7 @@ impl LoaderApp {
             Some(&prepared.entry),
             None,
             &target,
-            &self.settings,
+            &self.settings.with_helper(&prepared.injector.path),
             &launch,
         ) {
             Ok(process) => {
@@ -3567,7 +3616,6 @@ impl LoaderApp {
                     script_id: script.id.clone(),
                     community: script.community,
                     closed,
-                    lib_version: prepared.lib_version.clone(),
                     price: prepared.session.price,
                     rank: prepared.session.rank,
                     fee: prepared.session.fee,
@@ -3593,12 +3641,10 @@ impl LoaderApp {
                 run.script = Some(process);
                 run.target = Some(target);
                 run.store = Some(store);
+                run.injector = (!prepared.injector.is_bundled()).then(|| prepared.injector.clone());
                 run.source = Some(Source::Store(script.clone()));
                 run.form_sent = Some(launch.values);
                 run.started = Instant::now();
-                if let Some(warning) = &prepared.warning {
-                    run.info(format!("Warning: {warning}"));
-                }
                 run.info(format!(
                     "Running {title} (revision {}).",
                     prepared.session.revision
@@ -3714,18 +3760,19 @@ impl LoaderApp {
     ) {
         let name = file.name();
         let path = Some(std::path::Path::new(&file.path)).filter(|p| p.is_file());
-        let lib = Some(std::path::PathBuf::from(self.settings.lib_dir.trim()))
-            .filter(|l| path.is_some() && !l.as_os_str().is_empty());
-        if let Some(lib) = lib.as_ref().filter(|l| !l.is_dir()) {
-            self.script_error(format!("Couldn't start the script: the lib folder {} doesn't exist. Fix it in the settings.", lib.display()));
-            return;
-        }
+        let sdk = match crate::sdk::custom(&self.settings) {
+            Ok(sdk) => sdk,
+            Err(error) => {
+                self.script_error(format!("Couldn't start the script: {error} Fix it in the settings."));
+                return;
+            }
+        };
         let launch = Launch::with(values.clone());
         match Script::start(
             &self.script_host(),
             &file.text,
             path,
-            lib.as_deref(),
+            sdk.as_deref(),
             target,
             &self.settings,
             &launch,

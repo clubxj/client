@@ -392,7 +392,6 @@ pub(super) fn fake_run(
         script_id: title.to_lowercase(),
         community: false,
         closed: channel().1,
-        lib_version: "1".into(),
         price,
         rank: 1,
         fee,

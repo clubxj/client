@@ -1023,7 +1023,6 @@ mod fakes {
             script_id: "snapshot-script".into(),
             community: false,
             closed: channel().1,
-            lib_version: "1".into(),
             price: 2_000_000,
             rank: 0,
             fee: 0,

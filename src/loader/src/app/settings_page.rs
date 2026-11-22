@@ -15,22 +15,22 @@ const LOG_LINES_STEP: f64 = 50.0;
 
 #[derive(Clone, Copy)]
 enum PathField {
-    LibDir,
+    SdkDir,
     Helper,
 }
 
 impl PathField {
     fn label(self) -> &'static str {
         match self {
-            Self::LibDir => "lib folder",
+            Self::SdkDir => "SDK folder",
             Self::Helper => "injector.exe",
         }
     }
 
     fn tooltip(self) -> Option<&'static str> {
         match self {
-            Self::LibDir => Some(
-                "Optional. Scripts you run from a file read require(\"../lib/...\") from this folder, e.g. your lib checkout. Store scripts always use the downloaded lib.",
+            Self::SdkDir => Some(
+                "Optional. Scripts you run from a file read require(\"@volcren/...\") from this folder's modules, e.g. your client checkout's sdk/luau, without rebuilding injector.exe. Store scripts always use the SDK built into their injector.",
             ),
             Self::Helper => None,
         }
@@ -38,30 +38,30 @@ impl PathField {
 
     fn placeholder(self) -> &'static str {
         match self {
-            Self::LibDir => "empty: the lib beside the script, or the built-in one",
+            Self::SdkDir => "empty: the SDK built into injector.exe",
             Self::Helper => "",
         }
     }
 
     fn of(self, settings: &mut Settings) -> &mut String {
         match self {
-            Self::LibDir => &mut settings.lib_dir,
+            Self::SdkDir => &mut settings.sdk_dir,
             Self::Helper => &mut settings.helper,
         }
     }
 
     fn browse(self, path: &mut String) {
         match self {
-            Self::LibDir => pick_folder(path),
+            Self::SdkDir => pick_folder(path),
             Self::Helper => pick_file(path, "Executable", "exe"),
         }
     }
 
     fn shown() -> Vec<Self> {
         if cfg!(windows) {
-            vec![Self::LibDir]
+            vec![Self::SdkDir]
         } else {
-            vec![Self::LibDir, Self::Helper]
+            vec![Self::SdkDir, Self::Helper]
         }
     }
 }
@@ -71,7 +71,7 @@ const UI_FONT_TOOLTIP: &str = "The font of the pages, buttons and labels. The ou
 
 #[derive(Clone)]
 struct Inputs {
-    lib_dir: Entity<InputState>,
+    sdk_dir: Entity<InputState>,
     helper: Entity<InputState>,
     log_lines: Entity<InputState>,
     whitelist: Entity<InputState>,
@@ -80,7 +80,7 @@ struct Inputs {
 impl Inputs {
     fn path(&self, field: PathField) -> &Entity<InputState> {
         match field {
-            PathField::LibDir => &self.lib_dir,
+            PathField::SdkDir => &self.sdk_dir,
             PathField::Helper => &self.helper,
         }
     }
@@ -118,7 +118,7 @@ impl LoaderApp {
             .detach();
             input
         };
-        let lib_dir = path(PathField::LibDir, window, cx);
+        let sdk_dir = path(PathField::SdkDir, window, cx);
         let helper = path(PathField::Helper, window, cx);
         let log_lines = cx.new(|cx| {
             InputState::new(window, cx)
@@ -161,7 +161,7 @@ impl LoaderApp {
         )
         .detach();
         let inputs = Inputs {
-            lib_dir,
+            sdk_dir,
             helper,
             log_lines,
             whitelist,

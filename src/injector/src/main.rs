@@ -483,7 +483,7 @@ fn run() -> ExitCode {
         eprintln!(
             "       injector overlay <pid> rect <x1> <y1> <x2> <y2> <r> <g> <b> <a> [world|ui] | overlay <pid> clear"
         );
-        eprintln!("       injector serve | run [--script <path> [--lib <dir>]] [pid]");
+        eprintln!("       injector serve | run [--script <path>] [--sdk <dir>] [pid]");
         return ExitCode::from(2);
     }
     println!("{}", dispatch(&args));
@@ -495,7 +495,10 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     if let ["run", rest @ ..] = args.as_slice()
-        && matches!(rest, [] | ["--script", _] | ["--script", _, "--lib", _])
+        && matches!(
+            rest,
+            [] | ["--script", _] | ["--sdk", _] | ["--script", _, "--sdk", _]
+        )
     {
         return run_script(rest);
     }
@@ -556,8 +559,8 @@ fn run_script(args: &[&str]) -> ExitCode {
         ["--script", path, rest @ ..] => (Some(PathBuf::from(path)), rest),
         _ => (None, args),
     };
-    let (lib_dir, args) = match args {
-        ["--lib", dir, rest @ ..] => (Some(PathBuf::from(dir)), rest),
+    let (sdk_dir, args) = match args {
+        ["--sdk", dir, rest @ ..] => (Some(PathBuf::from(dir)), rest),
         _ => (None, args),
     };
     let pid = match args {
@@ -570,7 +573,7 @@ fn run_script(args: &[&str]) -> ExitCode {
             }
         },
         _ => {
-            eprintln!("Usage: injector run [--script <path> [--lib <dir>]] [pid]");
+            eprintln!("Usage: injector run [--script <path>] [--sdk <dir>] [pid]");
             return ExitCode::from(2);
         }
     };
@@ -732,7 +735,7 @@ fn run_script(args: &[&str]) -> ExitCode {
             let _ = out.flush();
         },
         script_path.as_deref(),
-        lib_dir.as_deref(),
+        sdk_dir.as_deref(),
         modules,
     );
     match result {

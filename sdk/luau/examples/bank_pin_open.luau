@@ -1,0 +1,55 @@
+--!strict
+local NAME = "Bank booth"
+local OPTION = "Bank"
+local TIMEOUT_MS = 20000
+
+local Host = require("@volcren/host")
+local sleep = Host.sleep
+local time = Host.time
+local Bankmain = require("@volcren/bankmain")
+local BankpinKeypad = require("@volcren/bankpin_keypad")
+local Objects = require("@volcren/objects")
+local Walker = require("@volcren/walker")
+
+if Bankmain.is_open() then
+	print("the bank is already open")
+	return
+end
+
+local me = assert(Walker.position())
+local booth = Objects.nearest(NAME, me)
+if booth == nil then
+	print(`no {NAME} around`)
+	return
+end
+print(`{booth.name} is {Objects.distance(booth, me)} tiles away`)
+if not Objects.interact(booth, OPTION) then
+	print(`couldn't {OPTION} {booth.name}`)
+	return
+end
+
+local started = time()
+local entered: string? = nil
+while time() - started < TIMEOUT_MS do
+	if BankpinKeypad.is_open() then
+		if entered == nil then
+			print("the PIN keypad is open")
+		end
+		entered = BankpinKeypad.enter()
+		print(`bank PIN: {entered}`)
+		if entered ~= "entered" then
+			print(
+				if entered == "no_pin"
+					then "no saved PIN for this account (or the loader is too old to be asked): save it on the Accounts page"
+					else "stopping"
+			)
+			return
+		end
+	end
+	if Bankmain.is_open() then
+		print(if entered then "the bank is open, PIN accepted" else "the bank is open, no PIN was asked for")
+		return
+	end
+	sleep(600)
+end
+print(if entered then "the PIN went in but the bank never opened" else "the bank never opened")

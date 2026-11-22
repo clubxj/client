@@ -11,24 +11,23 @@ use serde_json::Value;
 use super::*;
 use crate::api::models::ScriptManifest;
 use crate::api::{Api, ApiError, Me, StoreScript};
-use crate::libs::Lib;
 use crate::queue::{self, Entry, Goal, OnChange, Outcome, Phase, Runner, WhenFinished};
 use crate::script::{Launch, Script};
 use crate::session;
 use crate::ui::fields::{self, NumberField, Range};
 use crate::ui::{theme, widgets};
 
-const LOGOUT_SOURCE: &str = "local Logout = require(\"@lib/main/interfaces/gametabs/logout\")\nif not Logout.logout() then\n\terror(\"Couldn't log out\", 0)\nend\n";
+const LOGOUT_SOURCE: &str = "local Logout = require(\"@volcren/logout\")\nif not Logout.logout() then\n\terror(\"Couldn't log out\", 0)\nend\n";
 
 pub(super) struct Check {
     me: Me,
     scripts: Vec<StoreScript>,
     manifests: HashMap<String, Result<ScriptManifest, String>>,
     quotes: HashMap<String, Result<crate::api::models::Quote, String>>,
-    lib: Result<Lib, String>,
+    injectors: HashMap<String, Result<crate::injectors::Pinned, String>>,
 }
 
-fn check(api: &Api, ids: &[String]) -> Result<Box<Check>, ApiError> {
+fn check(api: &Api, bundled: &std::path::Path, ids: &[String]) -> Result<Box<Check>, ApiError> {
     let me = api.me()?;
     let mut scripts = api.scripts("", "", false)?;
     if me.can_browse_community() && ids.iter().any(|id| scripts.iter().all(|s| &s.id != id)) {
@@ -43,15 +42,19 @@ fn check(api: &Api, ids: &[String]) -> Result<Box<Check>, ApiError> {
         manifests.insert(id.clone(), api.manifest(id).map_err(|e| e.to_string()));
         quotes.insert(id.clone(), api.quote(id).map_err(|e| e.to_string()));
     }
-    let lib = session::cache_root()
-        .ok_or_else(|| "Can't find a cache folder on this system.".to_owned())
-        .and_then(|root| crate::libs::ensure(api, &root));
+    let injectors = quotes
+        .iter()
+        .filter_map(|(id, quote)| {
+            let version = quote.as_ref().ok()?.injector.as_deref()?;
+            Some((id.clone(), crate::injectors::pinned(api, bundled, version)))
+        })
+        .collect();
     Ok(Box::new(Check {
         me,
         scripts,
         manifests,
         quotes,
-        lib,
+        injectors,
     }))
 }
 
@@ -244,10 +247,11 @@ impl LoaderApp {
             .iter()
             .map(|e| e.script_id.clone())
             .collect();
+        let helper = self.settings.helper.clone();
         self.api_job(move |api| Event::QueueChecked {
             pid,
             entry: false,
-            result: check(&api, &ids),
+            result: check(&api, std::path::Path::new(&helper), &ids),
         });
     }
 
@@ -287,9 +291,6 @@ impl LoaderApp {
     }
 
     fn prompt_queue(&mut self, pid: u32, check: &Check) {
-        if let Err(error) = &check.lib {
-            return self.script_error(format!("Couldn't start the queue: {error}"));
-        }
         let queue = self.queues.current.clone();
         let mut rows = Vec::new();
         let mut approved = HashMap::new();
@@ -327,10 +328,11 @@ impl LoaderApp {
             return;
         };
         let ids = vec![entry.script_id.clone()];
+        let helper = self.settings.helper.clone();
         self.api_job(move |api| Event::QueueChecked {
             pid,
             entry: true,
-            result: check(&api, &ids),
+            result: check(&api, std::path::Path::new(&helper), &ids),
         });
     }
 
@@ -372,13 +374,6 @@ impl LoaderApp {
                 };
             }
         };
-        let lib = match &check.lib {
-            Ok(lib) => Lib {
-                version: lib.version.clone(),
-                warning: lib.warning.clone(),
-            },
-            Err(error) => return self.end_queue(pid, format!("Queue stopped: {error}")),
-        };
         let quote = match check.quotes.get(&entry.script_id) {
             Some(Ok(quote)) => quote.clone(),
             _ => return self.end_queue(pid, "Queue stopped: no quote.".into()),
@@ -386,6 +381,11 @@ impl LoaderApp {
         if let Some(why) = session::start_block(&ready.script, &quote, check.me.microcredits) {
             return self.end_queue(pid, format!("Queue stopped: {why}"));
         }
+        let injector = match check.injectors.get(&entry.script_id) {
+            Some(Ok(injector)) => injector.clone(),
+            Some(Err(error)) => return self.end_queue(pid, format!("Queue stopped: {error}")),
+            None => return self.end_queue(pid, format!("Queue stopped: {}", session::UNSUPPORTED)),
+        };
         let Some(target) = self
             .targets
             .iter()
@@ -412,9 +412,9 @@ impl LoaderApp {
             script: ready.script,
             target,
             replaces: None,
-            lib,
             run: None,
             launch: Launch { values, resume },
+            injector,
         });
     }
 
@@ -478,13 +478,23 @@ impl LoaderApp {
             .cloned()
             .ok_or("its client is gone")?;
         let root = session::cache_root().ok_or("no cache folder")?;
+        let injector = self
+            .runs
+            .iter()
+            .rev()
+            .find(|run| run.pid() == Some(pid))
+            .and_then(|run| run.injector.clone());
+        let settings = match &injector {
+            Some(pinned) => self.settings.with_helper(&pinned.path),
+            None => self.settings.clone(),
+        };
         let script = Script::start(
             &self.script_host(),
             LOGOUT_SOURCE,
             Some(&root.join("queue-logout.luau")),
-            Some(&root.join("lib")),
+            None,
             &target,
-            &self.settings,
+            &settings,
             &Launch::default(),
         )?;
         let id = self.next_run_id();
@@ -497,6 +507,7 @@ impl LoaderApp {
             &self.settings,
         );
         run.info("The queue is logging the account out.");
+        run.injector = injector;
         self.runs.push(run);
         Ok(id)
     }
@@ -504,11 +515,13 @@ impl LoaderApp {
     fn end_queue_info(&mut self, pid: u32, message: String) {
         self.queue_runners.retain(|r| r.pid != pid);
         self.script_info(message);
+        self.load_current_agent_back(pid);
     }
 
     pub(super) fn end_queue(&mut self, pid: u32, message: String) {
         self.queue_runners.retain(|r| r.pid != pid);
         self.script_error(message);
+        self.load_current_agent_back(pid);
     }
 
     pub(super) fn drive_queues(&mut self) {
@@ -1755,9 +1768,9 @@ mod tests {
             )]),
             quotes: HashMap::from([(
                 "s1".to_owned(),
-                Ok(crate::api::models::Quote { price, rank: 0, fee: 0, required: 0, requires_host: None }),
+                Ok(crate::api::models::Quote { price, rank: 0, fee: 0, required: 0, injector: Some(crate::update::VERSION.into()) }),
             )]),
-            lib: Err("unused".into()),
+            injectors: HashMap::new(),
         }
     }
 

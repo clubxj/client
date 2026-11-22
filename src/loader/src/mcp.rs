@@ -26,18 +26,18 @@ const EQUIPMENT: i32 = 94;
 const SIGN_IN: &str =
     "The loader isn't signed in. Open the loader and sign in once; `loader mcp` uses that sign-in.";
 
-const INSTRUCTIONS: &str = "VOLCREN automates a popular MMORPG's game client through the user's desktop loader. You act in the game by writing short Luau scripts against the VOLCREN library and running them with run_luau, never by sending clicks yourself.
+const INSTRUCTIONS: &str = "VOLCREN automates a popular MMORPG's game client through the user's desktop loader. You act in the game by writing short Luau scripts against the VOLCREN SDK and running them with run_luau, never by sending clicks yourself.
 
 Workflow:
 1. clients lists the game clients. load_agent injects the agent into one that isn't loaded or is outdated.
 2. game_state shows the player's position, skills, inventory and equipment.
-3. Before using a library module, find it with lib_docs (search, then read the page). Don't guess function names or signatures.
+3. Before using an SDK module, find it with sdk_docs (search, then read the page). Don't guess function names or signatures.
 4. check_luau a script before running it.
 5. run_luau runs it on one client and returns its output. A run that outlasts the wait keeps going: read it with run_output and end it with stop_run. One script runs per client at a time.
 
 Scripts:
-- Start with --!strict and require library modules by path: docs/main/walker.md documents require(\"@lib/main/walker\"), docs/host.md documents require(\"@lib/host\").
-- Prefer the library's high-level functions (walking, interacting, inventory, bank, interfaces) to raw Host input. They move the mouse, time actions and handle failures like a person, which matters more than speed.
+- Start with --!strict and require SDK modules by name: docs/walker.md documents require(\"@volcren/walker\"), docs/host.md documents require(\"@volcren/host\").
+- Prefer the SDK's high-level functions (walking, interacting, inventory, bank, interfaces) to raw Host input. They move the mouse, time actions and handle failures like a person, which matters more than speed.
 - print() output comes back to you. Keep scripts small, check the result, then continue.
 - Runs act on the user's real account. Ask the user before anything that spends coins, trades, uses the Grand Exchange, drops or alchs valuable items, or is otherwise risky. Stop runs you no longer need; all runs stop when you exit.";
 
@@ -67,7 +67,6 @@ fn saved() -> Saved {
 struct Context {
     api: Api,
     signed_in: Mutex<bool>,
-    lib: Mutex<Option<PathBuf>>,
     runs: runs::Runs,
 }
 
@@ -86,32 +85,6 @@ impl Context {
         } else {
             Err(SIGN_IN.into())
         }
-    }
-
-    fn lib(&self, settings: &Settings) -> Result<PathBuf, String> {
-        let dir = crate::workspace::lib_dir(settings)?;
-        if !settings.lib_dir.trim().is_empty() {
-            return if dir.is_dir() {
-                Ok(dir)
-            } else {
-                Err(format!(
-                    "The lib folder {} set in the loader's settings doesn't exist.",
-                    dir.display()
-                ))
-            };
-        }
-        let mut ensured = lock(&self.lib);
-        if let Some(dir) = ensured.as_ref() {
-            return Ok(dir.clone());
-        }
-        let root =
-            crate::session::cache_root().ok_or("Can't find a cache folder on this system.")?;
-        let lib = crate::libs::ensure(&self.api, &root)?;
-        if let Some(warning) = lib.warning {
-            eprintln!("{warning}");
-        }
-        *ensured = Some(dir.clone());
-        Ok(dir)
     }
 }
 
@@ -144,7 +117,6 @@ pub fn serve() {
     let context = Arc::new(Context {
         api: Api::new(Config::from_env()),
         signed_in: Mutex::new(false),
-        lib: Mutex::new(None),
         runs: runs::Runs::default(),
     });
     let out = Arc::new(Mutex::new(std::io::stdout()));
@@ -254,7 +226,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "run_luau",
-            "Runs a Luau script on a client with the VOLCREN library and returns its output once it ends or the wait runs out. It keeps running after that; use run_output and stop_run.",
+            "Runs a Luau script on a client with the VOLCREN SDK and returns its output once it ends or the wait runs out. It keeps running after that; use run_output and stop_run.",
             json!({
                 "pid": pid,
                 "source": source,
@@ -281,17 +253,17 @@ fn tools() -> Vec<Value> {
             &["run_id"],
         ),
         tool(
-            "lib_docs",
-            "Searches the VOLCREN library's docs and examples, or reads one page. With neither query nor page, lists all pages.",
+            "sdk_docs",
+            "Searches the VOLCREN SDK's docs and examples, or reads one page. With neither query nor page, lists all pages.",
             json!({
                 "query": { "type": "string", "description": "Words to search for, like `bank deposit`." },
-                "page": { "type": "string", "description": "A page path from a search or the list, like docs/main/walker.md. Library sources such as main/walker.luau can be read too." },
+                "page": { "type": "string", "description": "A page path from a search or the list, like docs/walker.md. SDK sources such as modules/walker.luau can be read too." },
             }),
             &[],
         ),
         tool(
             "check_luau",
-            "Checks a script with luau-analyze, resolving @lib to the library: syntax, type and lint problems. Published scripts check clean, so fix everything it reports.",
+            "Checks a script with luau-analyze, resolving @volcren to the SDK: syntax, type and lint problems. Published scripts check clean, so fix everything it reports.",
             json!({
                 "source": source,
                 "path": path,
@@ -316,8 +288,8 @@ fn call(context: &Context, params: &Value) -> Result<Value, Failure> {
         "run_luau" => run_luau(context, &args),
         "run_output" => run_output(context, &args),
         "stop_run" => stop_run(context, &args),
-        "lib_docs" => lib_docs(context, &args),
-        "check_luau" => check_luau(context, &args),
+        "sdk_docs" => sdk_docs(&args),
+        "check_luau" => check_luau(&args),
         _ => return Err((-32602, format!("Unknown tool {name}"))),
     };
     Ok(match result {
@@ -482,7 +454,7 @@ fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
         ));
     }
     let target = loaded(&saved.settings, pid)?;
-    let lib = context.lib(&saved.settings)?;
+    let sdk = crate::sdk::custom(&saved.settings)?;
     let config = api.config();
     let host = Host {
         wake: crate::wake::Wake::default(),
@@ -506,7 +478,7 @@ fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
         host: &host,
         source: &source,
         path: &path,
-        lib: &lib,
+        sdk: sdk.as_deref(),
         target: &target,
         settings: &saved.settings,
         launch: &launch,
@@ -555,18 +527,17 @@ fn stop_run(context: &Context, args: &Value) -> Result<String, String> {
         .text())
 }
 
-fn lib_docs(context: &Context, args: &Value) -> Result<String, String> {
-    let lib = context.lib(&saved().settings)?;
+fn sdk_docs(args: &Value) -> Result<String, String> {
+    let sdk = crate::sdk::dir(&saved().settings)?;
     match (text(args, "page")?, text(args, "query")?) {
-        (Some(page), _) => library::page(&lib, page),
-        (None, Some(query)) => library::search(&lib, query),
-        (None, None) => library::index(&lib),
+        (Some(page), _) => library::page(&sdk, page),
+        (None, Some(query)) => library::search(&sdk, query),
+        (None, None) => library::index(&sdk),
     }
 }
 
-fn check_luau(context: &Context, args: &Value) -> Result<String, String> {
+fn check_luau(args: &Value) -> Result<String, String> {
     let settings = saved().settings;
-    context.lib(&settings)?;
     let workspace = crate::workspace::prepare(&settings)?;
     let draft = match (text(args, "source")?, text(args, "path")?) {
         (Some(source), None) => library::Draft::Source(source),
@@ -584,8 +555,7 @@ mod tests {
         Context {
             api: Api::new(Config::default()),
             signed_in: Mutex::new(false),
-            lib: Mutex::new(None),
-            runs: runs::Runs::default(),
+                runs: runs::Runs::default(),
         }
     }
 

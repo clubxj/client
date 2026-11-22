@@ -30,17 +30,14 @@ const REDACTED: &str = "[account]";
 
 pub struct Versions {
     pub agent: Option<String>,
-    pub lib: Option<String>,
     pub gpu: Option<String>,
 }
 
 pub fn diagnostics(versions: &Versions, system: bool) -> Value {
     let mut map = Map::new();
     map.insert("loader".into(), json!(crate::update::VERSION));
-    map.insert("host_api".into(), json!(injector::HOST_API));
     map.insert("protocol".into(), json!(injector::PROTOCOL_VERSION));
     map.insert("agent".into(), json!(versions.agent));
-    map.insert("lib".into(), json!(versions.lib));
     map.insert(
         "platform".into(),
         json!(if cfg!(windows) { "native" } else { "wine" }),
@@ -839,7 +836,6 @@ mod tests {
     fn diagnostics_always_carry_versions_and_system_info_only_when_asked() {
         let versions = Versions {
             agent: Some("abc".into()),
-            lib: Some("2026.11.01".into()),
             gpu: Some("Mesa".into()),
         };
         let bare = diagnostics(&versions, false);

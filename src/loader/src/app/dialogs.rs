@@ -262,12 +262,12 @@ fn pending(script: StoreScript, replaces: Option<u64>) -> PendingStart {
         script,
         target: super::store_page::fake_target(4242),
         replaces,
-        lib: Lib {
-            version: "1".into(),
-            warning: None,
-        },
         run: None,
         launch: Launch::default(),
+        injector: crate::injectors::Pinned {
+            version: crate::update::VERSION.into(),
+            path: std::path::PathBuf::new(),
+        },
     }
 }
 

@@ -1,22 +1,19 @@
 use std::{
     fs,
-    io::{Cursor, Write},
     path::PathBuf,
 };
 
 use serde_json::json;
-use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
     api::{Api, ApiError, Config, Stats, StoreScript, models::Quote},
     fake_api::{FakeServer, Reply, Request},
-    libs,
+    injectors::Pinned,
     session::{self, Prepared, asks_first, restart_quote, revision_dir, sha256_hex, start_block},
 };
 
 const SCRIPT_ID: &str = "7d081fdd-59de-4a4e-9c29-b2f92d9bc697";
 const COMMUNITY_ID: &str = "0f3c1b52-8f0e-4c3a-9a58-1d6a4f7b2e90";
-const LIB_VERSION: &str = "2026.10.26-abc1234";
 const MAIN: &str = "print('main')";
 const UTIL: &str = "return 1";
 
@@ -27,11 +24,12 @@ struct Server {
     file_status: u16,
     wrong_checksum: bool,
     entry: &'static str,
-    no_lib: bool,
     price: i64,
     encrypted: bool,
     role: &'static str,
     microcredits: i64,
+    quoted_injector: Option<&'static str>,
+    session_injector: &'static str,
 }
 
 const KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -60,38 +58,22 @@ impl Server {
             file_status: 200,
             wrong_checksum: false,
             entry: "main.luau",
-            no_lib: false,
             price: 180_000,
             encrypted: false,
             role: "user",
             microcredits: 0,
+            quoted_injector: Some(crate::update::VERSION),
+            session_injector: crate::update::VERSION,
         }
     }
 
     fn start(self) -> FakeServer {
-        let lib = archive(&[
-            ("host.luau", "return {}"),
-            ("main/game_state.luau", "return 1"),
-        ]);
-        FakeServer::start(move |base, request| self.answer(base, request, &lib))
+        FakeServer::start(move |base, request| self.answer(base, request))
     }
 
-    fn answer(&self, base: &str, request: &Request, lib: &[u8]) -> Reply {
+    fn answer(&self, base: &str, request: &Request) -> Reply {
         let path = request.path.split('?').next().unwrap_or("");
         match (request.method.as_str(), path) {
-            ("GET", "/storage/v1/object/public/client/lib/index.json") if self.no_lib => {
-                Reply::status(404)
-            }
-            ("GET", "/storage/v1/object/public/client/lib/index.json") => Reply::json(
-                200,
-                json!({ "versions": [{
-                    "version": LIB_VERSION,
-                    "requires_host": injector::HOST_API,
-                    "path": format!("lib/{LIB_VERSION}/lib.zip"),
-                    "sha256": sha256_hex(lib),
-                }] }),
-            ),
-            ("GET", p) if p.ends_with("/lib.zip") => Reply::bytes(lib),
             ("GET", "/launcher/me") => Reply::json(
                 200,
                 json!({ "username": "tester", "role": self.role, "microcredits": self.microcredits, "min_balance_minutes": 10, "api_version": 3 }),
@@ -125,7 +107,7 @@ impl Server {
             ("GET", p) if p.starts_with("/launcher/scripts/") && p.ends_with("/quote") => {
                 Reply::json(
                     200,
-                    json!({ "price": 180_000, "rank": 0, "fee": 0, "required": 30_000 }),
+                    json!({ "price": 180_000, "rank": 0, "fee": 0, "required": 30_000, "injector": self.quoted_injector }),
                 )
             }
             ("POST", "/launcher/scripts/redeem") => match request.json()["code"]
@@ -176,6 +158,7 @@ impl Server {
                     json!({
                         "session_id": "s1",
                         "revision": self.revision,
+                        "injector": self.session_injector,
                         "price": self.price,
                         "key": self.encrypted.then_some(KEY_HEX),
                         "entry": self.entry,
@@ -211,20 +194,6 @@ impl Server {
     }
 }
 
-fn archive(files: &[(&str, &str)]) -> Vec<u8> {
-    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-    for (name, text) in files {
-        writer
-            .start_file(
-                *name,
-                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated),
-            )
-            .unwrap();
-        writer.write_all(text.as_bytes()).unwrap();
-    }
-    writer.finish().unwrap().into_inner()
-}
-
 fn cache(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("volcren-flow-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -243,14 +212,33 @@ fn api(server: &FakeServer) -> Api {
     Api::signed_in(config, "token-1")
 }
 
+const BUNDLED: &str = "bundled/injector.exe";
+
+fn bundled() -> Pinned {
+    Pinned {
+        version: crate::update::VERSION.into(),
+        path: PathBuf::from(BUNDLED),
+    }
+}
+
 fn prepare_warned(
     api: &Api,
     script: &StoreScript,
     root: &std::path::Path,
     warned: Option<i64>,
 ) -> Result<Prepared, String> {
-    let lib = libs::ensure(api, root)?;
-    session::prepare_warned(api, script, root, lib, warned)
+    let injector = bundled();
+    session::prepare_warned(
+        api,
+        script,
+        root,
+        warned,
+        &session::Start {
+            injector: &injector,
+            bundled: std::path::Path::new(BUNDLED),
+            swap_agent: &|_| Ok(()),
+        },
+    )
 }
 
 fn script() -> StoreScript {
@@ -281,21 +269,6 @@ fn signing_in_loads_the_account_and_the_scripts() {
 }
 
 #[test]
-fn a_quote_without_a_lib_still_quotes_and_says_why() {
-    let fake = Server {
-        no_lib: true,
-        ..Server::healthy()
-    }
-    .start();
-    let quoted =
-        session::quote(&api(&fake), Some(&cache("quote-no-lib")), SCRIPT_ID).expect("quote");
-    assert!(
-        quoted.lib.unwrap_err().contains("script library"),
-        "the run is refused with the lib's reason"
-    );
-}
-
-#[test]
 fn a_store_script_runs_from_start_to_end() {
     let fake = Server::healthy().start();
     let api = api(&fake);
@@ -303,7 +276,6 @@ fn a_store_script_runs_from_start_to_end() {
 
     let prepared = prepare_warned(&api, &script(), &root, None).expect("prepare");
     assert_eq!(prepared.source, MAIN);
-    assert_eq!(prepared.warning, None);
     assert_eq!(prepared.session.session_id, "s1");
     let dir = revision_dir(&root, SCRIPT_ID, 4);
     assert_eq!(prepared.entry, dir.join("main.luau"));
@@ -315,14 +287,6 @@ fn a_store_script_runs_from_start_to_end() {
         fs::read_dir(&dir).unwrap().count(),
         0,
         "the revision folder is empty"
-    );
-    assert_eq!(
-        fs::read_to_string(root.join("lib/main/game_state.luau")).unwrap(),
-        "return 1"
-    );
-    assert_eq!(
-        fs::read_to_string(root.join("lib/.version")).unwrap(),
-        LIB_VERSION
     );
 
     let order: Vec<String> = fake
@@ -336,10 +300,6 @@ fn a_store_script_runs_from_start_to_end() {
             .position(|line| line.contains(needle))
             .unwrap_or_else(|| panic!("{needle} not requested: {order:?}"))
     };
-    assert!(
-        position("lib/index.json") < position("POST /launcher/sessions"),
-        "the lib is fetched before the session starts, so it is never billed"
-    );
     assert!(position("POST /launcher/sessions") < position("/files/main.luau"));
 
     let start = fake
@@ -408,14 +368,10 @@ fn the_script_files_download_at_the_same_time() {
                 return Reply::status(504);
             }
         }
-        server.answer(base, request, &[])
+        server.answer(base, request)
     });
-    let lib = libs::Lib {
-        version: LIB_VERSION.into(),
-        warning: None,
-    };
     let root = cache("parallel");
-    let prepared = session::prepare_warned(&api(&fake), &script(), &root, lib, None)
+    let prepared = prepare_warned(&api(&fake), &script(), &root, None)
         .expect("both files are requested before either answers");
     assert_eq!(prepared.source, MAIN);
     assert_eq!(
@@ -449,7 +405,7 @@ fn encrypted_files_are_opened_with_the_session_key() {
 }
 
 #[test]
-fn every_start_downloads_the_files_again_but_reuses_the_lib() {
+fn every_start_downloads_the_files_again() {
     let fake = Server {
         price: 0,
         ..Server::healthy()
@@ -460,18 +416,6 @@ fn every_start_downloads_the_files_again_but_reuses_the_lib() {
     prepare_warned(&api, &free_script(), &root, None).unwrap();
     prepare_warned(&api, &free_script(), &root, None).unwrap();
     assert_eq!(fake.count("GET", "/files/main.luau"), 2);
-    assert_eq!(
-        fake.count("GET", "/storage/v1/object/public/client/lib/index.json"),
-        2,
-        "the index is checked every time"
-    );
-    assert_eq!(
-        fake.count(
-            "GET",
-            &format!("/storage/v1/object/public/client/lib/{LIB_VERSION}/lib.zip")
-        ),
-        1
-    );
     assert_eq!(fake.count("POST", "/launcher/sessions"), 2);
     let _ = fs::remove_dir_all(&root);
 }
@@ -581,39 +525,6 @@ fn too_few_credits_downloads_nothing_and_ends_nothing() {
         0,
         "there is no session to end"
     );
-    let _ = fs::remove_dir_all(&root);
-}
-
-#[test]
-fn without_any_lib_the_start_fails_before_a_session_exists() {
-    let fake = Server {
-        no_lib: true,
-        ..Server::healthy()
-    }
-    .start();
-    let root = cache("no-lib");
-    let error = prepare_warned(&api(&fake), &script(), &root, None)
-        .err()
-        .expect("fails");
-    assert!(error.contains("script library"), "{error}");
-    assert_eq!(
-        fake.count("POST", "/launcher/sessions"),
-        0,
-        "nothing is started, so nothing can be billed"
-    );
-    let _ = fs::remove_dir_all(&root);
-}
-
-#[test]
-fn an_old_cached_lib_is_used_when_the_index_cannot_be_read() {
-    let root = cache("offline");
-    prepare_warned(&api(&Server::healthy().start()), &script(), &root, None).unwrap();
-    let fake = Server {
-        no_lib: true,
-        ..Server::healthy()
-    }
-    .start();
-    prepare_warned(&api(&fake), &script(), &root, None).expect("the cached lib is enough");
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -771,13 +682,11 @@ fn a_restart_ends_the_old_session_before_it_asks_for_the_quote() {
     let fake = Server::healthy().start();
     let api = api(&fake);
 
-    let root = cache("restart");
-    let restart = restart_quote(&api, Some(&root), "s1", SCRIPT_ID, false, Some(4))
+    let restart = restart_quote(&api, std::path::Path::new(BUNDLED), "s1", SCRIPT_ID, false, Some(4))
         .expect("quote")
         .expect("listed");
     assert_eq!(restart.script.id, SCRIPT_ID);
     assert_eq!(restart.quoted.quote.required, 30_000);
-    assert_eq!(restart.quoted.lib.expect("lib").version, LIB_VERSION);
 
     let paths: Vec<String> = fake.requests().into_iter().map(|r| r.path).collect();
     let end = paths.iter().position(|p| p.ends_with("/s1/end")).unwrap();
@@ -790,23 +699,14 @@ fn a_restart_of_a_script_no_longer_listed_finds_nothing() {
     let fake = Server::healthy().start();
     let api = api(&fake);
 
-    let found = restart_quote(
-        &api,
-        Some(&cache("unlisted")),
-        "s1",
-        "not-listed",
-        false,
-        None,
-    )
-    .expect("quote");
+    let found = restart_quote(&api, std::path::Path::new(BUNDLED), "s1", "not-listed", false, None).expect("quote");
     assert_eq!(found, None);
 }
 
 #[test]
 fn a_restart_reads_the_manifest_only_when_the_live_revision_is_not_cached() {
     let fake = Server::healthy().start();
-    let root = cache("restart-manifest");
-    let cached = restart_quote(&api(&fake), Some(&root), "s1", SCRIPT_ID, false, Some(4))
+    let cached = restart_quote(&api(&fake), std::path::Path::new(BUNDLED), "s1", SCRIPT_ID, false, Some(4))
         .expect("quote")
         .expect("listed");
     assert_eq!(cached.manifest, None);
@@ -815,7 +715,7 @@ fn a_restart_reads_the_manifest_only_when_the_live_revision_is_not_cached() {
         0
     );
 
-    let published = restart_quote(&api(&fake), Some(&root), "s1", SCRIPT_ID, false, Some(3))
+    let published = restart_quote(&api(&fake), std::path::Path::new(BUNDLED), "s1", SCRIPT_ID, false, Some(3))
         .expect("quote")
         .expect("listed");
     assert_eq!(published.manifest.expect("manifest").revision, 4);
@@ -828,8 +728,7 @@ fn a_restart_reads_the_manifest_only_when_the_live_revision_is_not_cached() {
 #[test]
 fn a_restart_of_a_community_script_asks_for_the_list_the_account_may_read() {
     let fake = Server::healthy().start();
-    let root = cache("restart-community");
-    let restart = restart_quote(&api(&fake), Some(&root), "s1", COMMUNITY_ID, true, None)
+    let restart = restart_quote(&api(&fake), std::path::Path::new(BUNDLED), "s1", COMMUNITY_ID, true, None)
         .expect("quote")
         .expect("listed");
     assert!(restart.script.community);
@@ -841,9 +740,16 @@ fn a_restart_of_a_community_script_asks_for_the_list_the_account_may_read() {
     }
     .start();
     assert!(
-        restart_quote(&api(&fake), Some(&root), "s1", COMMUNITY_ID, true, None)
-            .expect("quote")
-            .is_some()
+        restart_quote(
+            &api(&fake),
+            std::path::Path::new(BUNDLED),
+            "s1",
+            COMMUNITY_ID,
+            true,
+            None
+        )
+        .expect("quote")
+        .is_some()
     );
     assert_eq!(fake.count("GET", "/launcher/scripts?community=true"), 1);
 }
@@ -856,17 +762,12 @@ fn a_quote_comes_with_the_balance_of_now() {
     }
     .start();
     let root = cache("quote");
-    let quoted = session::quote(&api(&fake), Some(&root), SCRIPT_ID).expect("quote");
+    let quoted =
+        session::quote(&api(&fake), std::path::Path::new(BUNDLED), SCRIPT_ID).expect("quote");
     assert_eq!(quoted.me.microcredits, 50_000);
     assert_eq!(
         start_block(&script(), &quoted.quote, quoted.me.microcredits),
         None
-    );
-    assert_eq!(quoted.lib.expect("lib").version, LIB_VERSION);
-    assert_eq!(
-        fs::read_to_string(root.join("lib/.version")).unwrap(),
-        LIB_VERSION,
-        "the lib is ready before anything is billed"
     );
     assert_eq!(fake.count("POST", "/launcher/sessions"), 0);
     let _ = fs::remove_dir_all(&root);
@@ -878,7 +779,7 @@ fn quote(price: i64, fee: i64, required: i64) -> Quote {
         rank: i64::from(fee > 0),
         fee,
         required,
-        requires_host: None,
+        injector: Some(crate::update::VERSION.into()),
     }
 }
 
@@ -928,23 +829,6 @@ fn a_start_is_refused_without_the_balance_or_the_access() {
 }
 
 #[test]
-fn a_revision_published_against_a_newer_lib_needs_a_newer_loader() {
-    let published = |host| Quote {
-        requires_host: host,
-        ..quote(180_000, 0, 30_000)
-    };
-    assert_eq!(
-        start_block(&script(), &published(Some(injector::HOST_API)), 30_000),
-        None
-    );
-    assert_eq!(start_block(&script(), &published(None), 30_000), None);
-    assert!(
-        start_block(&script(), &published(Some(injector::HOST_API + 1)), 30_000)
-            .is_some_and(|why| why.contains("newer loader"))
-    );
-}
-
-#[test]
 fn an_exempt_account_starts_a_priced_script_on_no_balance() {
     assert_eq!(script().price, 180_000);
     let exempt = quote(0, 0, 0);
@@ -957,4 +841,92 @@ fn a_quote_comes_from_the_server() {
     let fake = Server::healthy().start();
     let quote = api(&fake).quote(SCRIPT_ID).expect("quote");
     assert_eq!((quote.price, quote.required), (180_000, 30_000));
+}
+
+#[test]
+fn a_quote_names_the_injector_the_live_revision_runs_on() {
+    let fake = Server::healthy().start();
+    let quoted =
+        session::quote(&api(&fake), std::path::Path::new(BUNDLED), SCRIPT_ID).expect("quote");
+    assert_eq!(quoted.injector, Ok(bundled()), "this release's own injector needs no download");
+    assert_eq!(fake.count("GET", "/storage/"), 0);
+}
+
+#[test]
+fn a_live_revision_without_a_supported_injector_is_refused_before_anything_is_billed() {
+    let fake = Server {
+        quoted_injector: None,
+        ..Server::healthy()
+    }
+    .start();
+    let quoted =
+        session::quote(&api(&fake), std::path::Path::new(BUNDLED), SCRIPT_ID).expect("quote");
+    assert_eq!(quoted.injector, Err(session::UNSUPPORTED.to_owned()));
+    assert_eq!(
+        start_block(&script(), &quoted.quote, 1_000_000),
+        Some(session::UNSUPPORTED.to_owned())
+    );
+    assert_eq!(fake.count("POST", "/launcher/sessions"), 0);
+}
+
+#[test]
+fn the_agent_is_swapped_before_the_session_starts() {
+    let fake = Server::healthy().start();
+    let api = api(&fake);
+    let root = cache("swap");
+    let injector = bundled();
+    let sessions_at_swap = std::cell::Cell::new(None);
+    let swap = |pinned: &Pinned| {
+        assert_eq!(pinned, &bundled());
+        sessions_at_swap.set(Some(fake.count("POST", "/launcher/sessions")));
+        Ok(())
+    };
+    let prepared = session::prepare_warned(
+        &api,
+        &script(),
+        &root,
+        None,
+        &session::Start {
+            injector: &injector,
+            bundled: std::path::Path::new(BUNDLED),
+            swap_agent: &swap,
+        },
+    )
+    .expect("prepare");
+    assert_eq!(sessions_at_swap.get(), Some(0));
+    assert_eq!(prepared.injector, bundled());
+
+    let refused = |_: &Pinned| Err("the client is gone".to_owned());
+    let error = session::prepare_warned(
+        &api,
+        &script(),
+        &root,
+        None,
+        &session::Start {
+            injector: &injector,
+            bundled: std::path::Path::new(BUNDLED),
+            swap_agent: &refused,
+        },
+    )
+    .err()
+    .expect("refused");
+    assert_eq!(error, "the client is gone");
+    assert_eq!(fake.count("POST", "/launcher/sessions"), 1, "no session for a failed swap");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_session_on_an_injector_that_cant_be_had_is_ended() {
+    let fake = Server {
+        session_injector: "2026.01.01-missing",
+        ..Server::healthy()
+    }
+    .start();
+    let root = cache("missing-injector");
+    let error = prepare_warned(&api(&fake), &script(), &root, None)
+        .err()
+        .expect("fails");
+    assert!(error.contains("2026.01.01-missing"), "{error}");
+    assert_eq!(fake.count("POST", "/launcher/sessions/s1/end"), 1);
+    let _ = fs::remove_dir_all(&root);
 }

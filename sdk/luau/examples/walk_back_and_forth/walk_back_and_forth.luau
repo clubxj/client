@@ -1,0 +1,43 @@
+--!strict
+local Host = require("@volcren/host")
+local time = Host.time
+local Random = require("@volcren/random")
+local Walker = require("@volcren/walker")
+
+local values = Host.settings()
+
+Walker.DEBUG = values.debug == true
+local points = {
+	{ x = values.ax :: number, y = values.ay :: number, plane = values.aplane :: number },
+	{ x = values.bx :: number, y = values.by :: number, plane = values.bplane :: number },
+}
+local near = values.near :: number
+
+local me = assert(Walker.here())
+local function away(p: Host.NavTile): number
+	return Walker.distance(me, p) + if p.plane ~= me.plane then 1000 else 0
+end
+local next_point = if away(points[1]) >= away(points[2]) then 1 else 2
+
+local legs, failed = 0, 0
+local started = time()
+for lap = 1, values.laps :: number do
+	for _ = 1, 2 do
+		local to = points[next_point]
+		local began = time()
+		local ok = Walker.walk({ x = to.x, y = to.y }, { plane = to.plane, near = near })
+		local now = Walker.here()
+		legs += 1
+		if not ok then
+			failed += 1
+		end
+		print(
+			`lap {lap}: {if ok then "reached" else "didn't reach"} {to.x}, {to.y} (plane {to.plane}) in {math.floor(
+				(time() - began) / 100
+			) / 10} s, now at {now and now.x}, {now and now.y} (plane {now and now.plane})`
+		)
+		next_point = 3 - next_point
+		Random.sleep(400, 1500)
+	end
+end
+print(`{legs - failed} of {legs} walks reached their point in {math.floor((time() - started) / 1000)} s`)

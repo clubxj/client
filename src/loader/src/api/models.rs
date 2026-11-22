@@ -171,13 +171,14 @@ pub struct Quote {
     pub fee: i64,
     pub required: i64,
     #[serde(default)]
-    pub requires_host: Option<u32>,
+    pub injector: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct StartedSession {
     pub session_id: String,
     pub revision: i64,
+    pub injector: String,
     pub price: i64,
     pub entry: String,
     pub files: Vec<SessionFile>,
@@ -425,11 +426,12 @@ mod tests {
     #[test]
     fn parses_a_started_session() {
         let session: StartedSession = serde_json::from_str(
-            r#"{"session_id":"s","revision":3,"price":0,"entry":"main.luau","files":[{"name":"main.luau","url":"https://x/y"},{"name":"util.luau","url":"https://x/z","sha256":"ab"}],"heartbeat_seconds":60}"#,
+            r#"{"session_id":"s","revision":3,"injector":"2026.11.22-abc1234","price":0,"entry":"main.luau","files":[{"name":"main.luau","url":"https://x/y"},{"name":"util.luau","url":"https://x/z","sha256":"ab"}],"heartbeat_seconds":60}"#,
         )
         .unwrap();
         assert_eq!(session.files.len(), 2);
         assert_eq!(session.files[1].sha256.as_deref(), Some("ab"));
+        assert_eq!(session.injector, "2026.11.22-abc1234");
     }
 
     #[test]

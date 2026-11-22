@@ -26,7 +26,7 @@ jobs:
                 include:
                     - name: windows
                       target: x86_64-pc-windows-gnu
-                      build: cargo build --release -p injector --no-default-features --features agent --target x86_64-pc-windows-gnu
+                      build: cargo build --release -p injector --target x86_64-pc-windows-gnu
                       artifact_path: |
                           target/x86_64-pc-windows-gnu/release/injector.exe
                     - name: linux
@@ -181,6 +181,43 @@ jobs:
                   path: target/release/loader.exe
                   if-no-files-found: error
 
+    sdk:
+        name: check and package the SDK
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: sdk/luau
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac
+              with:
+                  working_directory: sdk/luau
+
+            - name: Lint and type check
+              run: tools/lint.sh
+
+            - name: Docs cover every function
+              run: |
+                  python3 tools/docgen/gen_docs.py
+                  if [ -n "$(git status --porcelain -- docs)" ]; then
+                      git status --short -- docs
+                      echo "Docs are out of step with the modules: run python3 sdk/luau/tools/docgen/gen_docs.py and write the new sections." >&2
+                      exit 1
+                  fi
+
+            - name: Package
+              run: |
+                  version="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)-$(git rev-parse --short=7 HEAD)"
+                  mkdir -p "$GITHUB_WORKSPACE/out"
+                  zip -qr "$GITHUB_WORKSPACE/out/sdk-$version.zip" .luaurc modules docs examples
+
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: package-sdk
+                  path: out/sdk-*.zip
+                  if-no-files-found: error
+
     package:
         name: package for Linux
         needs: build
@@ -309,7 +346,7 @@ jobs:
 
     sign:
         name: sign the manifest
-        needs: [package, msi]
+        needs: [package, msi, sdk]
         if: github.event_name == 'push'
         runs-on: ubuntu-latest
         environment: release-signing
@@ -325,6 +362,11 @@ jobs:
                   merge-multiple: true
                   path: out
 
+            - uses: actions/download-artifact@v4
+              with:
+                  name: volcren-windows-release
+                  path: windows
+
             - name: Install rsign
               run: cargo install rsign2 --version 0.6.7 --locked
 
@@ -336,18 +378,23 @@ jobs:
                   fi
                   win="volcren-windows-$VERSION.msi"
                   lin="volcren-linux-$VERSION.tar.gz"
+                  sdk="sdk-$VERSION.zip"
                   mkdir manifest
                   jq -n --arg version "$VERSION" --argjson build "$BUILD" --argjson api "${API_VERSION:-1}" \
                       --arg win "$win" --arg winsum "$(sha256sum "out/$win" | cut -d' ' -f1)" \
                       --arg lin "$lin" --arg linsum "$(sha256sum "out/$lin" | cut -d' ' -f1)" \
+                      --arg sdk "$sdk" --arg sdksum "$(sha256sum "out/$sdk" | cut -d' ' -f1)" \
                       '{version: $version, build: $build, api_version: $api, files: {
                           windows: {name: $win, path: "\($version)/\($win)", sha256: $winsum},
-                          linux: {name: $lin, path: "\($version)/\($lin)", sha256: $linsum}}}' > manifest/latest.json
+                          linux: {name: $lin, path: "\($version)/\($lin)", sha256: $linsum}},
+                        sdk: {name: $sdk, path: "\($version)/\($sdk)", sha256: $sdksum}}' > manifest/latest.json
                   cat manifest/latest.json
 
                   key="$RUNNER_TEMP/update.key"
                   (umask 077 && printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key")
                   rsign sign -W -s "$key" -t "$VERSION" -x "$RUNNER_TEMP/latest.minisig" manifest/latest.json
+                  cp windows/injector.exe out/injector.exe
+                  rsign sign -W -s "$key" -t "$VERSION" -x out/injector.exe.minisig out/injector.exe
                   rm -f "$key"
 
                   jq -n --rawfile manifest manifest/latest.json --rawfile signature "$RUNNER_TEMP/latest.minisig" \
@@ -368,6 +415,9 @@ jobs:
                   path: |
                       out/volcren-windows-*.msi
                       out/volcren-linux-*.tar.gz
+                      out/sdk-*.zip
+                      out/injector.exe
+                      out/injector.exe.minisig
                       out/SHA256SUMS
                   if-no-files-found: error
 
@@ -410,6 +460,13 @@ jobs:
                       rsign verify -P "$key" -x signed.minisig signed.manifest > /dev/null 2>&1 && verified=1
                   done
                   [ -n "$verified" ] || { echo "The manifest isn't signed by a key in update.rs." >&2; exit 1; }
+                  grep -qxF "trusted comment: $VERSION" out/injector.exe.minisig \
+                      || { echo "injector.exe isn't signed for $VERSION." >&2; exit 1; }
+                  verified=
+                  for key in $(grep -oE '"RW[A-Za-z0-9+/]{54}"' src/loader/src/update.rs | tr -d '"'); do
+                      rsign verify -P "$key" -x out/injector.exe.minisig out/injector.exe > /dev/null 2>&1 && verified=1
+                  done
+                  [ -n "$verified" ] || { echo "injector.exe isn't signed by a key in update.rs." >&2; exit 1; }
 
             - name: Upload
               env:
@@ -432,6 +489,9 @@ jobs:
                   lin="volcren-linux-$VERSION.tar.gz"
                   upload "out/$win" "$VERSION/$win" application/x-msi
                   upload "out/$lin" "$VERSION/$lin" application/gzip
+                  upload "out/sdk-$VERSION.zip" "$VERSION/sdk-$VERSION.zip" application/zip
+                  upload out/injector.exe "$VERSION/injector.exe" application/vnd.microsoft.portable-executable
+                  upload out/injector.exe.minisig "$VERSION/injector.exe.minisig" text/plain
                   upload manifest/latest.signed.json latest.signed.json application/json max-age=60
                   upload manifest/latest.json latest.json application/json max-age=60
 

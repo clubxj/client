@@ -14,6 +14,7 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 | `loader mcp` (agents) | [mcp.md](mcp.md)                         |
 | Offsets, client internals, `standalone/`, `archive/`, `tools/memscan` | [reverse-engineering.md](reverse-engineering.md) |
 | Release workflow, signed manifest, MSI | [releases.md](releases.md)          |
+| `sdk/luau` (the Luau SDK scripts use) | [sdk.md](sdk.md)                   |
 
 ## Flow
 
@@ -25,10 +26,10 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 ## Invariants
 
 - **No hardcoded addresses.** Offset rules match code shape at runtime; a rule that doesn't match exactly one candidate fails rather than guesses.
-- **`src/ipc` owns the wire format.** Any change bumps `ipc::PROTOCOL_VERSION`, with agent, injector and the lib's `host.luau` updated together.
+- **`src/ipc` owns the wire format.** Any change bumps `ipc::PROTOCOL_VERSION`, with agent, injector and `sdk/luau/modules/host.luau` updated together.
 - **Agent version = hash of the DLL** (`ipc::build_id`); the DLL hot reloads without restarting the client. The DLL is embedded in `injector.exe`, so an injector always loads the agent it was built with.
 - **Windows code is cross-compiled** for `x86_64-pc-windows-gnu`; only the loader and the injector's non-Windows stubs are native. The released Windows loader is built on Windows ([releases.md](releases.md)).
-- **Scripts see only the globals** in `src/injector/src/sandbox.rs`; `lib/host.luau` (separate repo) is their typed wrapper.
+- **Scripts see only the globals** in `src/injector/src/sandbox.rs`; `sdk/luau/modules/host.luau` is their typed wrapper, and the rest of the SDK builds on it.
 - **`standalone/` is decompiled client code**: read only, keep private.
 - **The agent runs in a real client**: avoid anything that could crash it.
 
@@ -43,7 +44,7 @@ Automates the native game client (C++ x64 PE) on Windows, or on Linux with the c
 
 | Task                              | Path                                                                                                                                                                                                                                                                       |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| New game state                    | offset rule in `src/agent/src/client/offsets/` → reader in `src/agent/src/client/` → layout in `src/ipc/src/state.rs` (bump protocol) → decoder in `src/decode/src/` (plus a worker kind if scripts poll it, see [ipc-protocol.md](ipc-protocol.md)) → global in `sandbox.rs` → type and wrapper in the lib's `host.luau`, and its lib docs |
+| New game state                    | offset rule in `src/agent/src/client/offsets/` → reader in `src/agent/src/client/` → layout in `src/ipc/src/state.rs` (bump protocol) → decoder in `src/decode/src/` (plus a worker kind if scripts poll it, see [ipc-protocol.md](ipc-protocol.md)) → global in `sandbox.rs` → type and wrapper in `sdk/luau/modules/host.luau`, and its page in `sdk/luau/docs/` |
 | Offsets broke after a game update | [reverse-engineering.md](reverse-engineering.md)                                                                                                                                                                                                                           |
 | New sandbox global                | checklist in [injector-and-sandbox.md](injector-and-sandbox.md)                                                                                                                                                                                                            |
 | Loader UI                         | `src/loader/src/app.rs`, platform calls in `src/loader/src/backend/`                                                                                                                                                                                                       |

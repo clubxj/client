@@ -37,6 +37,10 @@ const PUBLIC_KEYS: [&str; 2] = [
     "RWSClklMB6socMrdLgZuncW84XWwIJq1ZZS9tyXgoOhqjOde/GzqCdob",
 ];
 
+pub fn public_keys() -> &'static [&'static str] {
+    &PUBLIC_KEYS
+}
+
 const SIGNED_MANIFEST: &str = "latest.signed.json";
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;

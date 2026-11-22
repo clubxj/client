@@ -20,7 +20,7 @@ impl Location {
 }
 
 pub fn scan(settings: &Settings) -> Scan {
-    let (agent_version, errors) = match agent_version(settings) {
+    let (agent_version, errors) = match helper_agent_version(settings) {
         Ok(version) => (Some(version), Vec::new()),
         Err(error) => (None, vec![error]),
     };
@@ -41,7 +41,11 @@ type HelperStamp = (PathBuf, SystemTime, u64);
 
 static AGENT_VERSION: Mutex<Option<(HelperStamp, String)>> = Mutex::new(None);
 
-fn agent_version(settings: &Settings) -> Result<String, String> {
+pub fn agent_version(_target: &Target, settings: &Settings) -> Result<String, String> {
+    helper_agent_version(settings)
+}
+
+fn helper_agent_version(settings: &Settings) -> Result<String, String> {
     let helper = PathBuf::from(&settings.helper);
     let metadata = helper
         .metadata()
@@ -275,14 +279,14 @@ pub fn script_command(
     target: &Target,
     settings: &Settings,
     script: Option<&Path>,
-    lib: Option<&Path>,
+    sdk: Option<&Path>,
 ) -> Result<Command, String> {
     if !Path::new(&settings.helper).is_file() {
         return Err("Set the path to injector.exe, scripts run in it.".into());
     }
     let mut command = Command::new(&settings.helper);
     super::no_window(&mut command);
-    super::run_args(&mut command, script, lib);
+    super::run_args(&mut command, script, sdk);
     command.arg(target.client.pid.to_string());
     Ok(command)
 }

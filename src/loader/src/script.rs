@@ -222,12 +222,12 @@ impl Script {
         host: &Host,
         source: &str,
         path: Option<&Path>,
-        lib: Option<&Path>,
+        sdk: Option<&Path>,
         target: &Target,
         settings: &Settings,
         launch: &Launch,
     ) -> Result<Self, String> {
-        Self::start_with(host, source, &[], path, lib, target, settings, launch)
+        Self::start_with(host, source, &[], path, sdk, target, settings, launch)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -236,13 +236,13 @@ impl Script {
         source: &str,
         modules: &[(String, String)],
         path: Option<&Path>,
-        lib: Option<&Path>,
+        sdk: Option<&Path>,
         target: &Target,
         settings: &Settings,
         launch: &Launch,
     ) -> Result<Self, String> {
         let client = hold_client(target)?;
-        let command = backend::script_command(target, settings, path, lib)?;
+        let command = backend::script_command(target, settings, path, sdk)?;
         Self::spawn(
             command,
             Some(client),

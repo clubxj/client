@@ -11,7 +11,7 @@ use crate::api::{
     Api, ApiError, Heartbeat, StartedSession, Stats, StoreScript,
     models::{Ended, Me, Quote, ScriptManifest, SessionFile, credits_label, end_reason_message},
 };
-use crate::libs::{self, Lib};
+use crate::injectors::{self, Pinned};
 use crate::script::Process;
 
 pub const GIVE_UP_AFTER: Duration = Duration::from_secs(4 * 60);
@@ -100,8 +100,7 @@ pub struct Prepared {
     pub entry: PathBuf,
     pub source: String,
     pub modules: Vec<(String, String)>,
-    pub warning: Option<String>,
-    pub lib_version: String,
+    pub injector: Pinned,
 }
 
 const NO_CACHE: &str = "Can't find a cache folder on this system.";
@@ -110,7 +109,16 @@ const NO_CACHE: &str = "Can't find a cache folder on this system.";
 pub struct Quoted {
     pub me: Me,
     pub quote: Quote,
-    pub lib: Result<Lib, String>,
+    pub injector: Result<Pinned, String>,
+}
+
+pub const UNSUPPORTED: &str = "This script's live revision runs on an injector that is no longer supported. Its author needs to publish it again.";
+
+fn pinned_for(api: &Api, bundled: &Path, quote: &Quote) -> Result<Pinned, String> {
+    match &quote.injector {
+        Some(version) => injectors::pinned(api, bundled, version),
+        None => Err(UNSUPPORTED.into()),
+    }
 }
 
 fn joined<T>(handle: ScopedJoinHandle<'_, T>) -> T {
@@ -119,31 +127,25 @@ fn joined<T>(handle: ScopedJoinHandle<'_, T>) -> T {
         .unwrap_or_else(|payload| panic::resume_unwind(payload))
 }
 
-fn ensure_lib(api: &Api, root: Option<&Path>) -> Result<Lib, String> {
-    libs::ensure(api, root.ok_or(NO_CACHE)?)
-}
-
 pub fn prepare(
     api: &Api,
     script: &StoreScript,
-    lib: Lib,
     warned: Option<i64>,
+    start: &Start<'_>,
 ) -> Result<Prepared, String> {
     let root = cache_root().ok_or(NO_CACHE)?;
-    prepare_warned(api, script, &root, lib, warned)
+    prepare_warned(api, script, &root, warned, start)
 }
 
-pub fn quote(api: &Api, root: Option<&Path>, script_id: &str) -> Result<Quoted, ApiError> {
+pub fn quote(api: &Api, bundled: &Path, script_id: &str) -> Result<Quoted, ApiError> {
     thread::scope(|scope| {
-        let lib = scope.spawn(|| ensure_lib(api, root));
         let me = scope.spawn(|| api.me());
-        let quote = api.quote(script_id);
-        let me = joined(me);
-        let lib = joined(lib);
+        let quote = api.quote(script_id)?;
+        let injector = pinned_for(api, bundled, &quote);
         Ok(Quoted {
-            me: me?,
-            quote: quote?,
-            lib,
+            me: joined(me)?,
+            quote,
+            injector,
         })
     })
 }
@@ -157,14 +159,13 @@ pub struct Restart {
 
 pub fn restart_quote(
     api: &Api,
-    root: Option<&Path>,
+    bundled: &Path,
     old_session: &str,
     script_id: &str,
     community: bool,
     cached_revision: Option<i64>,
 ) -> Result<Option<Restart>, ApiError> {
     thread::scope(|scope| {
-        let lib = scope.spawn(|| ensure_lib(api, root));
         let _ = api.end_session(old_session);
         let quote = scope.spawn(|| api.quote(script_id));
         let me = api.me()?;
@@ -180,12 +181,13 @@ pub fn restart_quote(
             _ => Some(api.manifest(script_id)?),
         };
         let quote = joined(quote)?;
+        let injector = pinned_for(api, bundled, &quote);
         Ok(Some(Restart {
             script,
             quoted: Quoted {
                 me,
                 quote,
-                lib: joined(lib),
+                injector,
             },
             manifest,
         }))
@@ -202,13 +204,8 @@ pub fn start_block(script: &StoreScript, quote: &Quote, microcredits: i64) -> Op
     if !script.can_access {
         return Some("You don't have access to this script.".into());
     }
-    if quote
-        .requires_host
-        .is_some_and(|host| host > injector::HOST_API)
-    {
-        return Some(
-            "This script's live revision needs a newer loader. Update the loader to run it.".into(),
-        );
+    if quote.injector.is_none() {
+        return Some(UNSUPPORTED.into());
     }
     script
         .revision
@@ -224,11 +221,19 @@ pub fn prepare_warned(
     api: &Api,
     script: &StoreScript,
     root: &Path,
-    lib: Lib,
     warned: Option<i64>,
+    start: &Start<'_>,
 ) -> Result<Prepared, String> {
     let id = safe_id(&script.id).ok_or("The server sent a script id that can't be used.")?;
+    (start.swap_agent)(start.injector)?;
     let session = api.start_session(id).map_err(|e| e.to_string())?;
+    let injector = match on_injector(api, start, &session) {
+        Ok(injector) => injector,
+        Err(error) => {
+            let _ = api.end_session(&session.session_id);
+            return Err(error);
+        }
+    };
     if script.community && warned != Some(session.revision) {
         let _ = api.end_session(&session.session_id);
         return Err(format!(
@@ -244,8 +249,7 @@ pub fn prepare_warned(
                 entry,
                 source,
                 modules,
-                warning: lib.warning,
-                lib_version: lib.version,
+                injector,
             })
         }
         Err(error) => {
@@ -253,6 +257,21 @@ pub fn prepare_warned(
             Err(error)
         }
     }
+}
+
+pub struct Start<'a> {
+    pub injector: &'a Pinned,
+    pub bundled: &'a Path,
+    pub swap_agent: &'a dyn Fn(&Pinned) -> Result<(), String>,
+}
+
+fn on_injector(api: &Api, start: &Start<'_>, session: &StartedSession) -> Result<Pinned, String> {
+    if session.injector == start.injector.version {
+        return Ok(start.injector.clone());
+    }
+    let moved = injectors::pinned(api, start.bundled, &session.injector)?;
+    (start.swap_agent)(&moved)?;
+    Ok(moved)
 }
 
 pub fn get_ok(

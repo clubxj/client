@@ -26,7 +26,8 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 | `queue.rs`, `app/queue_page.rs` | Queue model and pure rules (when an entry ends, what follows an exit, break carry-over); Queue page, start checks and the per-client runner |
 | `http.rs`, `whitelist.rs` | Script HTTP requests, whitelist |
 | `transports.rs` | Transport data versions |
-| `libs.rs` | Shared lib selection for store scripts |
+| `sdk.rs` | The SDK built into the loader, unpacked for docs, checks and the workspace `.luaurc`, see [sdk.md](sdk.md) |
+| `injectors.rs` | Pinned injectors: downloads and verifies the release a store revision runs on |
 | `update.rs`, `update/` | Signed manifest, `archive.rs` (Linux), `msi.rs` + `msi_command.rs` (Windows) |
 | `vars.rs`, `script_log.rs`, `script_names.rs`, `inventory.rs`, `widgets.rs`, `packets.rs`, `packet_defs.rs` | Development inspectors |
 | `icons.rs` | Icon store |
@@ -62,15 +63,16 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 
 - `API_VERSION` = 3; the server tells an older loader to update.
 - Credits: API counts microcredits (1,000,000 per CREDIT); `price` is microcredits per hour.
-- Run asks `GET /launcher/scripts/:id/quote` first: only the server knows author/grantee/tester pricing (0) and the account's open sessions. The quote carries the current balance, so website top-ups count. A quoted fee means another session is open; the loader confirms before starting. The lib is checked and installed in the same step (`session::quote`), in parallel with the balance and quote, so it is ready before the session starts and never billed, and the confirmation dialog hides its download.
+- Run asks `GET /launcher/scripts/:id/quote` first: only the server knows author/grantee/tester pricing (0) and the account's open sessions. The quote carries the current balance, so website top-ups count. A quoted fee means another session is open; the loader confirms before starting.
 - The listing's `can_access` decides whether Run is enabled. `StoreScript::blocked`/`short_of_funds` only word the refusal, using the server's rounding `ceil(min_balance_minutes * price / 60)` without the fee. The server's `min_balance_minutes` decides.
 - Restart (`App::restart_run`) ends the old session again (idempotent), re-reads the listing (community list only for tester+), the quote and, unless its live revision is cached, the manifest; `session::asks_first` prompts when the quoted price changed or a fee applies. The old run closes only once the new one starts.
 - A run keeps its settings form after it ends, and Restart (store or editor) starts with what that form shows. If the manifest's settings spec differs from the form's, Restart opens a configuring run instead, so a script never gets values made for another spec.
 - Store files are AES-256-GCM encrypted (`session::decrypt_file`; `key: null` means plain, pre-encryption revisions), downloaded on every start, never written to disk, sent to the injector over stdin (`MODULES`). The revision cache folder is empty and only anchors relative `require`.
 - Community scripts: the warning's acceptance is stored per script and revision (`Confirmed`, max 500). `session::prepare` refuses and ends a session whose started revision isn't the confirmed one, so a revision published after the warning never runs unseen.
 - One script per client, enforced across processes by a lock file (see [mcp.md](mcp.md)). A store start in progress (quoting, dialog, downloading) holds its client.
-- Store scripts use the newest lib in `lib/index.json` whose `requires_host` is between `injector::HOST_API_MIN` and `HOST_API` (`libs.rs`); if a newer lib needs a newer loader, the script log says to update.
-- `session::start_block` refuses a script whose live revision has a `requires_host` (from the quote) above `HOST_API`: it passed the API's type check only against a newer lib, which this loader can't run. Revisions published before checks have none.
+- Store scripts run on the SDK built into the injector; the loader passes no `--sdk` for them, so the settings' SDK folder never reaches a paid run.
+- **Pinned injectors.** Each live revision names the client release it runs on (`injector` in the quote and the started session, see `database/CLAUDE.md`). The quote resolves it before anything is billed (`injectors::pinned`): this loader's own release is the bundled `injector.exe`; any other is downloaded once to `<cache>/injectors/<version>/injector.exe` and used only if its signature is by an update key and its trusted comment is exactly that version, so one release's file can't stand in for another's. A quote without an injector (`start_block`, `session::UNSUPPORTED`) is refused. The queue's check resolves every entry's injector the same way.
+- **Agent swaps.** An injector only speaks to its own agent, so `session::prepare` loads the pinned injector's agent before the session starts when the client has another (`swap_agent`), and again if the started session names a different release than the quote. The run then uses that `injector.exe` (`Settings::with_helper`). While an older agent is loaded, the loader's own reads of the client (XP tracker, bug-report snapshot, layouts, development tools) fail with the protocol mismatch; that is accepted. When a pinned run ends outside a queue, or a queue ends, the loader loads the current agent back (`load_current_agent_back`). A queue's logout runs on the last entry's injector, since its agent is still loaded.
 
 ## Update flow
 
@@ -118,7 +120,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - Each script runs as `injector run --script <path> <pid>`, so a crash can't take the app down. On Windows it starts with `backend::no_window` (`CREATE_NO_WINDOW`): the loader is a GUI program outside debug builds, so a console child would otherwise open a terminal per run. Use it for any console program the loader starts.
 - Lines written to the script's stdin before start: antiban config (`injector::antiban::line`), transports (`TRANSPORT_SETTINGS`), Script debugging (`DEBUG`), `prices_url` (`injector::prices::line`), `SETTINGS` (the form's values, `script::Launch`) and, for a queue entry, `RESUME` (the previous entry's break plan). Live: `UPDATE` (settings changed while running, read by `Host.form_update()`), antiban push, transport push, Script debugging push, skip-next, `FINISH` (queue only).
 - Settings come from the script's `manifest.json` (`injector::manifest`): the store's live revision through `GET /launcher/scripts/:id/manifest`, cached in memory by script and revision, or the file beside an editor script. A script with settings opens a **configuring** run (`Run::is_configuring`: no process, no session) whose Start quotes, starts the session and launches it, so nothing is billed while the form is open. Without settings it starts at once. Values are remembered per script title; layouts resolve to their contents when Start is pressed.
-- Script requests on stdout: `LAMPREQ`, PIN, `HTTPREQ`. The layout JSON a script gets is documented in the lib's `host.luau`.
+- Script requests on stdout: `LAMPREQ`, PIN, `HTTPREQ`. The layout JSON a script gets is documented in `sdk/luau/modules/host.luau`.
 - Settings persisted: `helper`, `lib_dir`, `antiban`, `transports`, `include_system_info`, `log_lines`. `helper` is replaced by the detected file on start (see Update flow).
 - Cursor preference is passed to `injector load`; the injector leaves it in an `AGENT_CURSOR_<pid>` mapping the agent reads.
 - The agent exists only inside `injector.exe`, so every load runs `injector.exe load`, on Windows too, and the outdated check compares clients against `injector.exe agent-version` (cached per file size and mtime on Windows). Under Wine the long-lived `serve` processes are restarted when `injector.exe` changes on disk; otherwise a rebuilt injector would keep loading the old agent from the process still running.
@@ -144,8 +146,8 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 
 - Only items read from a client go into a layout (no item list). Item families from `injector item-families` give dose settings and `variants` so degradable/Barrows items still match after their id changes.
 - A form's `required` items and `locked` prayers (`layouts::Rules`) are fitted into every layout and the value sent, each frame a tab shows. An inventory layout with no room is unusable and sends null.
-- The secondary ammo slot is always shown since a layout can't know about a bolt pouch or quiver; the lib ignores it without one.
-- Prayer data and upgrades come from the client's prayer objs and RuneLite's cs2 scripts; a layout is only a set, the lib decides how to use it.
+- The secondary ammo slot is always shown since a layout can't know about a bolt pouch or quiver; the SDK ignores it without one.
+- Prayer data and upgrades come from the client's prayer objs and RuneLite's cs2 scripts; a layout is only a set, the SDK decides how to use it.
 
 ## Development inspectors
 
@@ -158,11 +160,11 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 
 - A queue is a list of store scripts whose live revision is queueable, each entry with its own remembered settings, an optional goal (a counter id the manifest names, compared with the script's live `COUNTERS`) and minimum/maximum minutes. Saved by name under `queues`.
 - **One queue per client** (`client_in_use` counts runners), several clients at once. The current entry is an ordinary store run; its session is its own, and the next entry starts only after the previous session's keep thread has ended it (`StoreRun::closed`), so an entry never pays the extra-session fee for its predecessor.
-- **Start** checks every entry once (listing, manifest, quote, lib) and shows one confirmation with each price per hour and the most it can cost (`Entry::most_cost`, from the maximum time). Each entry is checked again just before it starts (`Check::ready`): not queueable any more, settings spec changed since the entry was set up (`spec_hash`), unreviewed community revision, or a price other than the approved one is a **change**, handled by the queue's skip/stop option. Too few credits or a failed start always stops it.
+- **Start** checks every entry once (listing, manifest, quote) and shows one confirmation with each price per hour and the most it can cost (`Entry::most_cost`, from the maximum time). Each entry is checked again just before it starts (`Check::ready`): not queueable any more, settings spec changed since the entry was set up (`spec_hash`), unreviewed community revision, or a price other than the approved one is a **change**, handled by the queue's skip/stop option. Too few credits or a failed start always stops it.
 - **Ending an entry** (`Entry::should_finish`): the maximum time, or the goal (and the minimum time) reached, or the minimum alone when there is no goal. The loader then sends `FINISH`; after the manifest's `finish_grace_minutes` it kills the script, which counts as failed.
 - **Exits** (`queue::outcome`): done and blocked (`report_exit`) move on; failed (error or killed) ends the queue with its when-finished step; stopped by the user ends it at once.
 - **Breaks**: the last `BREAKS` plan of an entry is passed to the next one as `RESUME`, minus the time since it was reported (`queue::resumed`), so a long queue breaks like one long run.
-- **When finished**: log out runs a short lib script (`--lib` the installed store lib) as its own run, or the account is left as it is.
+- **When finished**: log out runs a short SDK script as its own run, or the account is left as it is.
 
 ## Platform gotchas
 

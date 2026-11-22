@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -16,7 +16,7 @@ fn files(lib: &Path) -> Result<Vec<String>, String> {
     walk(lib, &lib.join("examples"), "luau", &mut found);
     if found.is_empty() {
         return Err(format!(
-            "The script library in {} has no docs. A newer library release ships them.",
+            "The SDK in {} has no docs.",
             lib.display()
         ));
     }
@@ -42,14 +42,28 @@ fn walk(lib: &Path, dir: &Path, extension: &str, found: &mut Vec<String>) {
 
 fn module(page: &str) -> Option<String> {
     let name = page.strip_prefix("docs/")?.strip_suffix(".md")?;
-    Some(format!("@lib/{name}"))
+    (!name.contains('/') && name != "README").then(|| format!("@volcren/{name}"))
+}
+
+fn safe_entry(name: &str) -> Option<PathBuf> {
+    if name.contains(['\\', '\0', ':']) {
+        return None;
+    }
+    let path = Path::new(name);
+    let plain = path.components().all(
+        |part| matches!(part, Component::Normal(part) if !part.to_string_lossy().starts_with('.')),
+    );
+    (plain
+        && matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("luau" | "lua" | "md")
+        ))
+    .then(|| path.to_path_buf())
 }
 
 pub fn page(lib: &Path, name: &str) -> Result<String, String> {
-    let relative = crate::libs::safe_entry(name.trim()).ok_or_else(|| {
-        format!(
-            "{name:?} isn't a library page. Use a path from a search, like docs/main/walker.md."
-        )
+    let relative = safe_entry(name.trim()).ok_or_else(|| {
+        format!("{name:?} isn't an SDK page. Use a path from a search, like docs/walker.md.")
     })?;
     let text = fs::read_to_string(lib.join(&relative))
         .map_err(|e| format!("Couldn't read {name}: {e}"))?;
@@ -67,7 +81,7 @@ pub fn page(lib: &Path, name: &str) -> Result<String, String> {
 pub fn index(lib: &Path) -> Result<String, String> {
     let files = files(lib)?;
     Ok(format!(
-        "Library pages (read one with `page`; docs/main/walker.md documents require(\"@lib/main/walker\")):\n{}",
+        "SDK pages (read one with `page`; docs/walker.md documents require(\"@volcren/walker\")):\n{}",
         files.join("\n")
     ))
 }
@@ -253,15 +267,15 @@ mod tests {
     fn lib(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("volcren-mcp-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("docs/main")).unwrap();
+        fs::create_dir_all(dir.join("docs")).unwrap();
         fs::create_dir_all(dir.join("examples")).unwrap();
         fs::write(
-            dir.join("docs/main/walker.md"),
+            dir.join("docs/walker.md"),
             "# Walker\n\n## walk_to\nWalks to a tile like a person.\n",
         )
         .unwrap();
         fs::write(
-            dir.join("docs/main/bank.md"),
+            dir.join("docs/bank.md"),
             "# Bank\nOpens the bank. You can walk there first.\n",
         )
         .unwrap();
@@ -274,10 +288,7 @@ mod tests {
         let lib = lib("search");
         let found = search(&lib, "walk tile").unwrap();
         let first = found.lines().next().unwrap();
-        assert_eq!(
-            first,
-            "docs/main/walker.md  (require(\"@lib/main/walker\"))"
-        );
+        assert_eq!(first, "docs/walker.md  (require(\"@volcren/walker\"))");
         assert!(found.contains("## walk_to"));
         assert!(found.contains("examples/walk_to.luau"));
         assert!(search(&lib, "zzz").unwrap().starts_with("Nothing matches"));
@@ -288,13 +299,13 @@ mod tests {
     fn pages_are_read_only_from_inside_the_library() {
         let lib = lib("page");
         assert!(
-            page(&lib, "docs/main/bank.md")
+            page(&lib, "docs/bank.md")
                 .unwrap()
                 .starts_with("# Bank")
         );
         assert!(page(&lib, "../secret.md").is_err());
         assert!(page(&lib, "/etc/passwd").is_err());
-        assert!(index(&lib).unwrap().contains("docs/main/bank.md"));
+        assert!(index(&lib).unwrap().contains("docs/bank.md"));
         let _ = fs::remove_dir_all(&lib);
     }
 }

@@ -13,7 +13,10 @@ const AGENT_INPUTS: [&str; 6] = [
     "../../.cargo/config.toml",
 ];
 
+const SDK_MODULES: &str = "../../sdk/luau/modules";
+
 fn main() {
+    embed_sdk();
     if env::var_os("CARGO_FEATURE_AGENT").is_none()
         || env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
     {
@@ -73,4 +76,35 @@ fn main() {
         .join("agent.dll");
     fs::copy(&built, out_dir.join("agent.dll"))
         .unwrap_or_else(|e| panic!("Cannot copy {}: {e}", built.display()));
+}
+
+fn embed_sdk() {
+    println!("cargo::rerun-if-changed={SDK_MODULES}");
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it"));
+    let dir = manifest_dir.join(SDK_MODULES);
+    let mut modules: Vec<(String, PathBuf)> = fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("Cannot read {}: {e}", dir.display()))
+        .map(|entry| entry.expect("the SDK folder lists").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "luau"))
+        .map(|path| {
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("SDK module names are UTF-8")
+                .to_owned();
+            let path = path.canonicalize().expect("the SDK module exists");
+            (name, path)
+        })
+        .collect();
+    modules.sort();
+    let entries: String = modules
+        .iter()
+        .map(|(name, path)| format!("    ({name:?}, include_str!({:?})),\n", path.display().to_string()))
+        .collect();
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    fs::write(
+        out_dir.join("sdk_modules.rs"),
+        format!("const SDK_MODULES: &[(&str, &str)] = &[\n{entries}];\n"),
+    )
+    .expect("OUT_DIR is writable");
 }
