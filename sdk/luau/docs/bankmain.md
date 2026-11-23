@@ -79,7 +79,7 @@ Bankmain.PLAN_CANDIDATES = 6
 function Bankmain.nearest(): Source?
 ```
 
-The bank that is the fewest steps to walk to, as a `Source` holding either a `loc` or an `npc`. It looks at every loaded "Bank booth" and "Bank chest" and every NPC that `is_banker`, plans a walk (`Walker.plan`, through doors, stairs and ladders, to within `Clickbox.APPROACH_NEAR` tiles) to the `PLAN_CANDIDATES` closest by straight distance, and takes the shortest plan; a plan that stops short counts the straight distance left. This costs one plan per candidate. When none can be planned it returns the closest by straight distance. `nil` when none is loaded or the position is unknown.
+The bank that is the fewest steps to walk to, as a `Source` holding either a `loc` or an `npc`. It looks at every loaded object whose menu, as shown now (`Host.loc_shown`), offers "Bank", or "Use" together with "Collect" (bank chests), and every NPC that `is_banker`, plans a walk (`Walker.plan`, through doors, stairs and ladders, to within `Clickbox.APPROACH_NEAR` tiles) to the `PLAN_CANDIDATES` closest by straight distance, and takes the shortest plan; a plan that stops short counts the straight distance left. Objects are told apart by their options rather than their names because multi-state booths have no name in the cache (Varrock West's first booth, 34810) and banks come as booths, chests, tables and counters; a bare "Use" is too common to count on its own. This costs one plan per candidate. When none can be planned it returns the closest by straight distance. `nil` when none is loaded or the position is unknown.
 
 ## Bankmain.is_banker
 

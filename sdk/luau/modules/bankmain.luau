@@ -123,7 +123,6 @@ local items = Inv.new(CONTAINER, nil, {
 
 local OPEN_TIMEOUT_MS = 2400
 local POLL_MS = 50
-local OBJECT_NAMES = table.freeze({ "Bank booth", "Bank chest" })
 local OBJECT_OPTIONS = table.freeze({ "Bank", "Use" })
 local NPC_OPTIONS = table.freeze({ "Bank" })
 
@@ -297,6 +296,36 @@ function Bankmain.is_banker(npc: Npc): boolean
 	return false
 end
 
+local function is_bank(view: Host.LocView): boolean
+	local actions = view.actions
+	return table.find(actions, "Bank") ~= nil
+		or (table.find(actions, "Use") ~= nil and table.find(actions, "Collect") ~= nil)
+end
+
+local function bank_locs(): { Loc }
+	local locs = Objects.find() or {}
+	local ids: { number } = {}
+	local index: { [number]: number } = {}
+	for _, loc in ipairs(locs) do
+		if index[loc.id] == nil then
+			table.insert(ids, loc.id)
+			index[loc.id] = #ids
+		end
+	end
+	local views = if #ids > 0 then Host.loc_shown(ids) else nil
+	local banks: { Loc } = {}
+	if views == nil then
+		return banks
+	end
+	for _, loc in ipairs(locs) do
+		local view = views[index[loc.id]]
+		if view and is_bank(view) then
+			table.insert(banks, loc)
+		end
+	end
+	return banks
+end
+
 function Bankmain.nearest(): Source?
 	local me = Walker.position()
 	if me == nil then
@@ -304,13 +333,11 @@ function Bankmain.nearest(): Source?
 	end
 	type Candidate = { source: Source, straight: number, plane: number? }
 	local candidates: { Candidate } = {}
-	for _, name in ipairs(OBJECT_NAMES) do
-		for _, loc in ipairs(Objects.find(name) or {}) do
-			table.insert(
-				candidates,
-				{ source = { loc = loc, npc = nil }, straight = Objects.distance(loc, me), plane = loc.plane }
-			)
-		end
+	for _, loc in ipairs(bank_locs()) do
+		table.insert(
+			candidates,
+			{ source = { loc = loc, npc = nil }, straight = Objects.distance(loc, me), plane = loc.plane }
+		)
 	end
 	for _, npc in ipairs(Npcs.find() or {}) do
 		if Bankmain.is_banker(npc) then
@@ -377,7 +404,7 @@ function Bankmain.open(source: Source?, walk: boolean?): boolean
 	end
 	local target = resolve(source)
 	if target == nil then
-		Log.log("Bankmain", "no bank booth, chest or banker around")
+		Log.log("Bankmain", "no bank or banker around")
 		return false
 	end
 	local picked: boolean
