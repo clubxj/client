@@ -283,6 +283,8 @@ export type TaskType = {
 	fields: { FormField }?,
 }
 
+export type VisibleWhen = { id: string, equals: any } | { VisibleWhen } | { any: { VisibleWhen } }
+
 export type FormField = {
 	id: string?,
 	kind: (
@@ -319,7 +321,7 @@ export type FormField = {
 	heading: number?,
 	required: { LayoutRequirement }?,
 	locked: { string }?,
-	visible_when: ({ id: string, equals: any } | { { id: string, equals: any } })?,
+	visible_when: VisibleWhen?,
 }
 
 export type FormSpec = {
