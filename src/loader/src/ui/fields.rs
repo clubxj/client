@@ -46,7 +46,7 @@ impl Range {
     }
 
     fn fit(self, value: f64) -> f64 {
-        let value = value.clamp(self.min, self.max);
+        let value = value.max(self.min).min(self.max);
         if self.integer { value.round() } else { value }
     }
 
@@ -81,7 +81,7 @@ type OnNumber = Rc<dyn Fn(f64, &mut App)>;
 
 pub struct NumberField {
     state: Entity<InputState>,
-    range: Range,
+    range: Rc<Cell<Range>>,
     shown: Rc<Cell<f64>>,
     _subscriptions: [Subscription; 2],
 }
@@ -94,14 +94,20 @@ impl NumberField {
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
-        let state =
-            cx.new(|cx| InputState::new(window, cx).validate(move |text, _| range.allows(text)));
+        let range = Rc::new(Cell::new(range));
+        let state = {
+            let range = range.clone();
+            cx.new(|cx| {
+                InputState::new(window, cx).validate(move |text, _| range.get().allows(text))
+            })
+        };
         let shown = Rc::new(Cell::new(f64::NAN));
         let handle = window.window_handle();
         let on_change: OnNumber = Rc::new(on_change);
         let typed = {
-            let (shown, on_change) = (shown.clone(), on_change.clone());
+            let (shown, on_change, range) = (shown.clone(), on_change.clone(), range.clone());
             cx.subscribe(&state, move |state, event: &InputEvent, cx| {
+                let range = range.get();
                 let text = state.read(cx).value();
                 match event {
                     InputEvent::Change if !commit_on_blur => {
@@ -124,8 +130,9 @@ impl NumberField {
             })
         };
         let stepped = {
-            let shown = shown.clone();
+            let (shown, range) = (shown.clone(), range.clone());
             cx.subscribe(&state, move |state, event: &NumberInputEvent, cx| {
+                let range = range.get();
                 let NumberInputEvent::Step(action) = event;
                 let base = parse(&state.read(cx).value())
                     .or(Some(shown.get()).filter(|v| v.is_finite()))
@@ -147,12 +154,16 @@ impl NumberField {
         }
     }
 
+    pub fn set_range(&self, range: Range) {
+        self.range.set(range);
+    }
+
     pub fn sync(&self, value: f64, window: &mut Window, cx: &mut App) {
         if self.state.focus_handle(cx).is_focused(window) {
             return;
         }
         self.shown.set(value);
-        let text = self.range.format(value);
+        let text = self.range.get().format(value);
         if self.state.read(cx).value() != text {
             self.state
                 .update(cx, |state, cx| state.set_value(text, window, cx));
@@ -267,35 +278,33 @@ pub fn select(
         .disabled(!enabled || picks.is_empty())
         .when_some(width, |this, width| this.w(width))
         .dropdown_menu(move |menu, _, _| {
-            picks
-                .iter()
-                .enumerate()
-                .fold(menu.scrollable(true), |menu, (i, pick)| {
-                    match &pick.refusal {
-                        Some(why) => {
-                            let (label, why) = (pick.label.clone(), why.clone());
-                            let row = format!("pick-{i}");
-                            menu.item(
-                                PopupMenuItem::element(move |_, _| {
-                                    div()
-                                        .id(row.clone())
-                                        .text_color(theme::COMMENT)
-                                        .tooltip(widgets::tooltip(why.clone()))
-                                        .child(label.clone())
-                                })
-                                .disabled(true),
-                            )
-                        }
-                        None => {
-                            let on_pick = pick.on_pick.clone();
-                            menu.item(
-                                PopupMenuItem::new(pick.label.clone())
-                                    .checked(pick.selected)
-                                    .on_click(move |_, _, cx| on_pick(cx)),
-                            )
-                        }
+            picks.iter().enumerate().fold(
+                menu.scrollable(widgets::menu_scrolls(picks.len())),
+                |menu, (i, pick)| match &pick.refusal {
+                    Some(why) => {
+                        let (label, why) = (pick.label.clone(), why.clone());
+                        let row = format!("pick-{i}");
+                        menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                div()
+                                    .id(row.clone())
+                                    .text_color(theme::COMMENT)
+                                    .tooltip(widgets::tooltip(why.clone()))
+                                    .child(label.clone())
+                            })
+                            .disabled(true),
+                        )
                     }
-                })
+                    None => {
+                        let on_pick = pick.on_pick.clone();
+                        menu.item(
+                            PopupMenuItem::new(pick.label.clone())
+                                .checked(pick.selected)
+                                .on_click(move |_, _, cx| on_pick(cx)),
+                        )
+                    }
+                },
+            )
         })
 }
 

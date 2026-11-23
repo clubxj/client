@@ -311,6 +311,12 @@ pub fn mono_font() -> gpui_kit::Font {
     font(theme::MONO)
 }
 
+const MENU_SCROLLS_PAST: usize = 12;
+
+pub fn menu_scrolls(items: usize) -> bool {
+    items > MENU_SCROLLS_PAST
+}
+
 pub struct Choice {
     label: SharedString,
     selected: bool,
@@ -347,13 +353,16 @@ pub fn combo(
         .dropdown_caret(true)
         .disabled(empty)
         .dropdown_menu(move |menu, _, _| {
-            choices.iter().fold(menu.scrollable(true), |menu, choice| {
-                let on_select = choice.on_select.clone();
-                menu.item(
-                    PopupMenuItem::new(choice.label.clone())
-                        .checked(choice.selected)
-                        .on_click(move |_, window, cx| on_select(window, cx)),
-                )
-            })
+            choices.iter().fold(
+                menu.scrollable(menu_scrolls(choices.len())),
+                |menu, choice| {
+                    let on_select = choice.on_select.clone();
+                    menu.item(
+                        PopupMenuItem::new(choice.label.clone())
+                            .checked(choice.selected)
+                            .on_click(move |_, window, cx| on_select(window, cx)),
+                    )
+                },
+            )
         })
 }
