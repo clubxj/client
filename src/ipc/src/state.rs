@@ -210,20 +210,32 @@ pub struct WorldLayout {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorldSelectLayout {
-    pub open: u32,
-    pub count: u32,
-    pub worlds: u32,
-    pub offset: u32,
-    pub max_offset: u32,
+    pub switcher: u32,
     pub current_world: u32,
-    pub background: u32,
-    pub background_height: u32,
+    pub master_count: u32,
+    pub master_worlds: u32,
+    pub open: u32,
+    pub list: u32,
+    pub state: u32,
+    pub layout: u32,
+    pub selected: u32,
+    pub hovered: u32,
+    pub page: u32,
+    pub compact: u32,
+    pub list_rect: u32,
+    pub row_offset: u32,
+    pub row_height: u32,
+    pub rows: u32,
+    pub columns: u32,
+    pub compact_columns: u32,
+    pub previous: u32,
+    pub next: u32,
     pub id: u32,
     pub types: u32,
     pub players: u32,
     pub activity: u32,
     pub location: u32,
-    pub hovered: u32,
+    pub reserved: u32,
 }
 
 #[repr(C)]
@@ -1088,7 +1100,7 @@ mod tests {
         assert_eq!(size_of::<LoginLayout>(), 8 * 4);
         assert_eq!(size_of::<InterfaceLayout>(), 8 + 22 * 4);
         assert_eq!(size_of::<WorldLayout>(), 128);
-        assert_eq!(size_of::<WorldSelectLayout>(), 14 * 4);
+        assert_eq!(size_of::<WorldSelectLayout>(), 26 * 4);
         assert_eq!(offset_of!(Layout, interfaces), 16 + 16 + 24 + 16 + 32);
         assert_eq!(size_of::<NameRequest>(), 8 + 48);
         assert_eq!(size_of::<NameStatus>(), 8 + 24);
@@ -1107,7 +1119,7 @@ mod tests {
         assert_eq!(size_of::<MenuStateLayout>(), 33 * 4);
         assert_eq!(
             offset_of!(LayoutMemory, request_sequence),
-            8 + 104 + 96 + 128 + 56 + 28 + 96 + 36 + 40 + 8 + 4 + 96 + 32 + 16 + 132
+            8 + 104 + 96 + 128 + 104 + 28 + 96 + 36 + 40 + 8 + 4 + 96 + 32 + 16 + 132
         );
         let entry = MENU_OPTION_SIZE + MENU_TARGET_SIZE + 28;
         assert_eq!(size_of::<MenuEntryInfo>(), entry);

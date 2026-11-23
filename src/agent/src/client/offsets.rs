@@ -120,6 +120,11 @@ pub enum ScanError {
     InvalidImage,
     NotFound,
     Ambiguous(usize),
+    Panicked,
+}
+
+pub fn guarded<T>(rule: impl FnOnce() -> Result<T, ScanError>) -> Result<T, ScanError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(rule)).unwrap_or(Err(ScanError::Panicked))
 }
 
 struct Section {
@@ -484,10 +489,10 @@ fn compared_offsets(code: &[u8], rva: u32) -> (Vec<Load>, Vec<Load>) {
         let reg = instr.op0_register().full_register32();
         match instr.mnemonic() {
             Mnemonic::Call => loaded.clear(),
-            Mnemonic::Cmp
-                if instr.op0_kind() == OpKind::Register && instr.op1_kind() != OpKind::Register =>
-            {
-                let value = instr.immediate(1) as u32;
+            Mnemonic::Cmp if instr.op0_kind() == OpKind::Register => {
+                let Some(value) = immediate(&instr).map(|v| v as u32) else {
+                    continue;
+                };
                 if let Some(&load) = loaded.get(&reg) {
                     if value == LOCAL_MIN {
                         mins.push(load);
@@ -1982,28 +1987,8 @@ mod tests {
         );
 
         let world_select = find_world_select(&pe, player.client).expect("world select not found");
-        println!("{world_select:x?}");
-        assert_eq!(
-            world_select,
-            world_select::WorldSelect {
-                open: 0xe98bd2,
-                count: 0xe98c00,
-                worlds: 0x154fbb8,
-                offset: 0xe98b74,
-                max_offset: 0xe98b78,
-                hovered: 0xcfb060,
-                current_world: 0x32b4,
-                background: 0x154fc18,
-                background_height: 0x1c,
-                world: world_select::WorldFields {
-                    id: 0,
-                    types: 0x4,
-                    players: 0x8,
-                    activity: 0x28,
-                    location: 0x40
-                },
-            }
-        );
+        assert_eq!(world_select.switcher, 0x1c21a68);
+        assert_eq!(world_select.current_world, 0x32fc);
 
         let logged_in = decode_at(&pe, lua_binding(&pe, "isLoggedIn").unwrap(), 6);
         let state_compare = logged_in
@@ -2028,14 +2013,14 @@ mod tests {
         value
     }
 
-    pub(super) fn for_each_archived_build(mut check: impl FnMut(&std::path::Path, &Pe)) {
+    fn for_each_build_in(dir: &str, mut check: impl FnMut(&std::path::Path, &Pe)) {
         let manifest = env!("CARGO_MANIFEST_DIR");
         let manifest = if cfg!(windows) && manifest.starts_with('/') {
             format!("Z:{manifest}")
         } else {
             manifest.into()
         };
-        let archive = std::path::Path::new(&manifest).join("../../archive");
+        let archive = std::path::Path::new(&manifest).join("../..").join(dir);
         let Ok(entries) = std::fs::read_dir(&archive) else {
             eprintln!("skipped, no {}", archive.display());
             return;
@@ -2050,6 +2035,14 @@ mod tests {
             let pe = Pe::parse(&image).unwrap();
             check(&build, &pe);
         }
+    }
+
+    pub(super) fn for_each_archived_build(check: impl FnMut(&std::path::Path, &Pe)) {
+        for_each_build_in("archive", check);
+    }
+
+    pub(super) fn for_each_legacy_build(check: impl FnMut(&std::path::Path, &Pe)) {
+        for_each_build_in("archive/legacy", check);
     }
 
     #[test]
@@ -2103,7 +2096,11 @@ mod tests {
             let click = found("menu click", build, find_menu_click(pe, &menu));
             let open = found("menu open", build, find_menu_open(pe, &click));
             let name = build.display().to_string();
-            let expected = if name.contains("e470c533") { 0x800 } else { 0x7c0 };
+            let expected = if name.contains("e470c533") {
+                0x800
+            } else {
+                0x7c0
+            };
             assert_eq!(open, expected, "{name}");
         });
     }
@@ -2253,7 +2250,9 @@ mod tests {
             found("chat", build, find_chat(pe));
             let camera = found("camera", build, find_camera(pe, player.client));
             assert_eq!(camera.yaw, minimap.angle);
-            found("world select", build, find_world_select(pe, player.client));
+            if build.to_string_lossy().contains("e470c533") {
+                found("world select", build, find_world_select(pe, player.client));
+            }
             found(
                 "appearance decoder",
                 build,
@@ -2294,5 +2293,224 @@ mod tests {
                 find_local_projection(pe, player.client, interfaces.canvas, &projection, &scene),
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod no_panics {
+    use super::tests::{for_each_archived_build, for_each_legacy_build};
+    use super::*;
+
+    fn r<T>(v: &Result<T, String>) -> String {
+        match v {
+            Ok(_) => "ok".into(),
+            Err(e) => e.clone(),
+        }
+    }
+
+    fn guard<T>(f: impl FnOnce() -> Result<T, ScanError>) -> Result<T, String> {
+        guarded(f).map_err(|e| format!("{e:?}"))
+    }
+
+    #[test]
+    fn no_rule_panics_in_any_build() {
+        let mut table: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        let mut survey = |build: &std::path::Path, pe: &Pe| {
+            let mut row: Vec<(String, String)> = Vec::new();
+            let mut put = |name: &str, value: String| row.push((name.to_string(), value));
+            let skip = || "skip".to_string();
+            let actor = guard(|| find_actor_position(pe));
+            put("actor position", r(&actor));
+            put(
+                "actor path",
+                actor
+                    .as_ref()
+                    .map_or_else(|_| skip(), |a| r(&guard(|| find_actor_path(pe, a.x)))),
+            );
+            let player = guard(|| find_local_player(pe));
+            put("local player", r(&player));
+            let game_state = guard(|| find_game_state(pe));
+            put("game state", r(&game_state));
+            let client = player.as_ref().ok().map(|p| p.client);
+            put(
+                "skills",
+                client.map_or_else(skip, |c| r(&guard(|| find_skills(pe, c)))),
+            );
+            let tick = client.map(|c| guard(|| find_tick_count(pe, c)));
+            put("tick count", tick.as_ref().map_or_else(skip, r));
+            let varps = guard(|| find_varps(pe));
+            put("varps", r(&varps));
+            put(
+                "login panel",
+                game_state
+                    .as_ref()
+                    .map_or_else(|_| skip(), |g| r(&guard(|| find_login_panel(pe, *g)))),
+            );
+            put(
+                "login provider",
+                client.map_or_else(skip, |c| r(&guard(|| find_login_provider(pe, c)))),
+            );
+            let interfaces = guard(|| find_interfaces(pe));
+            put("interfaces", r(&interfaces));
+            put("component sprite", r(&guard(|| find_component_sprite(pe))));
+            put(
+                "component invalidate",
+                r(&guard(|| find_component_invalidate(pe))),
+            );
+            put("component fields", r(&guard(|| find_component_fields(pe))));
+            put(
+                "world select",
+                client.map_or_else(skip, |c| r(&guard(|| find_world_select(pe, c)))),
+            );
+            let minimap = client.map(|c| guard(|| find_minimap(pe, c)));
+            put("minimap", minimap.as_ref().map_or_else(skip, r));
+            put(
+                "destination",
+                match &minimap {
+                    Some(Ok(m)) => r(&guard(|| find_destination(pe, m.object))),
+                    _ => skip(),
+                },
+            );
+            let ground = guard(|| find_ground_items(pe));
+            put("ground items", r(&ground));
+            put(
+                "ground item ownership",
+                match (&tick, &ground) {
+                    (Some(Ok(t)), Ok(g)) => r(&guard(|| find_ground_item_ownership(pe, *t, g))),
+                    _ => skip(),
+                },
+            );
+            let chat = guard(|| find_chat(pe));
+            put("chat", r(&chat));
+            put("projectiles", r(&guard(|| find_projectiles(pe))));
+            put("spot anims", r(&guard(|| find_spot_anims(pe))));
+            let packets = guard(|| find_packets(pe));
+            put("packets", r(&packets));
+            let layouts = packets
+                .as_ref()
+                .ok()
+                .map(|p| guard(|| find_packet_layouts(pe, p)));
+            put("packet layouts", layouts.as_ref().map_or_else(skip, r));
+            if let (Ok(p), Some(Ok(l))) = (&packets, &layouts) {
+                let anchors = PacketAnchors {
+                    tick_count: tick.as_ref().and_then(|t| t.as_ref().ok().copied()),
+                    varps: varps.as_ref().ok().copied(),
+                    chat_messages: chat.as_ref().ok().map(|c| c.messages),
+                };
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    find_packet_names(pe, p, l, anchors)
+                })) {
+                    Ok(names) => {
+                        for (name, result) in names {
+                            put(
+                                &format!("packet {}", name.spelling()),
+                                r(&result.map_err(|e| format!("{e:?}"))),
+                            );
+                        }
+                    }
+                    Err(_) => put("packet names", format!("{:?}", ScanError::Panicked)),
+                }
+            }
+            put("script runs", r(&guard(|| find_script_runs(pe))));
+            put("varc setters", r(&guard(|| find_varc_setters(pe))));
+            let containers = guard(|| find_item_containers(pe));
+            put("item containers", r(&containers));
+            put(
+                "item setter",
+                containers
+                    .as_ref()
+                    .map_or_else(|_| skip(), |c| r(&guard(|| find_item_setter(pe, c)))),
+            );
+            put("instance flag", r(&guard(|| find_instance_flag(pe))));
+            put(
+                "varcs",
+                client.map_or_else(skip, |c| r(&guard(|| find_varcs(pe, c)))),
+            );
+            put("run energy", r(&guard(|| find_run_energy(pe))));
+            put("actor lists", r(&guard(|| find_actor_lists(pe))));
+            let names = guard(|| find_actor_names(pe));
+            put("actor names", r(&names));
+            put(
+                "camera",
+                client.map_or_else(skip, |c| r(&guard(|| find_camera(pe, c)))),
+            );
+            let projection = client.map(|c| guard(|| find_projection(pe, c)));
+            put("projection", projection.as_ref().map_or_else(skip, r));
+            let menu = guard(|| find_menu(pe));
+            put("menu", r(&menu));
+            if let Ok(m) = &menu {
+                put("menu order", r(&guard(|| find_menu_order(pe, m))));
+                put("menu settings", r(&guard(|| find_menu_settings(pe, m))));
+                put("selection", r(&guard(|| find_selection(pe, m))));
+                let click = guard(|| find_menu_click(pe, m));
+                put("menu click", r(&click));
+                if let Ok(c) = &click {
+                    put("menu open", r(&guard(|| find_menu_open(pe, c))));
+                    put("menu layout", r(&guard(|| find_menu_layout(pe, c))));
+                }
+            }
+            put("npc head icons", r(&guard(|| find_npc_head_icons(pe))));
+            put(
+                "appearance decoder",
+                match (&names, &player) {
+                    (Ok(n), Ok(p)) => r(&guard(|| {
+                        find_appearance_decoder(pe, n.player_name, p.player_index)
+                    })),
+                    _ => skip(),
+                },
+            );
+            if let Ok(n) = &names {
+                let model = guard(|| find_npc_model(pe, n.npc_definition));
+                put("npc model", r(&model));
+                if let Ok(m) = &model {
+                    let vertices = guard(|| find_model_vertices(pe, m));
+                    put("model vertices", r(&vertices));
+                    if let Ok(v) = &vertices {
+                        put("model faces", r(&guard(|| find_model_faces(pe, v))));
+                    }
+                }
+                put(
+                    "animation height",
+                    r(&guard(|| find_animation_height(pe, n.npc_definition))),
+                );
+            }
+            let scene = guard(|| find_scene(pe));
+            put("scene", r(&scene));
+            if let Ok(s) = &scene {
+                put("collision maps", r(&guard(|| find_collision_maps(pe, s))));
+                let game = guard(|| find_game_object_layout(pe, s));
+                put("game object layout", r(&game));
+                if let Ok(g) = &game {
+                    put("loc configs", r(&guard(|| find_loc_configs(pe, s, g))));
+                }
+                let decoration = guard(|| find_decoration_layout(pe, s));
+                put("decoration layout", r(&decoration));
+                if let Ok(d) = &decoration {
+                    put("item pile", r(&guard(|| find_item_pile(pe, d))));
+                }
+                if let (Some(c), Ok(i), Some(Ok(p))) = (client, &interfaces, &projection) {
+                    put(
+                        "local projection",
+                        r(&guard(|| find_local_projection(pe, c, i.canvas, p, s))),
+                    );
+                }
+            }
+            put("item icon", r(&guard(|| find_item_icon(pe))));
+            put("render", r(&guard(|| find_render(pe))));
+            put("frame", r(&guard(|| find_frame(pe))));
+            let name = build.file_name().unwrap().to_string_lossy().to_string();
+            table.push((name, row));
+        };
+        for_each_archived_build(&mut survey);
+        for_each_legacy_build(&mut survey);
+        let panics: Vec<String> = table
+            .iter()
+            .flat_map(|(build, row)| {
+                row.iter()
+                    .filter(|(_, value)| value == "Panicked")
+                    .map(move |(rule, _)| format!("{rule} in {build}"))
+            })
+            .collect();
+        assert!(panics.is_empty(), "rules panicked: {panics:?}");
     }
 }

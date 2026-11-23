@@ -53,7 +53,7 @@ use super::offsets::{
     find_packet_layouts, find_packet_names, find_packets, find_projectiles, find_projection,
     find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
     find_spot_anims, find_tick_count, find_varc_setters, find_varcs, find_varps, find_world_select,
-    NamedPacket, PacketAnchors, Pe, ScanError, World,
+    guarded, NamedPacket, PacketAnchors, Pe, ScanError, World,
 };
 use super::state::{LayoutMap, LAYOUT_MAP};
 use super::unload::HookCall;
@@ -435,35 +435,48 @@ unsafe fn find_offsets() {
     };
     let pe = &pe;
 
-    let actor = found("Actor position", find_actor_position(pe));
-    let path = actor.and_then(|a| found("Actor path", find_actor_path(pe, a.x)));
-    let player = found("Local player", find_local_player(pe));
-    let game_state = found("Game state", find_game_state(pe));
-    let skills = player.and_then(|p| found("Skills", find_skills(pe, p.client)));
-    let tick_count = player.and_then(|p| found("Tick count", find_tick_count(pe, p.client)));
-    let varps = found("Varps", find_varps(pe));
-    let login = game_state.and_then(|offset| found("Login panel", find_login_panel(pe, offset)));
-    let login_provider =
-        player.and_then(|p| found("Login provider", find_login_provider(pe, p.client)));
-    let interfaces = found("Interfaces", find_interfaces(pe));
-    let sprite = interfaces.and_then(|_| found("Component sprite", find_component_sprite(pe)));
-    let invalidate = found("Component invalidation", find_component_invalidate(pe));
-    let fields = interfaces.and_then(|_| found("Component fields", find_component_fields(pe)));
-    let world_select = player.and_then(|p| found("World select", find_world_select(pe, p.client)));
-    let minimap = player.and_then(|p| found("Minimap", find_minimap(pe, p.client)));
-    let destination = minimap.and_then(|m| found("Destination", find_destination(pe, m.object)));
-    let ground_items = found("Ground items", find_ground_items(pe));
+    let actor = found("Actor position", guarded(|| find_actor_position(pe)));
+    let path = actor.and_then(|a| found("Actor path", guarded(|| find_actor_path(pe, a.x))));
+    let player = found("Local player", guarded(|| find_local_player(pe)));
+    let game_state = found("Game state", guarded(|| find_game_state(pe)));
+    let skills = player.and_then(|p| found("Skills", guarded(|| find_skills(pe, p.client))));
+    let tick_count =
+        player.and_then(|p| found("Tick count", guarded(|| find_tick_count(pe, p.client))));
+    let varps = found("Varps", guarded(|| find_varps(pe)));
+    let login = game_state
+        .and_then(|offset| found("Login panel", guarded(|| find_login_panel(pe, offset))));
+    let login_provider = player.and_then(|p| {
+        found(
+            "Login provider",
+            guarded(|| find_login_provider(pe, p.client)),
+        )
+    });
+    let interfaces = found("Interfaces", guarded(|| find_interfaces(pe)));
+    let sprite =
+        interfaces.and_then(|_| found("Component sprite", guarded(|| find_component_sprite(pe))));
+    let invalidate = found(
+        "Component invalidation",
+        guarded(|| find_component_invalidate(pe)),
+    );
+    let fields =
+        interfaces.and_then(|_| found("Component fields", guarded(|| find_component_fields(pe))));
+    let world_select =
+        player.and_then(|p| found("World select", guarded(|| find_world_select(pe, p.client))));
+    let minimap = player.and_then(|p| found("Minimap", guarded(|| find_minimap(pe, p.client))));
+    let destination =
+        minimap.and_then(|m| found("Destination", guarded(|| find_destination(pe, m.object))));
+    let ground_items = found("Ground items", guarded(|| find_ground_items(pe)));
     let ground_item_ownership = ground_items.zip(tick_count).and_then(|(g, tick)| {
         found(
             "Ground item ownership",
-            find_ground_item_ownership(pe, tick, &g),
+            guarded(|| find_ground_item_ownership(pe, tick, &g)),
         )
     });
-    let chat = found("Chat", find_chat(pe));
-    let projectiles = found("Projectiles", find_projectiles(pe));
-    let spot_anims = found("Spot animations", find_spot_anims(pe));
-    let packets = found("Packets", find_packets(pe));
-    let packet_layouts = packets.and_then(|p| match find_packet_layouts(pe, &p) {
+    let chat = found("Chat", guarded(|| find_chat(pe)));
+    let projectiles = found("Projectiles", guarded(|| find_projectiles(pe)));
+    let spot_anims = found("Spot animations", guarded(|| find_spot_anims(pe)));
+    let packets = found("Packets", guarded(|| find_packets(pe)));
+    let packet_layouts = packets.and_then(|p| match guarded(|| find_packet_layouts(pe, &p)) {
         Ok(layouts) => {
             println!(
                 "[Agent]: Packet layouts found: {} of {} packets.\r\n",
@@ -485,45 +498,50 @@ unsafe fn find_offsets() {
                 varps,
                 chat_messages: chat.map(|chat| chat.messages),
             };
-            find_packet_names(pe, &rule, layouts, anchors)
-                .into_iter()
-                .filter_map(|(name, result)| match result {
-                    Ok(named) => {
-                        println!(
-                            "[Agent]: Packet {} is {}.\r\n",
-                            name.spelling(),
-                            named.opcode
-                        );
-                        Some((name, named))
-                    }
-                    Err(error) => {
-                        println!(
-                            "[Agent]: Packet {} not found: {error:?}.\r\n",
-                            name.spelling()
-                        );
-                        None
-                    }
-                })
-                .collect()
+            catch_unwind(AssertUnwindSafe(|| {
+                find_packet_names(pe, &rule, layouts, anchors)
+            }))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(name, result)| match result {
+                Ok(named) => {
+                    println!(
+                        "[Agent]: Packet {} is {}.\r\n",
+                        name.spelling(),
+                        named.opcode
+                    );
+                    Some((name, named))
+                }
+                Err(error) => {
+                    println!(
+                        "[Agent]: Packet {} not found: {error:?}.\r\n",
+                        name.spelling()
+                    );
+                    None
+                }
+            })
+            .collect()
         })
         .unwrap_or_default();
-    let script_runs = found("Script runs", find_script_runs(pe));
-    let varc_setters = found("Varc setters", find_varc_setters(pe));
+    let script_runs = found("Script runs", guarded(|| find_script_runs(pe)));
+    let varc_setters = found("Varc setters", guarded(|| find_varc_setters(pe)));
     let tick = player.zip(tick_count).map(|(p, offset)| (p.client, offset));
-    let containers = find_item_containers(pe);
-    let item_setter = containers
-        .ok()
-        .and_then(|c| found("Item setter", find_item_setter(pe, &c)).map(|rule| (rule, c)));
-    let camera = player.and_then(|p| found("Camera", find_camera(pe, p.client)));
-    let projection = player.and_then(|p| found("Projection", find_projection(pe, p.client)));
-    let scene = projection.and_then(|_| found("Scene", find_scene(pe)));
-    let collision = scene.and_then(|s| found("Collision maps", find_collision_maps(pe, &s)));
-    let instance_flag = found("Instance flag", find_instance_flag(pe));
+    let containers = guarded(|| find_item_containers(pe));
+    let item_setter = containers.ok().and_then(|c| {
+        found("Item setter", guarded(|| find_item_setter(pe, &c))).map(|rule| (rule, c))
+    });
+    let camera = player.and_then(|p| found("Camera", guarded(|| find_camera(pe, p.client))));
+    let projection =
+        player.and_then(|p| found("Projection", guarded(|| find_projection(pe, p.client))));
+    let scene = projection.and_then(|_| found("Scene", guarded(|| find_scene(pe))));
+    let collision =
+        scene.and_then(|s| found("Collision maps", guarded(|| find_collision_maps(pe, &s))));
+    let instance_flag = found("Instance flag", guarded(|| find_instance_flag(pe)));
     let local_projection = player.zip(interfaces).zip(projection.zip(scene)).and_then(
         |((p, i), (projection, scene))| {
             found(
                 "Local projection",
-                find_local_projection(pe, p.client, i.canvas, &projection, &scene),
+                guarded(|| find_local_projection(pe, p.client, i.canvas, &projection, &scene)),
             )
         },
     );
@@ -531,10 +549,10 @@ unsafe fn find_offsets() {
         let world = (|| {
             Ok::<_, (&str, ScanError)>(World {
                 containers: containers.map_err(|e| ("item containers", e))?,
-                varcs: find_varcs(pe, player.client).map_err(|e| ("varcs", e))?,
-                run_energy: find_run_energy(pe).map_err(|e| ("run energy", e))?,
-                lists: find_actor_lists(pe).map_err(|e| ("NPC and player lists", e))?,
-                names: find_actor_names(pe).map_err(|e| ("actor names", e))?,
+                varcs: guarded(|| find_varcs(pe, player.client)).map_err(|e| ("varcs", e))?,
+                run_energy: guarded(|| find_run_energy(pe)).map_err(|e| ("run energy", e))?,
+                lists: guarded(|| find_actor_lists(pe)).map_err(|e| ("NPC and player lists", e))?,
+                names: guarded(|| find_actor_names(pe)).map_err(|e| ("actor names", e))?,
                 player,
                 actor,
             })
@@ -610,20 +628,32 @@ unsafe fn find_offsets() {
     if let Some(w) = world_select {
         layout.found |= part::WORLD_SELECT;
         layout.world_select = WorldSelectLayout {
-            open: w.open,
-            count: w.count,
-            worlds: w.worlds,
-            offset: w.offset,
-            max_offset: w.max_offset,
+            switcher: w.switcher,
             current_world: w.current_world,
-            background: w.background,
-            background_height: w.background_height,
+            master_count: w.master_count,
+            master_worlds: w.master_worlds,
+            open: w.open,
+            list: w.list,
+            state: w.state,
+            layout: w.layout,
+            selected: w.selected,
+            hovered: w.hovered,
+            page: w.page,
+            compact: w.compact,
+            list_rect: w.list_rect,
+            row_offset: w.row_offset,
+            row_height: w.row_height,
+            rows: w.rows,
+            columns: w.columns,
+            compact_columns: w.compact_columns,
+            previous: w.previous,
+            next: w.next,
             id: w.world.id,
             types: w.world.types,
             players: w.world.players,
             activity: w.world.activity,
             location: w.world.location,
-            hovered: w.hovered,
+            reserved: 0,
         };
     }
     if let Some(m) = minimap {
@@ -805,7 +835,7 @@ unsafe fn find_offsets() {
             instance_flag: flag,
         };
     }
-    let head_icons = found("NPC head icons", find_npc_head_icons(pe));
+    let head_icons = found("NPC head icons", guarded(|| find_npc_head_icons(pe)));
     if let Some(w) = world {
         layout.found |= part::WORLD;
         layout.world = WorldLayout {
@@ -842,7 +872,7 @@ unsafe fn find_offsets() {
         };
     }
 
-    if let Some(rule) = found("Menu", find_menu(pe)) {
+    if let Some(rule) = found("Menu", guarded(|| find_menu(pe))) {
         layout.found |= part::MENU;
         layout.menu.object = rule.object;
         layout.menu.entry_vtable = rule.entry_vtable;
@@ -854,11 +884,11 @@ unsafe fn find_offsets() {
         layout.menu.kind = rule.kind;
         layout.menu.category = rule.category;
         layout.menu.cancel = rule.cancel;
-        if let Some(key) = found("Menu order", find_menu_order(pe, &rule)) {
+        if let Some(key) = found("Menu order", guarded(|| find_menu_order(pe, &rule))) {
             layout.found |= part::MENU_ORDER;
             layout.menu.order_key = key;
         }
-        if let Some(settings) = found("Menu settings", find_menu_settings(pe, &rule)) {
+        if let Some(settings) = found("Menu settings", guarded(|| find_menu_settings(pe, &rule))) {
             layout.found |= part::MENU_SETTINGS;
             layout.menu.player_attack = settings.player_attack;
             layout.menu.npc_attack = settings.npc_attack;
@@ -870,21 +900,23 @@ unsafe fn find_offsets() {
             layout.menu.player_level = settings.player_level;
             layout.menu.player_team = settings.player_team;
         }
-        if let Some(click) = found("Menu click", find_menu_click(pe, &rule)) {
+        if let Some(click) = found("Menu click", guarded(|| find_menu_click(pe, &rule))) {
             layout.found |= part::MENU_CLICK;
             layout.menu.minimenu_vtable = click.minimenu_vtable;
             layout.menu.click_entry = click.entry;
             layout.menu.click_x = click.click_x;
             layout.menu.click_counter = click.counter;
-            if let Some(open) = found("Menu open", find_menu_open(pe, &click)) {
+            if let Some(open) = found("Menu open", guarded(|| find_menu_open(pe, &click))) {
                 layout.found |= part::MENU_OPEN;
                 layout.menu.open = open;
             }
-            if let Some(menu_layout) = found("Menu layout", find_menu_layout(pe, &click)) {
+            if let Some(menu_layout) =
+                found("Menu layout", guarded(|| find_menu_layout(pe, &click)))
+            {
                 super::menu::set_menu_layout(menu_layout);
             }
         }
-        if let Some(selection) = found("Selection", find_selection(pe, &rule)) {
+        if let Some(selection) = found("Selection", guarded(|| find_selection(pe, &rule))) {
             layout.found |= part::SELECTION;
             layout.menu.selection = selection.offset;
             layout.menu.selection_verb = selection.verb;
@@ -904,7 +936,7 @@ unsafe fn find_offsets() {
     if let Some(w) = world {
         if let Some(decoder) = found(
             "Appearance decoder",
-            find_appearance_decoder(pe, w.names.player_name, w.player.player_index),
+            guarded(|| find_appearance_decoder(pe, w.names.player_name, w.player.player_index)),
         ) {
             super::name::hook_decoder(module_base, decoder);
         }
@@ -926,15 +958,25 @@ unsafe fn find_offsets() {
     if let Some((rule, containers)) = item_setter {
         super::item_log::hook(module_base, rule, containers, tick);
     }
-    if let Some(builder) = found("Item icon builder", find_item_icon(pe)) {
+    if let Some(builder) = found("Item icon builder", guarded(|| find_item_icon(pe))) {
         super::cache::set_item_icon(module_base, builder);
     }
     if let (Some(projection), Some(scene)) = (projection, scene) {
-        let game = found("Game objects", find_game_object_layout(pe, &scene));
-        let decoration = found("Decorations", find_decoration_layout(pe, &scene));
-        let item_pile = decoration.and_then(|d| found("Item pile", find_item_pile(pe, &d)));
+        let game = found(
+            "Game objects",
+            guarded(|| find_game_object_layout(pe, &scene)),
+        );
+        let decoration = found(
+            "Decorations",
+            guarded(|| find_decoration_layout(pe, &scene)),
+        );
+        let item_pile =
+            decoration.and_then(|d| found("Item pile", guarded(|| find_item_pile(pe, &d))));
         if let Some(game) = game {
-            let configs = found("Loc configs", find_loc_configs(pe, &scene, &game));
+            let configs = found(
+                "Loc configs",
+                guarded(|| find_loc_configs(pe, &scene, &game)),
+            );
             super::scene::set_scene(super::scene::Rules {
                 module_base,
                 scene,
@@ -946,14 +988,19 @@ unsafe fn find_offsets() {
         }
     }
     if let Some((w, rule)) = world.and_then(|w| {
-        found("NPC model", find_npc_model(pe, w.names.npc_definition)).map(|rule| (w, rule))
+        found(
+            "NPC model",
+            guarded(|| find_npc_model(pe, w.names.npc_definition)),
+        )
+        .map(|rule| (w, rule))
     }) {
-        let vertices = found("Model vertices", find_model_vertices(pe, &rule));
+        let vertices = found("Model vertices", guarded(|| find_model_vertices(pe, &rule)));
         let height = found(
             "Animation height",
-            find_animation_height(pe, w.names.npc_definition),
+            guarded(|| find_animation_height(pe, w.names.npc_definition)),
         );
-        let faces = vertices.and_then(|v| found("Model faces", find_model_faces(pe, &v)));
+        let faces =
+            vertices.and_then(|v| found("Model faces", guarded(|| find_model_faces(pe, &v))));
         if let (Some(vertices), Some(faces)) = (vertices, faces) {
             super::model::set_npc_model(rule, vertices, faces);
         }
@@ -961,11 +1008,13 @@ unsafe fn find_offsets() {
             super::model::animation_slot(image, module_base, rule.get_model, height)
         });
         println!("[Agent]: Renderable animation height slot: {animation_slot:x?}.\r\n");
-        if let (Some(render), Some(slot)) = (found("Render", find_render(pe)), animation_slot) {
+        if let (Some(render), Some(slot)) =
+            (found("Render", guarded(|| find_render(pe))), animation_slot)
+        {
             super::drawn::hook(module_base, render, slot);
         }
     }
-    if let Some(rule) = found("Frame", find_frame(pe)) {
+    if let Some(rule) = found("Frame", guarded(|| find_frame(pe))) {
         super::frame::hook(module_base, image.len() as u64, rule);
     }
     set_found(

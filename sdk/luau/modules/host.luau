@@ -146,14 +146,33 @@ export type World = {
 	activity: string,
 }
 
+export type PanelRect = {
+	x: number,
+	y: number,
+	width: number,
+	height: number,
+}
+
+export type WorldPanel = {
+	page: number,
+	compact: boolean,
+	selected: number,
+	hovered: number,
+	rows: number,
+	columns: number,
+	list: PanelRect,
+	row_offset: number,
+	row_height: number,
+	previous: PanelRect,
+	next: PanelRect,
+	shown: { World },
+}
+
 export type WorldSelect = {
 	open: boolean,
 	current: number,
-	offset: number,
-	max_offset: number,
-	hovered: number,
-	background_height: number?,
 	worlds: { World },
+	panel: WorldPanel?,
 }
 
 export type Connection = {

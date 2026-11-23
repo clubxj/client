@@ -38,7 +38,7 @@ All are plain tables; see `host.luau` for every field.
 | `SelectedWidget` | A selected spell or item awaiting a target: `verb`, `name`, component, `item`, `targets` bitmask (1 ground items, 2 NPCs, 4 objects, 8 players, 16 self, 32 components). |
 | `EnumDef` / `CacheValue` | A cache enum and one value (number or string). |
 | `SubInterface` | An interface opened inside another. |
-| `World` / `WorldSelect` | World list and switcher state. |
+| `World` / `WorldSelect` / `WorldPanel` / `PanelRect` | World list and switcher state. |
 | `Tile` / `NavTile` / `Area` / `Corners` / `ScreenPoint` / `FinePoint` | Coordinate shapes. |
 | `CameraView` | A camera yaw and zoom to project with (`project`). |
 | `SceneRoute` / `WorldRoute` / `NavPlan` / `NavOptions` / `SceneRouteOptions` | Pathing results and options. |
@@ -1108,7 +1108,7 @@ Definition:
 ```luau
 Host.world_select: () -> WorldSelect?
 ```
-World switcher state: `open` and `worlds`.
+The login world switcher: `worlds` (every world, in the client's order), `current` (the world the login screen will use) and, while the list is `open`, its `panel`: `shown` (the worlds the list shows now, after the filters and sort, in display order), `page`, `compact`, `rows` and `columns` per page, the `list` rect, `row_offset` and `row_height`, the `previous` and `next` page arrows, and `selected` / `hovered` (indices into `worlds`, -1 for none). Rects are in the switcher's own 765x503 units; `LoginWorldSwitcher` maps them to the screen.
 
 Example:
 ```luau

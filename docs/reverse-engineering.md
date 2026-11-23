@@ -11,16 +11,18 @@ Facts about the client's internals that the code does not state, and the steps f
   3. Require exactly one match. Anything else is a `ScanError`, so a changed shape fails the rule instead of hooking the wrong code.
   4. Store the result in an `ipc::state` layout type.
 - Every build in `archive/` is regression data. Each rule must still find exactly one match on all of them.
+- `archive/legacy/` holds older builds from before the client's mid-2026 restructure (from 2025-01). Most rules don't match them and needn't; `no_rule_panics_in_any_build` runs every rule on both folders and fails only when one panics. A rule must return a `ScanError`, never panic: `find_offsets` calls each one through `guarded`, which turns a panic into `ScanError::Panicked` so the rest still run. A panic there used to end the whole search and the agent with it.
 - Leaf functions such as `mov rax,[rcx+X]; ret` have no `.pdata` entry and are missing from `Pe::functions`. Find them by their bytes, or by scanning `direct_calls` targets up to the first `ret`.
 - Some functions are split across chained `.pdata` chunks. `chunk_root` walks back to the entry.
 - Hash tables are custom chained tables, not `std::unordered_map`.
 
 ## Reference material and tools
 
+- **rev216 debug build** (`archive.lostcity.rs/rsps/osrs-dump/`): a macOS x86-64 debug build of revision 216 (2024) with every function named, plus `symbols.txt`, `strings.txt` and `constants.txt`. Offsets and code shapes don't carry over, but names do (`jag::oldscape::TitleScreen::WorldSwitchRender`, `WorldSwitcherStructure`, the minimenu classes): find the code that uses a string there with `llvm-objdump -d --demangle`, then look for the same anchors in the current exe.
 - **`standalone/`** is the decompiled Java client with the names from its API applied. Its version is in `standalone/VERSION`, and only about 93 of 730 classes are named. It is read only, private and git-ignored. `MAPPING.md` and `mapping.tsv` hold the renames and the field multipliers.
   - Obfuscated Java int fields store `real * k`. The native client stores plain values.
   - Ignore the junk extra parameter, the `try/catch` wrappers and the injected `getX`/`setX`/`rl$` methods. The code does not compile.
-- **`archive/`** holds one exe per update, named `client-<file date>-<first 8 hex of sha256>.exe` (git-ignored). After each update:
+- **`archive/`** holds one exe per update, named `client-<file date>-<first 8 hex of sha256>.exe` (git-ignored). Older Windows builds can be downloaded from `archive.lostcity.rs/oldschool.runescape.com/native/osrs-win/<version>/osclient.exe`. After each update:
   1. Copy the installed exe (under Bolt: `~/.local/share/bolt-launcher/`) into `archive/`.
   2. Hash the exe itself, because the `.sha256` file beside it doesn't match.
   3. Add a row to `archive/README.md`.
@@ -70,6 +72,14 @@ Facts about the client's internals that the code does not state, and the steps f
 - **Entry tile**: a loc entry holds the loc's world origin tile at `ids+0x14` (x) and `ids+0x18` (y), so same-id locs on different tiles are told apart there. `index` (`ids+4`) is -1 for locs.
   - The open path is the minimenu's `std::vector<u64>` of parent rows, then its open row (-1 for none).
   - The stay-open check lays out every prefix of that path. The agent does the same.
+
+## Login world switcher (`offsets/world_select.rs`, `decode/src/world_select.rs`)
+
+- Rewritten in build e470c533 (243.1): rows in 2 columns (6 in compact view), sort headers, game-mode, region and members/free-to-play filters, pages with arrows. The old box grid and its rule don't apply to older builds, so the archive tests expect world select only from e470c533.
+- The switcher is a 0x188-byte heap object behind a global pointer, null while closed. It holds a filtered list (`+0x10` object, count at `+0x18`, data at `+0x20`), a state block (`+0x78`: selected world as an index into the master list, hovered, page, compact byte), the sprites (`+0xe0`) and a layout object (`+0x180`, 0xf8 bytes) of `{x, y, w, h}` rects and row metrics in the switcher's own 765x503 units. On screen x is `(login panel_x + x) * scale` and y is `y * scale`.
+- Lists are 16-byte entries with the world pointer at `+8`; the master list is a global count followed by the data pointer. A world record keeps id `+0`, types `+4`, players `+8`, activity string `+0x28`, location `+0x40`.
+- Hit test: `index = (page * columns + column) * rows + row`, columns filling top to bottom; a row is `(y - list.y - row_offset) / row_height`, a column `(x - list.x) / (list.w / columns)`. Clicking a row switches world and closes the list; Escape closes it without switching.
+- Anchors: the function using `"sl_flags"` loads the sprites; its caller is called by the open function, which tests the global with `cmp [G], 0` and passes `[client + current world]` to the next method. Methods called with `rcx = [G]` include the input dispatcher (open byte, layout, state, list) and the render jump; the input handler gives the hit test (layout fields) and the state stores; the render's parts give the arrows (loaded just before the page-count call) and the header (master list, world record fields through the world-box function).
 
 ## Chat (`offsets/scripts.rs`, `offsets/chat.rs`)
 

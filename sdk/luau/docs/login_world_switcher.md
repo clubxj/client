@@ -49,16 +49,6 @@ LoginWorldSwitcher.allow_dangerous_worlds = true
 
 Definition:
 ```luau
-export type Layout = {
-	columns: number,
-	rows: number,
-	width: number,
-	height: number,
-	x_gap: number,
-	y_gap: number,
-	x: number,
-	y: number,
-}
 export type WorldBox = {
 	index: number,
 	slot: number,
@@ -67,12 +57,13 @@ export type WorldBox = {
 }
 export type Buttons = {
 	world: Box,
-	cancel: Box,
-	left: Box?,
-	right: Box?,
+	previous: Box?,
+	next: Box?,
 }
 ```
-`Layout` is the world grid: size, box size, gaps and origin. `WorldBox.index` is the world's place in `worlds()` and `slot` its place among the boxes shown now. `Buttons` holds the "World N" button, cancel, and the scroll arrows, set only when that direction can scroll.
+`WorldBox.index` is the world's place in `worlds()` and `slot` its place on the page shown now. `Buttons` holds the login screen's "World N" button and the page arrows, set only while the list is open and that direction has a page.
+
+The list shows `state().panel.shown`: the worlds that pass the switcher's filters (game modes, regions, members and free-to-play), in its sort, filled column by column. A world its filters hide can't be clicked.
 
 ## LoginWorldSwitcher.state
 
@@ -80,7 +71,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.state(): WorldSelect?
 ```
-The client's world select state (open, current world, worlds, scroll offset, hovered box), or `nil` off the login screen.
+The client's world select state (`Host.world_select`: open, current world, every world and, while open, the panel), or `nil` off the login screen.
 
 Example:
 ```luau
@@ -205,22 +196,6 @@ if world then
 end
 ```
 
-## LoginWorldSwitcher.layout
-
-Definition:
-```luau
-function LoginWorldSwitcher.layout(count: number): Layout?
-```
-The grid the client uses for `count` worlds, or `nil` when `count` is below 1.
-
-Example:
-```luau
-local layout = LoginWorldSwitcher.layout(150)
-if layout then
-	print(layout.columns, "columns of", layout.rows, "rows")
-end
-```
-
 ## LoginWorldSwitcher.buttons
 
 Definition:
@@ -232,7 +207,7 @@ Where the switcher's buttons are.
 Example:
 ```luau
 local buttons = LoginWorldSwitcher.buttons()
-print(buttons and buttons.right ~= nil)
+print(buttons and buttons.next ~= nil)
 ```
 
 ## LoginWorldSwitcher.boxes
@@ -241,7 +216,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.boxes(): { WorldBox }?
 ```
-The world boxes shown now; `nil` when the list is closed.
+The rows shown on the current page; `nil` when the list is closed.
 
 Example:
 ```luau
@@ -256,7 +231,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.read(slot: number): number?
 ```
-The world in visible box `slot`, 1 being the top-left, filled column by column.
+The world in row `slot` of the current page, 1 being the top-left, filled column by column.
 
 Example:
 ```luau
@@ -282,7 +257,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.close(): boolean
 ```
-Clicks cancel if the list is open and waits up to 1.5 seconds for it to close.
+Presses Escape if the list is open (the switcher has no cancel button) and waits up to 1.5 seconds for it to close.
 
 Example:
 ```luau
@@ -295,7 +270,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.previous_page(): boolean
 ```
-Clicks the left arrow, waits for the list to scroll, then pauses 0.4 to 1.2 seconds. `false` when closed or already at the start.
+Clicks the previous-page arrow, waits for the page to change, then pauses 0.4 to 1.2 seconds. `false` when closed or already on the first page.
 
 Example:
 ```luau
@@ -308,7 +283,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.next_page(): boolean
 ```
-Clicks the right arrow, waits for the list to scroll, then pauses 0.4 to 1.2 seconds. `false` when closed or already at the end.
+Clicks the next-page arrow, waits for the page to change, then pauses 0.4 to 1.2 seconds. `false` when closed or already on the last page.
 
 Example:
 ```luau
@@ -321,7 +296,7 @@ Definition:
 ```luau
 function LoginWorldSwitcher.find(id: number): WorldBox?
 ```
-Opens the list and scrolls until world `id` is visible, then returns its box. `nil` on failure; when the world isn't listed it also closes the list.
+Opens the list and turns pages until world `id` is shown, then returns its row. `nil` on failure or when the switcher's filters hide the world.
 
 Example:
 ```luau

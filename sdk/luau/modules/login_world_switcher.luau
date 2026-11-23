@@ -1,12 +1,14 @@
 --!strict
 local Host = require("@volcren/host")
 local game_state = Host.game_state
-local connection = Host.connection
 local world_select = Host.world_select
 type World = Host.World
 type WorldSelect = Host.WorldSelect
+type WorldPanel = Host.WorldPanel
+type PanelRect = Host.PanelRect
 local GameState = require("@volcren/game_state")
 local Geometry = require("@volcren/geometry")
+local Keyboard = require("@volcren/keyboard")
 local Log = require("@volcren/log")
 local Mouse = require("@volcren/mouse")
 local Random = require("@volcren/random")
@@ -53,17 +55,6 @@ LoginWorldSwitcher.allow_dangerous_worlds = false
 LoginWorldSwitcher.OFFLINE = -1
 LoginWorldSwitcher.FULL = 1980
 
-export type Layout = {
-	columns: number,
-	rows: number,
-	width: number,
-	height: number,
-	x_gap: number,
-	y_gap: number,
-	x: number,
-	y: number,
-}
-
 export type WorldBox = {
 	index: number,
 	slot: number,
@@ -71,24 +62,20 @@ export type WorldBox = {
 	box: Box,
 }
 
+export type Buttons = {
+	world: Box,
+	previous: Box?,
+	next: Box?,
+}
+
 type Screen = {
 	select: WorldSelect,
 	panel_x: number,
-	width: number,
-	height: number,
 	scale: number,
 }
 
-local PANEL_WIDTH = 765
-local PANEL_HEIGHT = 480
-local BOX_WIDTH = 88
-local BOX_HEIGHT = 19
-local MAX_COLUMNS = 7
-local MAX_ROWS = 24
-local MAX_GAP = 5
-local TOP_BAR = 23
-local ARROW_WIDTH = 43
-local ARROW_HEIGHT = 29
+local TITLE_HEIGHT = 671
+local WORLD_BUTTON = { x1 = 20, y1 = -55, x2 = 120, y2 = -20 }
 
 local OPEN_TIMEOUT_MS = 5000
 local CLOSE_TIMEOUT_MS = 1500
@@ -96,8 +83,7 @@ local PAGE_TIMEOUT_MS = 1500
 local HOVER_TIMEOUT_MS = 600
 local SWITCH_TIMEOUT_MS = 1500
 local SWITCH_ATTEMPTS = 5
-
-local trunc = Random.trunc
+local MAX_PAGE_STEPS = 32
 
 local function screen(): Screen?
 	local state = game_state()
@@ -113,21 +99,30 @@ local function screen(): Screen?
 	if select == nil then
 		return nil
 	end
-	local conn = connection()
 	return {
 		select = select,
 		panel_x = login.panel_x,
-		width = conn.width,
-		height = conn.height,
 		scale = login.scale or 1,
 	}
 end
 
-local function scaled(s: Screen, x1: number, y1: number, x2: number, y2: number): Box
+local function scaled(s: Screen, x: number, y: number, width: number, height: number): Box
 	local function px(v: number): number
 		return math.floor(v * s.scale)
 	end
-	return Box.new(px(x1), px(y1), px(x2), px(y2))
+	return Box.new(px(s.panel_x + x), px(y), px(s.panel_x + x + width) - 1, px(y + height) - 1)
+end
+
+local function rect(s: Screen, r: PanelRect): Box
+	return scaled(s, r.x, r.y, r.width, r.height)
+end
+
+local function per_page(panel: WorldPanel): number
+	return math.max(1, panel.rows * panel.columns)
+end
+
+local function last_page(panel: WorldPanel): number
+	return math.max(0, (#panel.shown - 1) // per_page(panel))
 end
 
 function LoginWorldSwitcher.state(): WorldSelect?
@@ -190,110 +185,62 @@ function LoginWorldSwitcher.is_available(world: World): boolean
 	return world.players ~= LoginWorldSwitcher.OFFLINE and world.players <= LoginWorldSwitcher.FULL
 end
 
-function LoginWorldSwitcher.layout(count: number): Layout?
-	if count < 1 then
-		return nil
-	end
-	local columns, rows = MAX_COLUMNS, MAX_ROWS
-	repeat
-		local last_columns, last_rows = columns, rows
-		if (columns - 1) * rows >= count then
-			columns -= 1
-		end
-		if columns * (rows - 1) >= count then
-			rows -= 1
-		end
-		if columns * (rows - 1) >= count then
-			rows -= 1
-		end
-	until last_columns == columns and last_rows == rows
-	local x_gap = math.min(MAX_GAP, trunc((PANEL_WIDTH - columns * BOX_WIDTH) / (columns + 1)))
-	local y_gap = math.min(MAX_GAP, trunc((PANEL_HEIGHT - rows * BOX_HEIGHT) / (rows + 1)))
-	return {
-		columns = columns,
-		rows = rows,
-		width = BOX_WIDTH,
-		height = BOX_HEIGHT,
-		x_gap = x_gap,
-		y_gap = y_gap,
-		x = trunc((PANEL_WIDTH - columns * BOX_WIDTH - (columns - 1) * x_gap) / 2),
-		y = trunc((PANEL_HEIGHT - rows * BOX_HEIGHT - (rows - 1) * y_gap) / 2),
-	}
-end
-
 local function world_button(s: Screen): Box
-	local bottom = math.min(s.height, s.select.background_height or s.height)
-	return scaled(s, s.panel_x + 20, bottom - 55, s.panel_x + 120, bottom - 20)
+	local b = WORLD_BUTTON
+	return scaled(s, b.x1, TITLE_HEIGHT + b.y1, b.x2 - b.x1, b.y2 - b.y1)
 end
 
-local function cancel_button(s: Screen): Box
-	return scaled(s, s.panel_x + 708, 4, s.panel_x + 758, 20)
-end
-
-local function arrow_y(s: Screen): number
-	return s.height // 2 - ARROW_HEIGHT // 2
-end
-
-local function left_button(s: Screen, l: Layout): Box
-	local x2 = s.panel_x + l.x - 2 * l.x_gap - 1
-	local y = arrow_y(s)
-	return scaled(s, x2 - ARROW_WIDTH + 1, y, x2, y + ARROW_HEIGHT - 1)
-end
-
-local function right_button(s: Screen, l: Layout): Box
-	local sprite_x = s.panel_x + l.x + l.columns * (l.width + l.x_gap) + l.x_gap
-	local clickable_x = s.width - s.panel_x - l.x + 2 * l.x_gap
-	local y = arrow_y(s)
-	return scaled(s, math.max(sprite_x, clickable_x), y, sprite_x + ARROW_WIDTH - 1, y + ARROW_HEIGHT - 1)
+local function master_index(s: Screen, id: number): number?
+	for i, world in s.select.worlds do
+		if world.id == id then
+			return i
+		end
+	end
+	return nil
 end
 
 local function boxes(s: Screen): { WorldBox }?
-	if not s.select.open then
+	local panel = s.select.panel
+	if not s.select.open or panel == nil then
 		return nil
 	end
-	local worlds = s.select.worlds
-	local l = LoginWorldSwitcher.layout(#worlds)
-	if l == nil then
-		return nil
-	end
+	local size = per_page(panel)
+	local column_width = panel.list.width // math.max(1, panel.columns)
 	local result: { WorldBox } = {}
-	for i = s.select.offset * l.rows, #worlds - 1 do
-		local column = i // l.rows - s.select.offset
-		if column >= l.columns then
+	for slot = 0, size - 1 do
+		local shown = panel.page * size + slot
+		local world = panel.shown[shown + 1]
+		if world == nil then
 			break
 		end
-		local row = i % l.rows
-		local x1 = s.panel_x + l.x + column * (l.width + l.x_gap)
-		local y1 = TOP_BAR + l.y + row * (l.height + l.y_gap)
+		local column, row = slot // panel.rows, slot % panel.rows
 		table.insert(result, {
-			index = i + 1,
-			slot = #result + 1,
-			world = worlds[i + 1],
-			box = scaled(s, x1, y1, x1 + l.width - 1, y1 + l.height - 1),
+			index = master_index(s, world.id) or 0,
+			slot = slot + 1,
+			world = world,
+			box = scaled(
+				s,
+				panel.list.x + column * column_width,
+				panel.list.y + panel.row_offset + row * panel.row_height,
+				column_width,
+				panel.row_height
+			),
 		})
 	end
 	return result
 end
-
-export type Buttons = {
-	world: Box,
-	cancel: Box,
-	left: Box?,
-	right: Box?,
-}
 
 function LoginWorldSwitcher.buttons(): Buttons?
 	local s = screen()
 	if s == nil then
 		return nil
 	end
-	local l = LoginWorldSwitcher.layout(#s.select.worlds)
-	local can_scroll = s.select.open and l ~= nil
+	local panel = s.select.panel
+	local open = s.select.open and panel ~= nil
 	return {
 		world = world_button(s),
-		cancel = cancel_button(s),
-		left = if can_scroll and l and s.select.offset > 0 then left_button(s, l) else nil,
-		right = if can_scroll and l and s.select.offset < s.select.max_offset then right_button(s, l) else nil,
+		previous = if open and panel and panel.page > 0 then rect(s, panel.previous) else nil,
+		next = if open and panel and panel.page < last_page(panel) then rect(s, panel.next) else nil,
 	}
 end
 
@@ -331,14 +278,10 @@ function LoginWorldSwitcher.open(): boolean
 end
 
 function LoginWorldSwitcher.close(): boolean
-	local s = screen()
-	if s == nil then
-		return false
-	end
-	if not s.select.open then
+	if not LoginWorldSwitcher.is_open() then
 		return true
 	end
-	Mouse.click(cancel_button(s))
+	Keyboard.key_press(Keyboard.keys.ESCAPE)
 	local closed = Widgets.wait_until(function()
 		return LoginWorldSwitcher.is_open() == false
 	end, CLOSE_TIMEOUT_MS)
@@ -349,29 +292,26 @@ function LoginWorldSwitcher.close(): boolean
 	return true
 end
 
-local function scroll(step: number): boolean
+local function turn(step: number): boolean
 	local s = screen()
 	if s == nil then
 		return false
 	end
-	if not s.select.open then
+	local panel = s.select.panel
+	if not s.select.open or panel == nil then
 		return false
 	end
-	local l = LoginWorldSwitcher.layout(#s.select.worlds)
-	if l == nil then
+	local from = panel.page
+	if (step < 0 and from <= 0) or (step > 0 and from >= last_page(panel)) then
 		return false
 	end
-	local from = s.select.offset
-	if (step < 0 and from <= 0) or (step > 0 and from >= s.select.max_offset) then
-		return false
-	end
-	Mouse.click(if step < 0 then left_button(s, l) else right_button(s, l))
+	Mouse.click(rect(s, if step < 0 then panel.previous else panel.next))
 	local moved = Widgets.wait_until(function()
 		local select = LoginWorldSwitcher.state()
-		return select ~= nil and select.offset ~= from
+		return select ~= nil and select.panel ~= nil and select.panel.page ~= from
 	end, PAGE_TIMEOUT_MS)
 	if not moved then
-		Log.log("LoginWorldSwitcher", `the world list didn't scroll within {PAGE_TIMEOUT_MS} ms`)
+		Log.log("LoginWorldSwitcher", `the world list didn't turn the page within {PAGE_TIMEOUT_MS} ms`)
 		return false
 	end
 	Random.sleep(400, 1200)
@@ -379,51 +319,42 @@ local function scroll(step: number): boolean
 end
 
 function LoginWorldSwitcher.previous_page(): boolean
-	return scroll(-1)
+	return turn(-1)
 end
 
 function LoginWorldSwitcher.next_page(): boolean
-	return scroll(1)
+	return turn(1)
 end
 
 function LoginWorldSwitcher.find(id: number): WorldBox?
 	if not LoginWorldSwitcher.open() then
 		return nil
 	end
-	for _ = 1, MAX_COLUMNS * 4 do
+	for _ = 1, MAX_PAGE_STEPS do
 		local s = screen()
-		if s == nil then
+		local panel = s and s.select.panel
+		if s == nil or panel == nil then
 			return nil
 		end
-		local worlds = s.select.worlds
-		local l = LoginWorldSwitcher.layout(#worlds)
-		if l == nil then
-			return nil
-		end
-		local index: number? = nil
-		for i, world in worlds do
+		local position: number? = nil
+		for i, world in panel.shown do
 			if world.id == id then
-				index = i
+				position = i - 1
 				break
 			end
 		end
-		if index == nil then
-			LoginWorldSwitcher.close()
+		if position == nil then
+			Log.log("LoginWorldSwitcher", `world {id} isn't in the list: its filters hide it`)
 			return nil
 		end
-		local column = (index - 1) // l.rows
-		local offset = s.select.offset
-		if column < offset or column >= offset + l.columns then
-			if not scroll(if column < offset then -1 else 1) then
+		local page = position // per_page(panel)
+		if page ~= panel.page then
+			if not turn(if page < panel.page then -1 else 1) then
 				return nil
 			end
 		else
-			local shown = boxes(s)
-			if shown == nil then
-				return nil
-			end
-			for _, b in shown do
-				if b.index == index then
+			for _, b in boxes(s) or {} do
+				if b.world.id == id then
 					return b
 				end
 			end
@@ -436,7 +367,8 @@ end
 local function hovering(index: number): boolean
 	return Widgets.wait_until(function()
 		local select = LoginWorldSwitcher.state()
-		return select ~= nil and select.hovered == index - 1
+		local panel = select and select.panel
+		return panel ~= nil and panel.hovered == index - 1
 	end, HOVER_TIMEOUT_MS)
 end
 

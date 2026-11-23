@@ -1,9 +1,13 @@
 use ipc::state::Layout;
 use serde::{Deserialize, Serialize};
 
-use crate::memory::{Memory, byte, read_string};
+use crate::memory::{byte, read_string, Memory};
 
 const MAX_WORLDS: i32 = 2048;
+const ENTRY_SIZE: u64 = 16;
+const ENTRY_WORLD: u64 = 8;
+const LIST_COUNT: u64 = 0x10;
+const LIST_DATA: u64 = 0x18;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
@@ -14,15 +18,36 @@ pub struct World {
     pub activity: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Panel {
+    pub page: i32,
+    pub compact: bool,
+    pub selected: i32,
+    pub hovered: i32,
+    pub rows: i32,
+    pub columns: i32,
+    pub list: Rect,
+    pub row_offset: i32,
+    pub row_height: i32,
+    pub previous: Rect,
+    pub next: Rect,
+    pub shown: Vec<World>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorldSelect {
     pub open: bool,
     pub current: i32,
-    pub offset: i32,
-    pub max_offset: i32,
-    pub hovered: i32,
-    pub background_height: Option<i32>,
     pub worlds: Vec<World>,
+    pub panel: Option<Panel>,
 }
 
 fn world(memory: &impl Memory, layout: &Layout, address: u64) -> Option<World> {
@@ -36,35 +61,63 @@ fn world(memory: &impl Memory, layout: &Layout, address: u64) -> Option<World> {
     })
 }
 
-fn worlds(memory: &impl Memory, layout: &Layout) -> Option<Vec<World>> {
-    let w = &layout.world_select;
-    let count = memory.i32(layout.module_base + w.count as u64)?;
-    let Some(array) = memory
-        .ptr(layout.module_base + w.worlds as u64)
-        .filter(|_| (1..=MAX_WORLDS).contains(&count))
-    else {
+fn entries(memory: &impl Memory, layout: &Layout, count: i32, data: u64) -> Option<Vec<World>> {
+    if !(0..=MAX_WORLDS).contains(&count) || (count > 0 && data == 0) {
         return Some(Vec::new());
-    };
+    }
     (0..count as u64)
-        .map(|i| world(memory, layout, memory.ptr(array + i * 8)?))
+        .map(|i| {
+            let address = memory.ptr(data + i * ENTRY_SIZE + ENTRY_WORLD)?;
+            world(memory, layout, address)
+        })
         .collect()
+}
+
+fn rect(memory: &impl Memory, address: u64) -> Option<Rect> {
+    Some(Rect {
+        x: memory.i32(address)?,
+        y: memory.i32(address + 4)?,
+        width: memory.i32(address + 8)?,
+        height: memory.i32(address + 12)?,
+    })
+}
+
+fn panel(memory: &impl Memory, layout: &Layout, switcher: u64) -> Option<Panel> {
+    let w = &layout.world_select;
+    let state = switcher + w.state as u64;
+    let sizes = memory.ptr(switcher + w.layout as u64).filter(|&p| p != 0)?;
+    let compact = byte(memory, state + w.compact as u64)? != 0;
+    let columns = if compact { w.compact_columns } else { w.columns };
+    let list = switcher + w.list as u64;
+    let shown_count = memory.i32(list + LIST_COUNT)?;
+    let shown_data = memory.ptr(list + LIST_DATA).unwrap_or(0);
+    Some(Panel {
+        page: memory.i32(state + w.page as u64)?,
+        compact,
+        selected: memory.i32(state + w.selected as u64)?,
+        hovered: memory.i32(state + w.hovered as u64)?,
+        rows: memory.i32(sizes + w.rows as u64)?,
+        columns: memory.i32(sizes + columns as u64)?,
+        list: rect(memory, sizes + w.list_rect as u64)?,
+        row_offset: memory.i32(sizes + w.row_offset as u64)?,
+        row_height: memory.i32(sizes + w.row_height as u64)?,
+        previous: rect(memory, sizes + w.previous as u64)?,
+        next: rect(memory, sizes + w.next as u64)?,
+        shown: entries(memory, layout, shown_count, shown_data)?,
+    })
 }
 
 pub fn world_select(memory: &impl Memory, layout: &Layout, client: u64) -> Option<WorldSelect> {
     let w = &layout.world_select;
-    let global = |rva: u32| memory.i32(layout.module_base + rva as u64);
-    let open = byte(memory, layout.module_base + w.open as u64)?;
-    let background_height = memory
-        .ptr(layout.module_base + w.background as u64)
-        .and_then(|background| memory.i32(background + w.background_height as u64));
+    let switcher = memory.ptr(layout.module_base + w.switcher as u64).unwrap_or(0);
+    let open = switcher != 0 && byte(memory, switcher + w.open as u64)? != 0;
+    let count = memory.i32(layout.module_base + w.master_count as u64)?;
+    let data = memory.ptr(layout.module_base + w.master_worlds as u64).unwrap_or(0);
     Some(WorldSelect {
-        open: open != 0,
+        open,
         current: memory.i32(client + w.current_world as u64)?,
-        offset: global(w.offset)?,
-        max_offset: global(w.max_offset)?,
-        hovered: global(w.hovered)?,
-        background_height,
-        worlds: worlds(memory, layout)?,
+        worlds: entries(memory, layout, count, data)?,
+        panel: if open { panel(memory, layout, switcher) } else { None },
     })
 }
 
@@ -76,105 +129,126 @@ mod tests {
 
     const BASE: u64 = 0x1_4000_0000;
     const CLIENT: u64 = 0x5000_0000;
+    const SWITCHER: u64 = 0x6000_0000;
+    const SIZES: u64 = 0x6100_0000;
 
     fn layout() -> Layout {
         Layout {
             module_base: BASE,
             world_select: WorldSelectLayout {
-                open: 0xe98bd2,
-                count: 0xe98c00,
-                worlds: 0x154fbb8,
-                offset: 0xe98b74,
-                max_offset: 0xe98b78,
-                current_world: 0x32b4,
-                background: 0x154fc18,
-                background_height: 0x1c,
+                switcher: 0x1c21a68,
+                current_world: 0x32fc,
+                master_count: 0x15a7a38,
+                master_worlds: 0x15a7a40,
+                open: 0,
+                list: 8,
+                state: 0x78,
+                layout: 0x180,
+                selected: 0x58,
+                hovered: 0x5c,
+                page: 0x60,
+                compact: 0x64,
+                list_rect: 0x10,
+                row_offset: 0xd0,
+                row_height: 0xd4,
+                rows: 0xe8,
+                columns: 0xec,
+                compact_columns: 0xf0,
+                previous: 0x40,
+                next: 0x50,
                 id: 0,
                 types: 0x4,
                 players: 0x8,
                 activity: 0x28,
                 location: 0x40,
-                hovered: 0xcfb060,
+                reserved: 0,
             },
             ..Layout::default()
         }
     }
 
-    fn put_world(
-        m: &mut Fake,
-        address: u64,
-        id: i32,
-        types: u32,
-        players: i32,
-        location: i32,
-        activity: &str,
-    ) {
+    fn put_world(m: &mut Fake, address: u64, id: i32, types: u32, players: i32, activity: &str) {
         m.put_i32(address, id);
         m.put(address + 4, &types.to_le_bytes());
         m.put_i32(address + 8, players);
         m.put_short_string(address + 0x28, activity);
-        m.put_i32(address + 0x40, location);
+        m.put_i32(address + 0x40, 7);
     }
 
-    fn client(m: &mut Fake, open: u8, count: i32) {
-        m.put(BASE + 0xe98bd2, &[open]);
-        m.put_i32(BASE + 0xe98c00, count);
-        m.put_i32(BASE + 0xe98b74, 1);
-        m.put_i32(BASE + 0xe98b78, 2);
-        m.put_i32(BASE + 0xcfb060, -1);
-        m.put_i32(CLIENT + 0x32b4, 304);
+    fn put_rect(m: &mut Fake, address: u64, rect: [i32; 4]) {
+        for (k, value) in rect.into_iter().enumerate() {
+            m.put_i32(address + 4 * k as u64, value);
+        }
     }
 
-    #[test]
-    fn reads_the_world_list_in_order() {
-        let mut m = Fake::default();
-        client(&mut m, 1, 2);
-        m.put_u64(BASE + 0x154fbb8, 0x7000);
-        m.put_u64(0x7000, 0x8000);
-        m.put_u64(0x7008, 0x9000);
-        put_world(&mut m, 0x8000, 301, 0, 796, 0, "Trade - Free");
-        put_world(&mut m, 0x9000, 345, 0x2000_0001, 59, 0, "Deadman");
-        m.put_u64(BASE + 0x154fc18, 0xa000);
-        m.put_i32(0xa000 + 0x1c, 671);
-
-        let select = world_select(&m, &layout(), CLIENT).unwrap();
-        assert_eq!(
-            select,
-            WorldSelect {
-                open: true,
-                current: 304,
-                offset: 1,
-                max_offset: 2,
-                hovered: -1,
-                background_height: Some(671),
-                worlds: vec![
-                    World {
-                        id: 301,
-                        types: 0,
-                        players: 796,
-                        location: 0,
-                        activity: "Trade - Free".into()
-                    },
-                    World {
-                        id: 345,
-                        types: 0x2000_0001,
-                        players: 59,
-                        location: 0,
-                        activity: "Deadman".into()
-                    },
-                ],
-            }
-        );
+    fn master(m: &mut Fake) {
+        m.put_i32(CLIENT + 0x32fc, 304);
+        m.put_i32(BASE + 0x15a7a38, 2);
+        m.put_u64(BASE + 0x15a7a40, 0x7000);
+        m.put_u64(0x7008, 0x8000);
+        m.put_u64(0x7018, 0x9000);
+        put_world(m, 0x8000, 301, 0, 796, "Trade - Free");
+        put_world(m, 0x9000, 345, 0x2000_0001, 59, "Deadman");
     }
 
     #[test]
-    fn no_worlds_before_the_list_is_loaded() {
+    fn reads_worlds_while_closed() {
         let mut m = Fake::default();
-        client(&mut m, 0, 0);
-        m.put_u64(BASE + 0x154fbb8, 0);
+        master(&mut m);
         let select = world_select(&m, &layout(), CLIENT).unwrap();
         assert!(!select.open);
-        assert_eq!(select.worlds, Vec::new());
-        assert_eq!(select.background_height, None);
+        assert_eq!(select.current, 304);
+        assert_eq!(select.panel, None);
+        assert_eq!(
+            select.worlds.iter().map(|w| (w.id, w.players, w.location)).collect::<Vec<_>>(),
+            [(301, 796, 7), (345, 59, 7)]
+        );
+        assert_eq!(select.worlds[1].types, 0x2000_0001);
+        assert_eq!(select.worlds[0].activity, "Trade - Free");
+    }
+
+    #[test]
+    fn reads_the_open_panel() {
+        let mut m = Fake::default();
+        master(&mut m);
+        m.put_u64(BASE + 0x1c21a68, SWITCHER);
+        m.put(SWITCHER, &[1]);
+        m.put_i32(SWITCHER + 8 + LIST_COUNT, 1);
+        m.put_u64(SWITCHER + 8 + LIST_DATA, 0xa000);
+        m.put_u64(0xa008, 0x9000);
+        m.put_i32(SWITCHER + 0x78 + 0x58, 1);
+        m.put_i32(SWITCHER + 0x78 + 0x5c, -1);
+        m.put_i32(SWITCHER + 0x78 + 0x60, 3);
+        m.put(SWITCHER + 0x78 + 0x64, &[1]);
+        m.put_u64(SWITCHER + 0x180, SIZES);
+        put_rect(&mut m, SIZES + 0x10, [4, 27, 552, 472]);
+        put_rect(&mut m, SIZES + 0x40, [9, 458, 45, 36]);
+        put_rect(&mut m, SIZES + 0x50, [506, 458, 45, 36]);
+        m.put_i32(SIZES + 0xd0, 23);
+        m.put_i32(SIZES + 0xd4, 19);
+        m.put_i32(SIZES + 0xe8, 21);
+        m.put_i32(SIZES + 0xec, 2);
+        m.put_i32(SIZES + 0xf0, 6);
+
+        let select = world_select(&m, &layout(), CLIENT).unwrap();
+        assert!(select.open);
+        let panel = select.panel.unwrap();
+        assert_eq!(panel.page, 3);
+        assert!(panel.compact);
+        assert_eq!(panel.columns, 6);
+        assert_eq!(panel.rows, 21);
+        assert_eq!((panel.selected, panel.hovered), (1, -1));
+        assert_eq!(
+            panel.list,
+            Rect {
+                x: 4,
+                y: 27,
+                width: 552,
+                height: 472
+            }
+        );
+        assert_eq!((panel.row_offset, panel.row_height), (23, 19));
+        assert_eq!(panel.next.x, 506);
+        assert_eq!(panel.shown.iter().map(|w| w.id).collect::<Vec<_>>(), [345]);
     }
 }
