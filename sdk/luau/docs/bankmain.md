@@ -1006,3 +1006,21 @@ Example:
 ```luau
 
 ```
+
+## Bankmain.lock_slot
+
+Definition:
+```luau
+function Bankmain.lock_slot(slot: number, locked: boolean): boolean
+```
+Locks or unlocks an inventory slot from the bank's side panel (`Lock-slot` / `Unlock-slot`) and waits for [Inventory.locked_slots](inventory.md#inventorylocked_slots) to show it; `true` at once when it already is. "Deposit inventory" then leaves the slot alone.
+
+Example:
+```luau
+local Inventory = require("@volcren/inventory")
+
+local pickaxe = Inventory.index_of("Rune pickaxe")
+if pickaxe and Bankmain.open() then
+	Bankmain.lock_slot(pickaxe, true)
+end
+```

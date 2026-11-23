@@ -13,6 +13,7 @@ type Item = Item.Item
 local Chat = require("@volcren/chat")
 local Clickbox = require("@volcren/clickbox")
 local Inv = require("@volcren/inv")
+local Inventory = require("@volcren/inventory")
 local Log = require("@volcren/log")
 local Minimenu = require("@volcren/minimenu")
 local Objects = require("@volcren/objects")
@@ -276,6 +277,20 @@ function DepositBox.click_button(button: DepositButton): boolean
 	end
 	Mouse.click(w)
 	return true
+end
+
+function DepositBox.lock_slot(slot: number, locked: boolean): boolean
+	local slots = Inventory.locked_slots()
+	if slots == nil then
+		return false
+	end
+	if (slots[slot] == true) == locked then
+		return true
+	end
+	if not items.interact_slot(slot, if locked then "Lock-slot" else "Unlock-slot") then
+		return false
+	end
+	return Inventory.wait_slot_locked(slot, locked)
 end
 
 function DepositBox.deposit_inventory(): boolean

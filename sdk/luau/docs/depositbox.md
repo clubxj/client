@@ -188,6 +188,25 @@ Example:
 DepositBox.click_button("INVENTORY")
 ```
 
+## DepositBox.lock_slot
+
+Definition:
+```luau
+function DepositBox.lock_slot(slot: number, locked: boolean): boolean
+```
+Locks or unlocks an inventory slot from the box (`Lock-slot` / `Unlock-slot` in the slot's menu) and waits for [Inventory.locked_slots](inventory.md#inventorylocked_slots) to show it. `true` at once when the slot is already in that state. "Deposit inventory" then leaves the slot alone.
+
+Example:
+```luau
+local Inventory = require("@volcren/inventory")
+
+local bag = Inventory.index_of("Open gem bag")
+if bag then
+	DepositBox.lock_slot(bag, true)
+end
+DepositBox.deposit_inventory()
+```
+
 ## DepositBox.deposit_inventory
 
 Definition:

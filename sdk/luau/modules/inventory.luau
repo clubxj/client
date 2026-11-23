@@ -62,6 +62,8 @@ local Inventory = {
 	CONTAINER = CONTAINER,
 	SIZE = SIZE,
 	GROUP = GROUP,
+	LOCKED_SLOTS_VARBIT = 5422,
+	IGNORE_LOCKS_VARBIT = 5450,
 	shift_enabled = true,
 	slots = items.slots,
 	items = items.items,
@@ -108,6 +110,31 @@ end
 
 function Inventory.free_slots(): number?
 	return Inventory.count_empty()
+end
+
+function Inventory.locked_slots(): { [number]: boolean }?
+	local mask = Host.varbit(Inventory.LOCKED_SLOTS_VARBIT)
+	if mask == nil then
+		return nil
+	end
+	local locked: { [number]: boolean } = {}
+	for slot = 0, SIZE - 1 do
+		if bit32.btest(mask, bit32.lshift(1, slot)) then
+			locked[slot] = true
+		end
+	end
+	return locked
+end
+
+function Inventory.locks_ignored(): boolean
+	return Host.varbit(Inventory.IGNORE_LOCKS_VARBIT) == 1
+end
+
+function Inventory.wait_slot_locked(slot: number, locked: boolean, timeout_ms: number?): boolean
+	return Widgets.wait_until(function()
+		local slots = Inventory.locked_slots()
+		return slots ~= nil and (slots[slot] == true) == locked
+	end, timeout_ms or SELECT_TIMEOUT_MS, POLL_MS)
 end
 
 function Inventory.is_full(): boolean

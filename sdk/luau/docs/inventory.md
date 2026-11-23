@@ -13,9 +13,11 @@ Definition:
 Inventory.CONTAINER = 93
 Inventory.SIZE = 28
 Inventory.GROUP = 149
+Inventory.LOCKED_SLOTS_VARBIT = 5422
+Inventory.IGNORE_LOCKS_VARBIT = 5450
 Inventory.shift_enabled = true
 ```
-Container, size and interface. `shift_enabled` is cleared by `shift_drop_slots` once it finds Shift doesn't make "Drop" the left-click option.
+Container, size and interface. `LOCKED_SLOTS_VARBIT` holds one bit per slot locked in the bank or deposit box (slot 0 is bit 0); `IGNORE_LOCKS_VARBIT` is the bank setting that makes "Deposit inventory" ignore them. `shift_enabled` is cleared by `shift_drop_slots` once it finds Shift doesn't make "Drop" the left-click option.
 
 ## Inventory.PATTERN_HABIT
 
@@ -73,6 +75,23 @@ Example:
 local Inventory = require("@volcren/inventory")
 
 print(Inventory.free_slots())
+```
+
+## Inventory.locked_slots
+
+Definition:
+```luau
+function Inventory.locked_slots(): { [number]: boolean }?
+```
+Slots locked from the bank or deposit box side panel (`Lock-slot`), by slot index; `nil` when unreadable. A lock belongs to the slot, not the item: the "Deposit inventory" buttons skip locked slots unless `locks_ignored`, while depositing a locked slot's item from its own menu still works. Lock and unlock with `Bankmain.lock_slot` or `DepositBox.lock_slot`.
+
+Example:
+```luau
+local Inventory = require("@volcren/inventory")
+
+for slot in pairs(Inventory.locked_slots() or {}) do
+	print("locked", slot)
+end
 ```
 
 ## Inventory.is_full
@@ -286,4 +305,34 @@ Example:
 local Inventory = require("@volcren/inventory")
 
 Inventory.shift_drop("Raw shrimps")
+```
+
+## Inventory.locks_ignored
+
+Definition:
+```luau
+function Inventory.locks_ignored(): boolean
+```
+Whether the bank setting that makes "Deposit inventory" ignore locked slots is on.
+
+Example:
+```luau
+local Inventory = require("@volcren/inventory")
+
+print(Inventory.locks_ignored())
+```
+
+## Inventory.wait_slot_locked
+
+Definition:
+```luau
+function Inventory.wait_slot_locked(slot: number, locked: boolean, timeout_ms: number?): boolean
+```
+Waits up to `timeout_ms` (1200 by default) for `slot` to be locked (`locked` true) or unlocked; `true` once it is.
+
+Example:
+```luau
+local Inventory = require("@volcren/inventory")
+
+print(Inventory.wait_slot_locked(0, true))
 ```

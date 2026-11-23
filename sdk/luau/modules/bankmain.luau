@@ -10,6 +10,7 @@ local Chat = require("@volcren/chat")
 local Clickbox = require("@volcren/clickbox")
 local Interact = require("@volcren/interact")
 local Inv = require("@volcren/inv")
+local Inventory = require("@volcren/inventory")
 local Log = require("@volcren/log")
 local Minimenu = require("@volcren/minimenu")
 local Mouse = require("@volcren/mouse")
@@ -585,6 +586,20 @@ function Bankmain.set_quantity(amount: number): boolean
 		return Bankmain.set_custom_quantity(amount)
 	end
 	return Bankmain.select_quantity(quantity)
+end
+
+function Bankmain.lock_slot(slot: number, locked: boolean): boolean
+	local slots = Inventory.locked_slots()
+	if slots == nil then
+		return false
+	end
+	if (slots[slot] == true) == locked then
+		return true
+	end
+	if not inventory.interact_slot(slot, if locked then "Lock-slot" else "Unlock-slot") then
+		return false
+	end
+	return Inventory.wait_slot_locked(slot, locked)
 end
 
 function Bankmain.deposit_inventory(): boolean
