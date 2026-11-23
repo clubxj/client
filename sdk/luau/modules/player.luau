@@ -384,6 +384,12 @@ function Player.wait_server_still(timeout_ms: number?): boolean
 	end
 end
 
+local function hide_route()
+	if Host.script_debugging() then
+		(require :: any)("@volcren/walker").hide_route()
+	end
+end
+
 function Player.wait_walk(timeout_ms: number?): boolean
 	local timeout = timeout_ms or Player.WALK_TIMEOUT
 	local started = time()
@@ -400,6 +406,7 @@ function Player.wait_walk(timeout_ms: number?): boolean
 		end
 		if time() - started >= timeout then
 			Log.log("Player", `the player was still walking to {to.x}, {to.y} after {timeout} ms`)
+			hide_route()
 			return false
 		end
 		sleep(50)
@@ -407,6 +414,7 @@ function Player.wait_walk(timeout_ms: number?): boolean
 	if not walked then
 		return true
 	end
+	hide_route()
 	return Player.wait_still(math.max(timeout - (time() - started), 0))
 end
 

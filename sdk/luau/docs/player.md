@@ -487,7 +487,7 @@ Definition:
 ```luau
 function Player.wait_walk(timeout_ms: number?): boolean
 ```
-Call right after a click: returns `true` at once if there is no destination, otherwise waits for it to clear and then `wait_still`. `false` after `timeout_ms` (default `WALK_TIMEOUT`).
+Call right after a click: returns `true` at once if there is no destination, otherwise waits for it to clear and then `wait_still`. `false` after `timeout_ms` (default `WALK_TIMEOUT`). While Script debugging is on it keeps `Walker.show_route` current during the walk and clears it when it returns, finished or timed out, so no route is left on screen.
 
 Example:
 ```luau
