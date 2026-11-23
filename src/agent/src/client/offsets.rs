@@ -2097,6 +2097,18 @@ mod tests {
     }
 
     #[test]
+    fn finds_menu_open_in_archived_builds() {
+        for_each_archived_build(|build, pe| {
+            let menu = found("menu", build, find_menu(pe));
+            let click = found("menu click", build, find_menu_click(pe, &menu));
+            let open = found("menu open", build, find_menu_open(pe, &click));
+            let name = build.display().to_string();
+            let expected = if name.contains("e470c533") { 0x800 } else { 0x7c0 };
+            assert_eq!(open, expected, "{name}");
+        });
+    }
+
+    #[test]
     fn finds_instance_flag_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             found("instance flag", build, find_instance_flag(pe));

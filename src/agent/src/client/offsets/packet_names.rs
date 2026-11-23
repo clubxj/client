@@ -429,6 +429,14 @@ mod tests {
         (Name::MessageGame, 85, &[]),
     ];
 
+    const NOVEMBER_23: [(Name, u16, &[u8]); 5] = [
+        (Name::Tick, 23, &[]),
+        (Name::VarpSmall, 83, &[1, 0]),
+        (Name::VarpLarge, 90, &[1, 0]),
+        (Name::SynthSound, 55, &[0, 1, 2]),
+        (Name::MessageGame, 119, &[]),
+    ];
+
     #[test]
     fn names_packets_in_archived_builds() {
         for_each_archived_build(|build, pe| {
@@ -443,6 +451,8 @@ mod tests {
             let file = build.file_name().unwrap().to_string_lossy();
             let expected = if file.starts_with("client-2026-10-") {
                 OCTOBER
+            } else if file.starts_with("client-2026-11-23-") {
+                NOVEMBER_23
             } else {
                 NOVEMBER
             };

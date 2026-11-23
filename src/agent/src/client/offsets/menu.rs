@@ -747,51 +747,89 @@ pub fn find_selection(pe: &Pe, menu: &Menu) -> Result<Selection, ScanError> {
     })
 }
 
-pub fn find_menu_open(pe: &Pe, click: &MenuClick) -> Result<u32, ScanError> {
+fn minimenu_constructors(pe: &Pe, vtable: u32) -> Vec<u32> {
     let mut found = Vec::new();
     for &(begin, end) in &pe.functions {
         let instrs = function_instrs(pe, begin, end);
-        let loads_entry = instrs.iter().any(|i| {
-            i.mnemonic() == Mnemonic::Lea
+        let stores_vtable = instrs.iter().enumerate().any(|(n, i)| {
+            i.mnemonic() == Mnemonic::Mov
+                && i.op0_kind() == OpKind::Memory
                 && i.memory_base() != Register::RIP
-                && i.memory_displacement64() == click.entry as u64
+                && i.memory_index() == Register::None
+                && i.memory_displacement64() == 0
+                && i.op1_kind() == OpKind::Register
+                && instrs[n.saturating_sub(4)..n]
+                    .iter()
+                    .any(|j| j.op0_register() == i.op1_register() && rip_lea(j) == Some(vtable))
         });
-        if !loads_entry {
-            continue;
+        if stores_vtable {
+            found.push(begin);
         }
-        for (n, i) in instrs.iter().enumerate() {
-            if i.mnemonic() != Mnemonic::Mov
-                || i.op0_kind() != OpKind::Memory
-                || i.memory_base() == Register::RIP
-                || i.memory_size() != iced_x86::MemorySize::UInt64
-            {
-                continue;
-            }
-            if i.op1_kind() != OpKind::Register || !i.op1_register().is_gpr64() {
-                continue;
-            }
-            let reg = i.op1_register();
-            let loads_minimenu = instrs[n.saturating_sub(12)..n].iter().any(|j| {
-                j.mnemonic() == Mnemonic::Lea
-                    && j.op0_register() == reg
-                    && j.memory_base() != Register::RIP
-            });
-            let after_entry_call = instrs[n.saturating_sub(8)..n]
-                .iter()
-                .any(|j| j.mnemonic() == Mnemonic::Call);
-            let entry_before = instrs[..n].iter().rev().take(16).any(|j| {
-                j.mnemonic() == Mnemonic::Lea
-                    && j.memory_base() != Register::RIP
-                    && j.memory_displacement64() == click.entry as u64
-            });
-            let field = !matches!(i.memory_base(), Register::RSP | Register::RBP)
-                && (0x100..0x2000).contains(&i.memory_displacement64());
-            if loads_minimenu && after_entry_call && entry_before && field {
-                found.push(i.memory_displacement64() as u32);
-            }
+    }
+    found
+}
+
+fn minimenu_offset(pe: &Pe, vtable: u32) -> Result<u64, ScanError> {
+    let mut found = Vec::new();
+    for constructor in minimenu_constructors(pe, vtable) {
+        for Caller { instrs, at, .. } in callers(pe, constructor) {
+            found.extend(instrs[at.saturating_sub(6)..at].iter().rev().find_map(|i| {
+                (i.mnemonic() == Mnemonic::Lea
+                    && i.op0_register() == Register::RCX
+                    && !matches!(i.memory_base(), Register::RIP | Register::RSP | Register::RBP)
+                    && i.memory_index() == Register::None
+                    && i.memory_displacement64() != 0)
+                    .then(|| i.memory_displacement64())
+            }));
         }
     }
     one(found)
+}
+
+fn sub_object_stores(pe: &Pe) -> HashMap<u64, HashSet<u64>> {
+    let mut stored: HashMap<u64, HashSet<u64>> = HashMap::new();
+    for &(begin, end) in &pe.functions {
+        let instrs = function_instrs(pe, begin, end);
+        for (n, i) in instrs.iter().enumerate() {
+            let field = i.mnemonic() == Mnemonic::Mov
+                && i.op0_kind() == OpKind::Memory
+                && i.memory_size() == iced_x86::MemorySize::UInt64
+                && i.op1_kind() == OpKind::Register
+                && !matches!(i.memory_base(), Register::RIP | Register::RSP | Register::RBP)
+                && i.memory_index() == Register::None
+                && (0x100..0x2000).contains(&i.memory_displacement64());
+            if !field {
+                continue;
+            }
+            let view = instrs[n.saturating_sub(12)..n].iter().rev().find_map(|j| {
+                (j.op0_register() == i.op1_register()).then(|| {
+                    (j.mnemonic() == Mnemonic::Lea
+                        && !matches!(j.memory_base(), Register::RIP | Register::RSP | Register::RBP)
+                        && j.memory_index() == Register::None
+                        && (0x100..0x2000).contains(&j.memory_displacement64()))
+                    .then(|| j.memory_displacement64())
+                })
+            });
+            if let Some(Some(view)) = view {
+                stored
+                    .entry(i.memory_displacement64())
+                    .or_default()
+                    .insert(view);
+            }
+        }
+    }
+    stored
+}
+
+pub fn find_menu_open(pe: &Pe, click: &MenuClick) -> Result<u32, ScanError> {
+    let minimenu = minimenu_offset(pe, click.minimenu_vtable)?;
+    one(sub_object_stores(pe)
+        .into_iter()
+        .filter(|(field, views)| {
+            views.contains(&minimenu) && views.len() >= 2 && views.iter().all(|view| view < field)
+        })
+        .map(|(field, _)| field as u32)
+        .collect())
 }
 
 fn virtual_call(i: &Instruction) -> Option<u32> {
