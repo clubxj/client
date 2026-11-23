@@ -1520,6 +1520,7 @@ local function walk(to: Tile, options: WalkOptions?): boolean
 		then table.clone(opts.transports) :: { [string]: any }
 		else {}
 	choices.shortcuts = opts.shortcuts
+	choices.on_step = opts.on_step
 	local hops, failures = 0, 0
 	while hops < Walker.TRANSPORT_HOPS do
 		local here = Walker.here()

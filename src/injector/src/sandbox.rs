@@ -2806,7 +2806,7 @@ local function row(kind, name, origin, destination, more)
     return t
 end
 local function tile(x, y, plane) return { x = x, y = y, plane = plane or 0 } end
-local stage = { rows = {}, inventory = {}, worn = {}, plan_reaches = false, nav_plans = 0 }
+local stage = { rows = {}, inventory = {}, worn = {}, plan_reaches = false, plan_tiles = {}, nav_plans = 0 }
 Host.transports = function() return { source = 'test', version = 1, transports = stage.rows, items = { { name = 'ROPE', ids = { 954 } }, { name = 'CROSSBOW', ids = { 837 } }, { name = 'MITH_GRAPPLE', ids = { 9419 } }, { name = 'AXE', ids = { 1351 } }, { name = 'COINS', ids = { 995 } } } } end
 Host.game_state = function() return { game_state = 30, skills = { { name = 'Magic', level = 60, real_level = 60 }, { name = 'Agility', level = 55, real_level = 50 } } } end
 Host.varbit = function() return 0 end
@@ -2817,7 +2817,7 @@ Host.landmasses = function(points)
     for i, p in ipairs(points) do out[i] = if p.x >= 5000 then 2 else 1 end
     return out
 end
-Host.nav_plan = function() stage.nav_plans += 1 return { reached = stage.plan_reaches, tiles = {}, actions = {} } end
+Host.nav_plan = function() stage.nav_plans += 1 return { reached = stage.plan_reaches, tiles = stage.plan_tiles, actions = {} } end
 Host.world_route = function(a, b) return { known = true, reachable = (a.x >= 5000) == (b.x >= 5000) } end
 local home = tile(3000, 3000)
 local far = tile(3800, 3000)
@@ -2844,6 +2844,21 @@ assert(c and c.kind == 'spell' and c.spell == 'Good Teleport', 'far: the spell w
 assert(c.id == 'Good Teleport' and c.saved > 30)
 assert(T.choose(home, far, { exclude = { spells = true } }) == nil, 'a group can be excluded')
 assert(T.choose(home, far, { exclude = { ['Good Teleport'] = true } }) == nil, 'and a name')
+"#,
+        );
+    }
+
+    #[test]
+    fn a_winding_walk_is_costed_along_the_planners_route() {
+        chooser_test(
+            r#"
+local goal = tile(3040, 3000)
+stage.rows = { row('teleportation_spells', 'Near Teleport', nil, goal) }
+assert(T.choose(home, goal) == nil, 'forty straight tiles are quicker on foot')
+stage.plan_reaches = true
+stage.plan_tiles = table.create(120, home)
+local c = T.choose(home, goal)
+assert(c and c.spell == 'Near Teleport', 'a 120-tile route makes the teleport worth it')
 "#,
         );
     }

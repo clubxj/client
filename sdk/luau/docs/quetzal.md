@@ -42,9 +42,8 @@ Quetzal.SETTLE_MS = 150
 Quetzal.OPEN_SETTLE_MS = { 250, 500 }
 Quetzal.ASK_LIMIT = 6
 Quetzal.ASK_RANGE = 12
-Quetzal.HOVER_MS = 350
 ```
-Widget ids, the NPC, whistle ids and options, the inventory container, the last-site varbit, the charge chat lines, the built-sites varp and the sites that need building, and timings. `ASK_LIMIT`, `ASK_RANGE` and `HOVER_MS` bound the hover search for a nameless Renu.
+Widget ids, the NPC, whistle ids and options, the inventory container, the last-site varbit, the charge chat lines, the built-sites varp and the sites that need building, and timings. `ASK_LIMIT` and `ASK_RANGE` bound the hover search for a nameless Renu.
 
 ## Quetzal.is_open
 
@@ -162,7 +161,7 @@ Definition:
 ```luau
 function Quetzal.nearest(): Npc?
 ```
-The nearest NPC named Renu. The client often gives Renu an empty name, so failing that it hovers up to `ASK_LIMIT` nameless NPCs within `ASK_RANGE` tiles, nearest first, and returns the one offering "Travel" on Renu. Nil when none.
+The nearest NPC named Renu. The client often gives Renu an empty name, so failing that it hovers up to `ASK_LIMIT` nameless NPCs within `ASK_RANGE` tiles, nearest first, and returns the one whose own menu entries offer "Travel" on Renu, read the moment the hover lands: a few hundred milliseconds later the menu often lists only Walk here. Nil when none.
 
 ## Quetzal.open
 

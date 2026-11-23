@@ -260,7 +260,7 @@ How it walks (all tunable via the `Walker.*` constants in the source):
 `options`:
 - `near`: done within this many tiles on `plane` (default 2).
 - `timeout_ms`: default `Walker.TIMEOUT_MS` (90000), extended by `WALK_MS_PER_TILE` per planned tile.
-- `on_step(tile)`: called about every 50 ms; `false` stops.
+- `on_step(tile)`: called about every 50 ms, also on the walk to a transport's start; `false` stops.
 - `straight`: click the straight line on your plane and let the server path.
 - `randomize`: per-walk noise on tile costs, sometimes clicking short (`SHORTER_CHANCE`, `SHORTER_MAX`) (default true).
 - `before_click(target, here)`: `false` stops.

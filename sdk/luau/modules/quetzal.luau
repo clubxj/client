@@ -388,7 +388,6 @@ end
 
 Quetzal.ASK_LIMIT = 6
 Quetzal.ASK_RANGE = 12
-Quetzal.HOVER_MS = 350
 
 function Quetzal.nearest(): Npc?
 	local me = Walker.position()
@@ -424,9 +423,12 @@ function Quetzal.nearest(): Npc?
 			break
 		end
 		if Npcs.hover(c.npc) then
-			sleep(Quetzal.HOVER_MS)
 			for _, entry in ipairs(Minimenu.entries() or {}) do
-				if entry.option == Quetzal.OPTION and string.find(string.lower(entry.target), "renu", 1, true) then
+				if
+					entry.option == Quetzal.OPTION
+					and Npcs.owns(c.npc, entry)
+					and string.find(string.lower(entry.target), "renu", 1, true)
+				then
 					return c.npc
 				end
 			end

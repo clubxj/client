@@ -68,6 +68,8 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 ```
 The first transport to use on the best way from `from` to `goal`, or nil to walk. The way is a shortest path over the start, the goal and the ends of every usable transport: walking joins two points only when they are on the same landmass (`Host.landmasses`, with the links and shortcuts the player can use joining theirs), so a goal across the water is reached through a ship; a spell or item leaves from anywhere; the rest leave from their tile.
 
+Walks are costed by straight-line distance, except the walk straight from `from` to `goal` when both are on one landmass and `PLANNED_WALK_TILES` (`min` to `max`) tiles apart: that one is costed along the route `Host.nav_plan` finds with the usable shortcuts, so a winding walk (round a mountain, say) counts its real length when weighed against a transport.
+
 Nil when walking is possible and no transport saves `MIN_SAVING_TICKS`, when none is usable, or when the goal can't be reached at all. A goal that looks cut off but is within `CONFIRM_WALK_TILES` is asked of the planner first (`Host.nav_plan`): landmasses don't see every way through, and a goal the planner reaches is walked.
 
 Usable means the row's varbit tests hold, its skills, quests and items are met (items count in the inventory or worn), and for a spell the game says it can be cast (`Magic.can_cast`, whose icons are only as fresh as the last time the spellbook was shown). A transport that failed in the last `RETRY_AFTER_MS` is out.
@@ -143,7 +145,7 @@ Definition:
 ```luau
 function Transports.travel(from: Tile, goal: Tile, options: Options?): (boolean, boolean)
 ```
-Takes the best transport toward `goal` if one is worth it. Returns whether one was used and whether one failed all its attempts. After a failure the caller plans again from where it is: the failed one is out of the new plan, so another way is chosen. `Walker.walk` does this.
+Takes the best transport toward `goal` if one is worth it. Returns whether one was used and whether one failed all its attempts. `options.on_step` is passed to the walks to the transport's start, as `Walker.walk`'s `on_step`. After a failure the caller plans again from where it is: the failed one is out of the new plan, so another way is chosen. `Walker.walk` does this.
 
 Example:
 ```luau

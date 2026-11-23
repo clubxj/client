@@ -80,6 +80,7 @@ Transports.VALID_FOR_MS = 20 * 1000
 Transports.PLANE_CHANGE_TICKS = 4
 Transports.CONFIRM_WALK_TILES = 64
 Transports.CONFIRM_WALK_NEAR = 2
+Transports.PLANNED_WALK_TILES = { min = 16, max = 400 }
 Transports.INVENTORY = 93
 Transports.WORN = 94
 Transports.DOCK_NEAR = 3
@@ -112,6 +113,7 @@ Transports.UNDERGROUND = 6400
 export type Options = {
 	exclude: { [string]: boolean }?,
 	min_saving_ticks: number?,
+	on_step: ((Tile) -> boolean)?,
 	shortcuts: boolean?,
 	wilderness: boolean?,
 }
@@ -1590,6 +1592,24 @@ local function planner_reaches(from: Tile, goal: Tile, opts: Options): boolean
 	return plan ~= nil and plan.reached == true
 end
 
+local function planned_walk_ticks(from: Tile, goal: Tile, opts: Options): number?
+	local far = gap(from, goal)
+	local range = Transports.PLANNED_WALK_TILES
+	if far < range.min or far > range.max then
+		return nil
+	end
+	local a, b = endpoints(from, goal)
+	local plan = Host.nav_plan(a, b, {
+		near = Transports.CONFIRM_WALK_NEAR,
+		allow_climbs = gated(opts.shortcuts).keys,
+		shortcut_saving = Transports.SHORTCUT_MIN_SAVING_TILES,
+	})
+	if plan == nil or not plan.reached then
+		return nil
+	end
+	return #plan.tiles * Transports.WALK_TICKS_PER_TILE + #plan.actions * Transports.PLANE_CHANGE_TICKS
+end
+
 function Transports.walkable(from: Tile, goal: Tile, options: Options?): boolean
 	local opts: Options = options or {}
 	return foot_route(from, goal, opts) or planner_reaches(from, goal, opts)
@@ -1598,7 +1618,8 @@ end
 function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 	local opts: Options = options or {}
 	local House = lib("@volcren/house")
-	if House.inside() then
+	local inside = House.inside()
+	if inside then
 		House.survey()
 		if gap(from, goal) <= House.SIZE then
 			return nil
@@ -1683,6 +1704,7 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 	local per_tile = Transports.WALK_TICKS_PER_TILE
 	local climb = Transports.PLANE_CHANGE_TICKS
 	local origin, target = nodes[1], nodes[2]
+	local planned: number? = nil
 	local on_foot = origin.mass ~= 0
 		and target.mass ~= 0
 		and origin.mass ~= target.mass
@@ -1694,8 +1716,14 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 		if a.mass ~= 0 and b.mass ~= 0 and a.mass ~= b.mass and not (on_foot and a == origin and b == target) then
 			return math.huge
 		end
+		if planned ~= nil and a == origin and b == target then
+			return planned
+		end
 		local ticks = math.max(math.abs(a.x - b.x), math.abs(a.folded_y - b.folded_y)) * per_tile
 		return if a.under ~= b.under or a.plane ~= b.plane then ticks + climb else ticks
+	end
+	if not inside and walk_cost(origin, target) ~= math.huge then
+		planned = planned_walk_ticks(from, goal, opts)
 	end
 
 	local count = #nodes
@@ -1799,12 +1827,17 @@ function Transports.settle()
 	end, Transports.SETTLE_TIMEOUT_MS, 200)
 end
 
+local stepping: ((Tile) -> boolean)? = nil
+
 local function walk_near(tile: Host.TransportTile, near: number): boolean
 	local here = lib("@volcren/player").position()
 	if within(here, tile, near) then
 		return true
 	end
-	return lib("@volcren/walker").walk(tile, { near = near, transports = false, plane = tile.plane })
+	return lib("@volcren/walker").walk(
+		tile,
+		{ near = near, transports = false, plane = tile.plane, on_step = stepping }
+	)
 end
 
 local function wait_to_land(name: string, to: Host.TransportTile, timeout_ms: number): boolean
@@ -2969,7 +3002,13 @@ function Transports.travel(from: Tile, goal: Tile, options: Options?): (boolean,
 	if choice == nil then
 		return false, false
 	end
-	if Transports.use(choice) then
+	stepping = options and options.on_step
+	local ok, used = pcall(Transports.use, choice)
+	stepping = nil
+	if not ok then
+		error(used, 0)
+	end
+	if used then
 		return true, false
 	end
 	return false, true
