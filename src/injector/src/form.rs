@@ -659,6 +659,82 @@ pub fn matches(value: &Value, equals: &Value) -> bool {
     }
 }
 
+pub fn above(field: &Value) -> Option<(&str, f64)> {
+    let link = field.get("above")?;
+    Some((link.get("id")?.as_str()?, link.get("percent")?.as_f64()?))
+}
+
+fn whole(value: f64, integer: bool, round: fn(f64) -> f64) -> f64 {
+    if integer {
+        round((value * 1e6).round() / 1e6)
+    } else {
+        value
+    }
+}
+
+pub fn number_bounds(
+    spec: &Value,
+    field: &Value,
+    value_of: impl Fn(&str) -> Option<f64>,
+) -> (f64, f64) {
+    let integer = field.get("integer").and_then(Value::as_bool).unwrap_or(false);
+    let mut low = field.get("min").and_then(Value::as_f64).unwrap_or(f64::MIN);
+    let mut high = field.get("max").and_then(Value::as_f64).unwrap_or(f64::MAX);
+    if let Some((other, percent)) = above(field)
+        && let Some(value) = value_of(other)
+    {
+        low = low.max(whole(value * (1.0 + percent / 100.0), integer, f64::ceil));
+    }
+    if let Some(own) = id(field) {
+        for linked in fields(spec) {
+            if let (Some((other, percent)), Some(linked_id)) = (above(linked), id(linked))
+                && other == own
+                && let Some(value) = value_of(linked_id)
+            {
+                high = high.min(whole(value / (1.0 + percent / 100.0), integer, f64::floor));
+            }
+        }
+    }
+    (low, high)
+}
+
+fn check_above(spec: &Value, field: &Value, own: &str) -> Result<(), String> {
+    if field.get("above").is_none() {
+        return Ok(());
+    }
+    if kind(field) != "number" {
+        return Err("only number fields take `above`".into());
+    }
+    let Some((other, percent)) = above(field) else {
+        return Err("`above` is { id, percent }".into());
+    };
+    if !(0.0..=100.0).contains(&percent) {
+        return Err("`above.percent` is 0 to 100".into());
+    }
+    let names_number = fields(spec)
+        .iter()
+        .any(|f| id(f) == Some(other) && kind(f) == "number");
+    if other == own || !names_number {
+        return Err(format!("`above.id` \"{other}\" isn't another number field"));
+    }
+    Ok(())
+}
+
+fn check_number_defaults(spec: &Value) -> Result<(), String> {
+    let defaults = defaults(spec);
+    let value_of = |id: &str| defaults.get(id).and_then(Value::as_f64);
+    for field in fields(spec).iter().filter(|f| kind(f) == "number") {
+        let Some(own) = id(field) else { continue };
+        let (low, high) = number_bounds(spec, field, value_of);
+        if !value_of(own).is_some_and(|v| low <= v && v <= high) {
+            return Err(format!(
+                "field \"{own}\": its default is outside its range once `above` is applied"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate(spec: &Value) -> Result<(), String> {
     if !spec.is_object() {
         return Err("settings are an object: { fields = [...] }".into());
@@ -728,8 +804,9 @@ pub fn validate(spec: &Value) -> Result<(), String> {
         }
         check_required(kind, field).map_err(|e| format!("field \"{id}\": {e}"))?;
         check_locked(field).map_err(|e| format!("field \"{id}\": {e}"))?;
+        check_above(spec, field, id).map_err(|e| format!("field \"{id}\": {e}"))?;
     }
-    Ok(())
+    check_number_defaults(spec)
 }
 
 pub fn default_value(field: &Value) -> Option<Value> {
@@ -1190,5 +1267,43 @@ mod tests {
             Some(json!({ "a": 1 }))
         );
         assert_eq!(parse_settings("[1]"), None);
+    }
+
+    fn keys(min_default: i64, max_default: i64) -> Value {
+        json!({ "fields": [
+            { "id": "low", "kind": "number", "default": min_default, "min": 10, "max": 80, "integer": true },
+            { "id": "high", "kind": "number", "default": max_default, "min": 11, "max": 100, "integer": true,
+              "above": { "id": "low", "percent": 10 } }
+        ] })
+    }
+
+    #[test]
+    fn above_links_both_fields_bounds() {
+        let spec = keys(30, 50);
+        assert_eq!(validate(&spec), Ok(()));
+        let values = json!({ "low": 30, "high": 50 });
+        let value_of = |id: &str| values.get(id).and_then(Value::as_f64);
+        let [low, high] = [0, 1].map(|i| number_bounds(&spec, &fields(&spec)[i], value_of));
+        assert_eq!(low, (10.0, 45.0));
+        assert_eq!(high, (33.0, 100.0));
+    }
+
+    #[test]
+    fn above_mistakes_are_refused() {
+        assert!(validate(&keys(30, 32)).is_err());
+        let to_itself = json!({ "fields": [
+            { "id": "a", "kind": "number", "above": { "id": "a", "percent": 10 } }
+        ] });
+        assert!(validate(&to_itself).is_err());
+        let on_a_check = json!({ "fields": [
+            { "id": "a", "kind": "number" },
+            { "id": "b", "kind": "check", "above": { "id": "a", "percent": 10 } }
+        ] });
+        assert!(validate(&on_a_check).is_err());
+        let too_far = json!({ "fields": [
+            { "id": "a", "kind": "number" },
+            { "id": "b", "kind": "number", "default": 5, "above": { "id": "a", "percent": 150 } }
+        ] });
+        assert!(validate(&too_far).is_err());
     }
 }

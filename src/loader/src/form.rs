@@ -121,6 +121,13 @@ fn collect(values: &HashMap<String, FieldValue>) -> Map<String, Value> {
         .collect()
 }
 
+fn number_bounds(spec: &Value, field: &Value, values: &HashMap<String, FieldValue>) -> (f64, f64) {
+    spec_form::number_bounds(spec, field, |id| match values.get(id) {
+        Some(FieldValue::Number(n)) => Some(*n),
+        _ => None,
+    })
+}
+
 fn value_of(field: &Value, saved: Option<&Value>) -> Option<FieldValue> {
     if layout_kind(field).is_some() {
         return Some(FieldValue::Layout(
@@ -188,11 +195,26 @@ impl Form {
                 rules
             }),
         );
-        Self {
+        let mut form = Self {
             title,
             spec,
             values,
             rules,
+        };
+        form.fit_numbers();
+        form
+    }
+
+    fn fit_numbers(&mut self) {
+        for field in spec_form::fields(&self.spec) {
+            let Some(id) = spec_form::id(field).filter(|_| spec_form::kind(field) == "number")
+            else {
+                continue;
+            };
+            let (low, high) = number_bounds(&self.spec, field, &self.values);
+            if let Some(FieldValue::Number(n)) = self.values.get_mut(id) {
+                *n = n.max(low).min(high);
+            }
         }
     }
 
@@ -256,6 +278,7 @@ impl Form {
             heading: spec_form::heading_gap(spec).map_or(HEADING_GAP, |g| g as f32),
         };
         let mut place = Place {
+            spec,
             ui,
             layouts,
             rules,
@@ -308,12 +331,14 @@ impl FormUi {
                 if let Some(value) = form.values.get_mut(&id) {
                     change(value);
                 }
+                form.fit_numbers();
             })
         }
     }
 }
 
 struct Place<'a> {
+    spec: &'a Value,
     ui: &'a mut FormUi,
     layouts: &'a ScriptLayouts,
     rules: &'a KindRules,
@@ -386,8 +411,9 @@ fn show_field(
     let checked = |id: &str| matches!(values.get(id), Some(FieldValue::Check(true)));
     let usable = spec_form::enabled_by(field).is_none_or(checked)
         && !spec_form::disabled_by(field).is_some_and(checked);
+    let bounds = number_bounds(place.spec, field, values);
     let value = spec_form::id(field).and_then(|id| values.get_mut(id));
-    field_ui(field, value, usable, place, window, cx)
+    field_ui(field, value, bounds, usable, place, window, cx)
 }
 
 fn text(label: &str, usable: bool) -> Div {
@@ -399,6 +425,7 @@ fn text(label: &str, usable: bool) -> Div {
 fn field_ui(
     field: &Value,
     value: Option<&mut FieldValue>,
+    bounds: (f64, f64),
     usable: bool,
     place: &mut Place,
     window: &mut Window,
@@ -493,7 +520,7 @@ fn field_ui(
             .into_any_element()
         }
         ("number", Some(FieldValue::Number(n))) => {
-            let range = Range::new(number("min").unwrap_or(f64::MIN)..=number("max").unwrap_or(f64::MAX));
+            let range = Range::new(bounds.0..=bounds.1);
             let range = if field.get("integer").and_then(Value::as_bool).unwrap_or(false) {
                 range.integer()
             } else {
@@ -515,6 +542,7 @@ fn field_ui(
                     cx,
                 )
             });
+            input.set_range(range);
             input.sync(*n, window, cx);
             let input = input.input(usable).w(px(NUMBER_WIDTH));
             let label = text(label, usable);
