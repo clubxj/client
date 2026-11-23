@@ -873,15 +873,43 @@ pub fn row(field: &Value) -> Option<&str> {
     field.get("row").and_then(Value::as_str)
 }
 
-pub fn visible_rules(field: &Value) -> Vec<(&str, &Value)> {
-    fn rule(r: &Value) -> Option<(&str, &Value)> {
-        Some((r.get("id")?.as_str()?, r.get("equals")?))
+pub enum Visibility<'a> {
+    Rule(&'a str, &'a Value),
+    All(Vec<Visibility<'a>>),
+    Any(Vec<Visibility<'a>>),
+}
+
+impl Visibility<'_> {
+    fn holds(&self, value_of: &impl Fn(&str) -> Option<Value>) -> bool {
+        match self {
+            Visibility::Rule(id, equals) => value_of(id).is_some_and(|v| matches(&v, equals)),
+            Visibility::All(all) => all.iter().all(|v| v.holds(value_of)),
+            Visibility::Any(any) => any.iter().any(|v| v.holds(value_of)),
+        }
     }
-    match field.get("visible_when") {
-        Some(Value::Array(rules)) => rules.iter().filter_map(rule).collect(),
-        Some(one) => rule(one).into_iter().collect(),
-        None => Vec::new(),
+}
+
+fn visibility(when: &Value) -> Option<Visibility<'_>> {
+    match when {
+        Value::Array(all) => Some(Visibility::All(all.iter().filter_map(visibility).collect())),
+        Value::Object(o) if o.contains_key("any") => match o.get("any") {
+            Some(Value::Array(any)) => {
+                Some(Visibility::Any(any.iter().filter_map(visibility).collect()))
+            }
+            _ => None,
+        },
+        one => Some(Visibility::Rule(
+            one.get("id")?.as_str()?,
+            one.get("equals")?,
+        )),
     }
+}
+
+pub fn is_visible(field: &Value, value_of: impl Fn(&str) -> Option<Value>) -> bool {
+    field
+        .get("visible_when")
+        .and_then(visibility)
+        .is_none_or(|v| v.holds(&value_of))
 }
 
 pub fn matches(value: &Value, equals: &Value) -> bool {
@@ -1212,20 +1240,73 @@ mod tests {
         );
     }
 
+    fn values(pairs: &[(&str, Value)]) -> impl Fn(&str) -> Option<Value> + use<> {
+        let pairs: Vec<(String, Value)> = pairs
+            .iter()
+            .map(|(id, v)| ((*id).to_owned(), v.clone()))
+            .collect();
+        move |id| pairs.iter().find(|(k, _)| k == id).map(|(_, v)| v.clone())
+    }
+
     #[test]
     fn visibility_rules_match_a_value_or_a_list() {
         let field =
             json!({ "id": "ring", "visible_when": { "id": "collect", "equals": ["A", "B"] } });
-        let rules = visible_rules(&field);
-        let (id, equals) = rules[0];
-        assert_eq!(id, "collect");
-        assert!(matches(&json!("B"), equals));
-        assert!(!matches(&json!("C"), equals));
+        assert!(is_visible(&field, values(&[("collect", json!("B"))])));
+        assert!(!is_visible(&field, values(&[("collect", json!("C"))])));
+        assert!(!is_visible(&field, values(&[])));
         assert!(matches(&json!(true), &json!(true)));
-        assert!(visible_rules(&json!({ "id": "x" })).is_empty());
+        assert!(is_visible(&json!({ "id": "x" }), values(&[])));
         let both =
             json!({ "visible_when": [{ "id": "a", "equals": 1 }, { "id": "b", "equals": 2 }] });
-        assert_eq!(visible_rules(&both).len(), 2);
+        assert!(is_visible(
+            &both,
+            values(&[("a", json!(1)), ("b", json!(2))])
+        ));
+        assert!(!is_visible(
+            &both,
+            values(&[("a", json!(1)), ("b", json!(3))])
+        ));
+    }
+
+    #[test]
+    fn visibility_any_matches_one_of_its_entries() {
+        let field = json!({ "visible_when": { "any": [
+            { "id": "activity", "equals": "Boss" },
+            [{ "id": "activity", "equals": ["Slayer", "Turael"] }, { "id": "area", "equals": "Temple" }]
+        ] } });
+        assert!(is_visible(
+            &field,
+            values(&[("activity", json!("Boss")), ("area", json!("Cave"))])
+        ));
+        assert!(is_visible(
+            &field,
+            values(&[("activity", json!("Turael")), ("area", json!("Temple"))])
+        ));
+        assert!(!is_visible(
+            &field,
+            values(&[("activity", json!("Slayer")), ("area", json!("Cave"))])
+        ));
+        assert!(!is_visible(
+            &field,
+            values(&[("activity", json!("Combat")), ("area", json!("Temple"))])
+        ));
+        let nested = json!({ "visible_when": [
+            { "id": "on", "equals": true },
+            { "any": [{ "id": "a", "equals": 1 }, { "id": "b", "equals": 1 }] }
+        ] });
+        assert!(is_visible(
+            &nested,
+            values(&[("on", json!(true)), ("b", json!(1))])
+        ));
+        assert!(!is_visible(
+            &nested,
+            values(&[("on", json!(false)), ("b", json!(1))])
+        ));
+        assert!(!is_visible(
+            &json!({ "visible_when": { "any": [] } }),
+            values(&[])
+        ));
     }
 
     #[test]

@@ -366,13 +366,7 @@ struct Place<'a> {
 }
 
 fn visible(field: &Value, values: &HashMap<String, FieldValue>) -> bool {
-    spec_form::visible_rules(field)
-        .into_iter()
-        .all(|(id, equals)| {
-            values
-                .get(id)
-                .is_some_and(|v| spec_form::matches(&collect_one(v), equals))
-        })
+    spec_form::is_visible(field, |id| values.get(id).map(collect_one))
 }
 
 fn show_fields<'a>(
