@@ -919,13 +919,38 @@ fn registered_code(pe: &Pe, site: u32) -> Option<u32> {
     None
 }
 
+fn paired_code(pe: &Pe, site: u32) -> Option<u32> {
+    let (begin, end) = pe.function_containing(site)?;
+    let instrs = function_instrs(pe, begin, end);
+    let at = instrs.iter().position(|i| i.ip32() == site)?;
+    if instrs[at].op0_register() == Register::RDX {
+        return None;
+    }
+    let statement = instrs[..at]
+        .iter()
+        .rposition(|i| i.mnemonic() == Mnemonic::Call)
+        .map_or(0, |call| call + 1);
+    let codes: Vec<u32> = instrs[statement..at]
+        .iter()
+        .filter_map(|i| rip_lea(i).filter(|&rva| pe.in_code(rva as usize)))
+        .collect();
+    match codes.as_slice() {
+        [code] => Some(*code),
+        _ => None,
+    }
+}
+
 fn lua_binding(pe: &Pe, name: &str) -> Result<u32, ScanError> {
     let strings = string_rvas(pe, name);
-    let implementations: HashSet<u32> = rdx_leas(pe)
+    let registered = rdx_leas(pe)
         .iter()
         .filter(|(_, target)| strings.contains(target))
-        .filter_map(|&(site, _)| registered_code(pe, site))
-        .collect();
+        .filter_map(|&(site, _)| registered_code(pe, site));
+    let paired = strings
+        .iter()
+        .flat_map(|&string| menu::rip_lea_sites(pe, string))
+        .filter_map(|site| paired_code(pe, site));
+    let implementations: HashSet<u32> = registered.chain(paired).collect();
     single(&implementations.into_iter().collect::<Vec<_>>())
 }
 

@@ -12,19 +12,21 @@ const CAM_FORCEANGLE: u32 = 5504;
 fn position(pe: &Pe, client: u32) -> Result<u32, ScanError> {
     let instrs = decode_at(pe, lua_binding(pe, "worldToScreenCoord")?, 24);
     let clients = client_registers(&instrs, client);
-    let fields: Vec<u32> = instrs
+    let fields: HashSet<u32> = instrs
         .iter()
         .filter(|i| {
-            i.mnemonic() == Mnemonic::Mov
+            matches!(i.mnemonic(), Mnemonic::Mov | Mnemonic::Sub)
+                && i.op0_kind() == OpKind::Register
                 && i.op0_register().size() == 4
+                && i.op1_kind() == OpKind::Memory
                 && clients.contains(&i.memory_base())
         })
         .map(|i| i.memory_displacement64() as u32)
         .collect();
     one(fields
-        .windows(3)
-        .filter(|w| w[1] == w[0] + 4 && w[2] == w[0] + 8)
-        .map(|w| w[0])
+        .iter()
+        .copied()
+        .filter(|&x| fields.contains(&(x + 4)) && fields.contains(&(x + 8)))
         .collect())
 }
 

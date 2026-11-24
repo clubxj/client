@@ -83,7 +83,7 @@ fn ranker(pe: &Pe) -> Result<Ranker, ScanError> {
     })
 }
 
-fn rip_lea_sites(pe: &Pe, target: u32) -> Vec<u32> {
+pub(super) fn rip_lea_sites(pe: &Pe, target: u32) -> Vec<u32> {
     pe.image
         .windows(7)
         .enumerate()
