@@ -42,21 +42,31 @@ fn sets_flag(i: &Instruction) -> Option<u32> {
         .then(|| i.memory_displacement64() as u32)
 }
 
+const FLAG_WINDOW: usize = 2;
+
 pub fn find_npc_model(pe: &Pe, npc_definition: u32) -> Result<NpcModel, ScanError> {
     let mut found = Vec::new();
     for &(begin, end) in &pe.functions {
         let instrs = function_instrs(pe, begin, end);
-        for w in instrs.windows(4) {
-            let Some(definition) = field_load(&w[0], npc_definition) else {
+        for (n, load) in instrs.iter().enumerate() {
+            let Some(definition) = field_load(load, npc_definition) else {
                 continue;
             };
-            let Some(size) = compares_one(&w[1], definition) else {
+            let [compare, skip, rest @ ..] = &instrs[n + 1..] else {
                 continue;
             };
-            if w[2].mnemonic() != Mnemonic::Jne || w[2].near_branch_target() != w[3].next_ip() {
+            let Some(size) = compares_one(compare, definition) else {
+                continue;
+            };
+            if skip.mnemonic() != Mnemonic::Jne {
                 continue;
             }
-            let Some(flag) = sets_flag(&w[3]) else {
+            let Some(flag) = rest
+                .iter()
+                .take(FLAG_WINDOW)
+                .find(|i| i.next_ip() == skip.near_branch_target())
+                .and_then(sets_flag)
+            else {
                 continue;
             };
             if let Some(root) = chunk_root(pe, begin) {
@@ -287,10 +297,9 @@ pub fn find_model_faces(pe: &Pe, vertices: &ModelVertices) -> Result<ModelFaces,
             continue;
         }
         let instrs = whole_function(pe, begin, 0x300);
-        if instrs.len() > 120
-            || instrs
-                .iter()
-                .any(|i| i.is_jcc_short_or_near() && i.near_branch_target() < i.ip())
+        if instrs
+            .iter()
+            .any(|i| i.is_jcc_short_or_near() && i.near_branch_target() < i.ip())
         {
             continue;
         }

@@ -73,20 +73,34 @@ fn zoom_reads(instrs: &[Instruction]) -> Vec<u32> {
     found
 }
 
+const ANGLE_MASK: u64 = 0x7ff;
+const ANGLE_USE_WINDOW: usize = 3;
+
 fn angle_reads(instrs: &[Instruction], client: u32) -> Vec<u32> {
     let clients = client_registers(instrs, client);
     let mut found = Vec::new();
     for (at, i) in instrs.iter().enumerate() {
-        let Some(field) = client_field(i, &clients).filter(|_| i.mnemonic() == Mnemonic::Movsxd)
+        let Some(field) = client_field(i, &clients)
+            .filter(|_| matches!(i.mnemonic(), Mnemonic::Movsxd | Mnemonic::Mov))
+            .filter(|_| i.op0_kind() == OpKind::Register)
         else {
             continue;
         };
-        let index = i.op0_register();
-        if instrs[at + 1..].iter().take(3).any(|t| {
-            t.op1_kind() == OpKind::Memory
-                && t.memory_index() == index
-                && t.memory_index_scale() == 4
-        }) {
+        let register = i.op0_register();
+        let next = || instrs[at + 1..].iter().take(ANGLE_USE_WINDOW);
+        let indexes_table = i.mnemonic() == Mnemonic::Movsxd
+            && next().any(|t| {
+                t.op1_kind() == OpKind::Memory
+                    && t.memory_index() == register
+                    && t.memory_index_scale() == 4
+            });
+        let masks_angle = next().any(|t| {
+            t.mnemonic() == Mnemonic::And
+                && t.op0_kind() == OpKind::Register
+                && t.op0_register() == register
+                && immediate(t) == Some(ANGLE_MASK)
+        });
+        if indexes_table || masks_angle {
             found.push(field);
         }
     }

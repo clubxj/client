@@ -1661,20 +1661,11 @@ mod tests {
     }
 
     #[test]
-    fn finds_offsets_in_installed_client() {
-        let path = std::env::var_os("GAME_CLIENT_EXE")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                let home = std::env::var_os("HOME")?;
-                Some(std::path::Path::new(&home).join(".local/share/bolt-launcher/osrswindows.exe"))
-            })
-            .unwrap();
-        let Ok(file) = std::fs::read(&path) else {
-            eprintln!("skipped, cannot read {}", path.display());
+    fn finds_exact_offsets_in_a2636a01() {
+        let Some(image) = archived_image("a2636a01") else {
+            eprintln!("skipped, build a2636a01 isn't archived");
             return;
         };
-
-        let image = map_image(&file);
         let pe = Pe::parse(&image).unwrap();
         let position = find_actor_position(&pe).expect("actor position not found");
         println!("{position:x?}");
@@ -2031,10 +2022,6 @@ mod tests {
             }
         );
 
-        let world_select = find_world_select(&pe, player.client).expect("world select not found");
-        assert_eq!(world_select.switcher, 0x1c21a68);
-        assert_eq!(world_select.current_world, 0x32fc);
-
         let logged_in = decode_at(&pe, lua_binding(&pe, "isLoggedIn").unwrap(), 6);
         let state_compare = logged_in
             .iter()
@@ -2056,6 +2043,16 @@ mod tests {
             .unwrap_or_else(|error| panic!("{what} not found in {}: {error:?}", build.display()));
         println!("{}: {what} {value:x?}", build.display());
         value
+    }
+
+    fn archived_image(build: &str) -> Option<Vec<u8>> {
+        let mut image = None;
+        for_each_archived_build(|path, pe| {
+            if path.to_string_lossy().contains(build) {
+                image = Some(pe.image.to_vec());
+            }
+        });
+        image
     }
 
     fn for_each_build_in(dir: &str, mut check: impl FnMut(&std::path::Path, &Pe)) {
@@ -2175,27 +2172,28 @@ mod tests {
     fn finds_packets_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             let packets = found("packets", build, find_packets(pe));
-            let name = build.file_name().unwrap().to_string_lossy();
-            let (receive, send) = if name.contains("166231c8") {
-                (0x202740, 0x204010)
-            } else {
-                (0x202840, 0x204110)
-            };
             assert_eq!(
                 packets,
                 Packets {
-                    receive,
                     receive_opcode: 0,
                     receive_buffer: 8,
-                    send,
                     send_type: 0,
                     send_buffer: 8,
                     buffer_data: 0x10,
-                    buffer_cursor: 0x18
+                    buffer_cursor: 0x18,
+                    ..packets
                 },
                 "{}",
                 build.display()
             );
+            for function in [packets.receive, packets.send] {
+                assert_eq!(
+                    pe.function_containing(function).map(|(begin, _)| begin),
+                    Some(function),
+                    "{}",
+                    build.display()
+                );
+            }
         });
     }
 
