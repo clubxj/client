@@ -173,18 +173,30 @@ pub struct ComponentFields {
     pub children: u32,
 }
 
+fn object_byte(i: &Instruction) -> Option<u32> {
+    (i.op0_kind() == OpKind::Memory
+        && i.memory_index() == Register::None
+        && !matches!(
+            i.memory_base(),
+            Register::None | Register::RIP | Register::RSP
+        ))
+    .then(|| i.memory_displacement64() as u32)
+}
+
 fn hidden(pe: &Pe) -> Result<u32, ScanError> {
     let instrs = decode_at(pe, range_handler(pe, 1100)?, 400);
     one(instrs
         .windows(4)
         .filter_map(|w| {
-            let field = field_operand(&w[0], 0)?;
+            let field = object_byte(&w[0])?;
+            let base = w[0].memory_base();
             let compares = w[0].mnemonic() == Mnemonic::Cmp
                 && w[0].memory_size() == iced_x86::MemorySize::UInt8
                 && w[0].op1_kind() == OpKind::Register;
             let stores = w[1..].iter().any(|i| {
                 i.mnemonic() == Mnemonic::Mov
-                    && field_operand(i, 0) == Some(field)
+                    && object_byte(i) == Some(field)
+                    && i.memory_base() == base
                     && i.op1_kind() == OpKind::Register
                     && i.op1_register() == w[0].op1_register()
             });
@@ -286,4 +298,3 @@ pub fn find_component_fields(pe: &Pe) -> Result<ComponentFields, ScanError> {
         children: children(pe)?,
     })
 }
-

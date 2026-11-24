@@ -57,21 +57,9 @@ fn container_slot_getter(instrs: &[Instruction]) -> Option<(u32, u32, u32, u32, 
 }
 
 pub fn find_item_containers(pe: &Pe) -> Result<ItemContainers, ScanError> {
-    const INTERFACE_THRESHOLD: u32 = -70000i32 as u32;
-
-    let handlers = functions_with_dword(pe, INTERFACE_THRESHOLD);
-    let targets: HashSet<u32> = direct_calls(pe)
-        .iter()
-        .filter(|&&(site, _)| {
-            handlers
-                .iter()
-                .any(|&(begin, end)| (begin..end).contains(&site))
-        })
-        .map(|&(_, target)| target)
-        .collect();
-    let getters: Vec<_> = targets
-        .iter()
-        .filter_map(|&target| container_slot_getter(&decode_at(pe, target, 30)))
+    let getters: Vec<_> = call_targets(pe)
+        .into_iter()
+        .filter_map(|target| container_slot_getter(&decode_at(pe, target, 30)))
         .collect();
     let pick = |miss: bool| {
         one(getters
@@ -562,4 +550,3 @@ pub fn find_npc_head_icons(pe: &Pe) -> Result<NpcHeadIcons, ScanError> {
     let (field, sprites) = one(found)?;
     Ok(NpcHeadIcons { field, sprites })
 }
-

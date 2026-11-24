@@ -13,6 +13,7 @@ pub const ARG_KIND: u32 = 0x20;
 pub const KIND_INT: u8 = 1;
 const FIRST_ARG_PLACEHOLDER: u64 = 0x8000_0001;
 const LAST_ARG_PLACEHOLDER: u64 = 0x8000_000a;
+const RANGE_WINDOW: usize = 8;
 
 fn is_event_runner(instrs: &[Instruction]) -> bool {
     let compares = |value: u64| {
@@ -23,14 +24,23 @@ fn is_event_runner(instrs: &[Instruction]) -> bool {
                 && immediate(i) == Some(value)
         })
     };
-    let range = instrs.windows(2).any(|w| {
-        w[0].mnemonic() == Mnemonic::Lea
-            && w[0].memory_displacement64() as i64 == -0xa
-            && w[1].mnemonic() == Mnemonic::Cmp
-            && w[1].op0_register() == w[0].op0_register()
-            && immediate(&w[1]) == Some(7)
+    let subtracts_ten = |i: &Instruction| match i.mnemonic() {
+        Mnemonic::Lea => i.memory_displacement64() as i64 == -0xa,
+        Mnemonic::Add => immediate(i).is_some_and(|v| v as i32 == -0xa),
+        Mnemonic::Sub => immediate(i) == Some(0xa),
+        _ => false,
+    };
+    let range = instrs.iter().enumerate().any(|(n, i)| {
+        i.op0_kind() == OpKind::Register
+            && subtracts_ten(i)
+            && instrs[n + 1..].iter().take(RANGE_WINDOW).any(|c| {
+                c.mnemonic() == Mnemonic::Cmp
+                    && c.op0_kind() == OpKind::Register
+                    && c.op0_register() == i.op0_register()
+                    && immediate(c) == Some(7)
+            })
     });
-    range && compares(0x12) && (FIRST_ARG_PLACEHOLDER..=LAST_ARG_PLACEHOLDER).all(compares)
+    range && (FIRST_ARG_PLACEHOLDER..=LAST_ARG_PLACEHOLDER).all(compares)
 }
 
 fn fields(instrs: &[Instruction]) -> Option<(u32, u32, u32)> {
@@ -53,7 +63,19 @@ fn fields(instrs: &[Instruction]) -> Option<(u32, u32, u32)> {
             .filter_map(|i| event.iter().find_map(|&base| load_from(i, base)))
     };
     let event_type = loads(4).next()?;
-    let args = loads(8).next()?;
+    let args = instrs.iter().take(24).find_map(|i| {
+        let wide = i.op0_kind() == OpKind::Register && i.op0_register().size() == 8;
+        let address = i.mnemonic() == Mnemonic::Lea
+            && i.memory_index() == Register::None
+            && event.contains(&i.memory_base());
+        if !wide {
+            return None;
+        }
+        if address {
+            return Some(i.memory_displacement64() as u32);
+        }
+        event.iter().find_map(|&base| load_from(i, base))
+    })?;
     let count = one(instrs
         .iter()
         .filter(|i| {
@@ -90,4 +112,3 @@ pub fn find_script_runs(pe: &Pe) -> Result<ScriptRuns, ScanError> {
     }
     one(found)
 }
-
