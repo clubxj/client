@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NpcModel {
+    pub definition: u32,
     pub get_model: u32,
     pub definition_size: u32,
     pub bounding_box: u32,
@@ -45,12 +46,25 @@ fn sets_flag(i: &Instruction) -> Option<u32> {
 const FLAG_WINDOW: usize = 2;
 const MODEL_RELOAD_WINDOW: usize = 4;
 
-pub fn find_npc_model(pe: &Pe, npc_definition: u32) -> Result<NpcModel, ScanError> {
+fn object_load(i: &Instruction) -> Option<(Register, u32)> {
+    (i.mnemonic() == Mnemonic::Mov
+        && i.op0_kind() == OpKind::Register
+        && i.op0_register().size() == 8
+        && i.op1_kind() == OpKind::Memory
+        && i.memory_index() == Register::None
+        && !matches!(
+            i.memory_base(),
+            Register::None | Register::RIP | Register::RSP
+        ))
+    .then(|| (i.op0_register(), i.memory_displacement64() as u32))
+}
+
+pub fn find_npc_model(pe: &Pe) -> Result<NpcModel, ScanError> {
     let mut found = Vec::new();
     for &(begin, end) in &pe.functions {
         let instrs = function_instrs(pe, begin, end);
         for (n, load) in instrs.iter().enumerate() {
-            let Some(definition) = field_load(load, npc_definition) else {
+            let Some((definition, field)) = object_load(load) else {
                 continue;
             };
             let [compare, skip, rest @ ..] = &instrs[n + 1..] else {
@@ -71,12 +85,13 @@ pub fn find_npc_model(pe: &Pe, npc_definition: u32) -> Result<NpcModel, ScanErro
                 continue;
             };
             if let Some(root) = chunk_root(pe, begin) {
-                found.push((root, size, flag));
+                found.push((field, root, size, flag));
             }
         }
     }
-    let (get_model, definition_size, bounding_box) = one(found)?;
+    let (definition, get_model, definition_size, bounding_box) = one(found)?;
     Ok(NpcModel {
+        definition,
         get_model,
         definition_size,
         bounding_box,

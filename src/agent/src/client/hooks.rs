@@ -982,17 +982,11 @@ unsafe fn find_offsets() {
             });
         }
     }
-    if let Some((w, rule)) = world.and_then(|w| {
-        found(
-            "NPC model",
-            guarded(|| find_npc_model(pe, w.names.npc_definition)),
-        )
-        .map(|rule| (w, rule))
-    }) {
+    if let Some(rule) = found("NPC model", guarded(|| find_npc_model(pe))) {
         let vertices = found("Model vertices", guarded(|| find_model_vertices(pe, &rule)));
         let height = found(
             "Animation height",
-            guarded(|| find_animation_height(pe, w.names.npc_definition)),
+            guarded(|| find_animation_height(pe, rule.definition)),
         );
         let faces =
             vertices.and_then(|v| found("Model faces", guarded(|| find_model_faces(pe, &v))));

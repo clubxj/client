@@ -2303,13 +2303,14 @@ mod tests {
                 build,
                 find_appearance_decoder(pe, names.player_name, player.player_index),
             );
-            let model = found("NPC model", build, find_npc_model(pe, names.npc_definition));
+            let model = found("NPC model", build, find_npc_model(pe));
+            assert_eq!(model.definition, names.npc_definition, "{}", build.display());
             let vertices = found("model vertices", build, find_model_vertices(pe, &model));
             found("model faces", build, find_model_faces(pe, &vertices));
             found(
                 "animation height",
                 build,
-                find_animation_height(pe, names.npc_definition),
+                find_animation_height(pe, model.definition),
             );
             let scene = found("scene", build, find_scene(pe));
             let collision = found("collision maps", build, find_collision_maps(pe, &scene));
@@ -2509,19 +2510,17 @@ mod no_panics {
                     _ => skip(),
                 },
             );
-            if let Ok(n) = &names {
-                let model = guard(|| find_npc_model(pe, n.npc_definition));
-                put("npc model", r(&model));
-                if let Ok(m) = &model {
-                    let vertices = guard(|| find_model_vertices(pe, m));
-                    put("model vertices", r(&vertices));
-                    if let Ok(v) = &vertices {
-                        put("model faces", r(&guard(|| find_model_faces(pe, v))));
-                    }
+            let model = guard(|| find_npc_model(pe));
+            put("npc model", r(&model));
+            if let Ok(m) = &model {
+                let vertices = guard(|| find_model_vertices(pe, m));
+                put("model vertices", r(&vertices));
+                if let Ok(v) = &vertices {
+                    put("model faces", r(&guard(|| find_model_faces(pe, v))));
                 }
                 put(
                     "animation height",
-                    r(&guard(|| find_animation_height(pe, n.npc_definition))),
+                    r(&guard(|| find_animation_height(pe, m.definition))),
                 );
             }
             let scene = guard(|| find_scene(pe));
