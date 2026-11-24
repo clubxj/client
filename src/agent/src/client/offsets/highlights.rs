@@ -89,14 +89,14 @@ mod tests {
     fn finds_highlights_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             let highlights = found("highlights", build, find_highlights(pe));
-            if build.to_string_lossy().contains("c65749a2") {
+            if build.to_string_lossy().contains("osclient-243.1") {
                 assert_eq!(
                     highlights,
                     Highlights {
-                        client: 0xe932a0,
+                        client: 0xeaff30,
                         manager: 0x896c0,
-                        npc_on: 0x329640,
-                        npc_off: 0x32b540,
+                        npc_on: 0x2e0050,
+                        npc_off: 0x2e1f50,
                     },
                     "{}",
                     build.display()

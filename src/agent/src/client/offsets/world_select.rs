@@ -660,9 +660,9 @@ mod tests {
     use crate::client::offsets::tests::for_each_archived_build;
 
     #[test]
-    fn finds_world_select_in_e470c533() {
+    fn finds_world_select_in_243_1() {
         for_each_archived_build(|build, pe| {
-            if !build.to_string_lossy().contains("e470c533") {
+            if !build.to_string_lossy().contains("osclient-243.1") {
                 return;
             }
             let client = find_client(pe, find_game_state(pe).unwrap()).unwrap();

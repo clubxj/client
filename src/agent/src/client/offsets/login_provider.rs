@@ -318,13 +318,13 @@ mod tests {
             let game_state = found("game state", build, find_game_state(pe));
             let client = found("client", build, find_client(pe, game_state));
             let provider = found("login provider", build, find_login_provider(pe, client));
-            if build.to_string_lossy().contains("c65749a2") {
+            if build.to_string_lossy().contains("osclient-243.1") {
                 assert_eq!(
                     provider,
                     LoginProvider {
                         holder: 0x70,
                         provider: 0x18,
-                        steam_vtable: 0xb92f18,
+                        steam_vtable: 0xbab898,
                     },
                     "{}",
                     build.display()

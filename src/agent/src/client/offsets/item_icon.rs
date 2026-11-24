@@ -84,8 +84,8 @@ mod tests {
     fn finds_item_icon_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             let builder = found("item icon builder", build, find_item_icon(pe));
-            if build.to_string_lossy().contains("aa10826e") {
-                assert_eq!(builder, 0x6016c0, "{}", build.display());
+            if build.to_string_lossy().contains("osclient-243.1") {
+                assert_eq!(builder, 0x60a420, "{}", build.display());
             }
         });
     }

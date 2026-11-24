@@ -1686,9 +1686,9 @@ mod tests {
     }
 
     #[test]
-    fn finds_exact_offsets_in_a2636a01() {
-        let Some(image) = archived_image("a2636a01") else {
-            eprintln!("skipped, build a2636a01 isn't archived");
+    fn finds_exact_offsets_in_243_1() {
+        let Some(image) = archived_image("osclient-243.1") else {
+            eprintln!("skipped, build 243.1 isn't archived");
             return;
         };
         let pe = Pe::parse(&image).unwrap();
@@ -1718,10 +1718,10 @@ mod tests {
         assert_eq!(
             interfaces,
             Interfaces {
-                root: 0x413bc8,
-                manager: 0x413bd8,
+                root: 0x413c08,
+                manager: 0x413c18,
                 groups: 0x6890,
-                sub_interfaces: 0x413b98,
+                sub_interfaces: 0x413bd8,
                 component: ComponentLayout {
                     id: 0x4,
                     kind: 0x28,
@@ -1741,7 +1741,7 @@ mod tests {
         assert_eq!(
             containers,
             ItemContainers {
-                table: 0x154fae0,
+                table: 0x15a7940,
                 ids: 0x8,
                 quantities: 0x20,
                 next: 0x38
@@ -1752,7 +1752,7 @@ mod tests {
         assert_eq!(
             varcs,
             Varcs {
-                object: 0x417ca8,
+                object: 0x417ce8,
                 begin: 0x48,
                 entry_size: 0x30,
                 value: 0x8,
@@ -1764,8 +1764,8 @@ mod tests {
         assert_eq!(
             energy,
             RunEnergy {
-                energy: 0x34e0,
-                weight: 0x34e4
+                energy: 0x3528,
+                weight: 0x352c
             }
         );
         let actors = find_actor_lists(&pe).expect("actor lists not found");
@@ -1775,7 +1775,7 @@ mod tests {
             ActorLists {
                 npc_indices: 0xd0,
                 npc_table: 0x90,
-                player_count: 0xccd0
+                player_count: 0xcd10
             }
         );
         let names = find_actor_names(&pe).expect("actor names not found");
@@ -1797,7 +1797,7 @@ mod tests {
         assert_eq!(
             decoder,
             AppearanceDecoder {
-                function: 0xa1420,
+                function: 0xa3860,
                 actor_id: 0x79c
             }
         );
@@ -1806,7 +1806,7 @@ mod tests {
         assert_eq!(
             invalidate,
             ComponentInvalidate {
-                function: 0x7c270,
+                function: 0x7dff0,
                 holder_component: 0x8,
                 text: 0x158
             }
@@ -1830,7 +1830,7 @@ mod tests {
         println!("{projection:x?}");
         let menu = find_menu(&pe).expect("menu not found");
         println!("{menu:x?}");
-        assert_eq!(menu.object, 0x4133f0);
+        assert_eq!(menu.object, 0x413430);
         assert_eq!(
             (
                 menu.entry_size,
@@ -1850,18 +1850,18 @@ mod tests {
         assert_eq!(
             click,
             MenuClick {
-                minimenu_vtable: 0xbcc438,
-                entry: 0x298,
-                click_x: 0x3e8,
-                counter: 0x3f4
+                minimenu_vtable: 0xbd8ab8,
+                entry: 0x2a0,
+                click_x: 0x3f0,
+                counter: 0x3fc
             }
         );
-        assert_eq!(find_menu_open(&pe, &click), Ok(0x7c0));
+        assert_eq!(find_menu_open(&pe, &click), Ok(0x800));
         assert_eq!(
             find_menu_layout(&pe, &click),
             Ok(MenuLayout {
                 view: 0x158,
-                function: 0x612770,
+                function: 0x623df0,
                 rows: 0x140,
                 margin: 10,
                 path: 0x10,
@@ -1874,7 +1874,7 @@ mod tests {
         assert_eq!(
             selection,
             Selection {
-                offset: 0x7d0,
+                offset: 0x810,
                 verb: 0,
                 name: 0x48,
                 id: 0x90,
@@ -1887,9 +1887,9 @@ mod tests {
         assert_eq!(
             projection,
             Projection {
-                world_to_screen: 0x21ec80,
-                tile_height: 0x97ad0,
-                top_world_view: 0xca80,
+                world_to_screen: 0x180880,
+                tile_height: 0x99d90,
+                top_world_view: 0xcac0,
                 plane: 0x18
             }
         );
@@ -1898,11 +1898,11 @@ mod tests {
         assert_eq!(
             minimap,
             minimap::Minimap {
-                object: 0x40eab0,
+                object: 0x40eaf0,
                 zoom: 0x6470,
-                angle: 0x895e0,
-                focal_x: 0x8964c,
-                focal_y: 0x89654
+                angle: 0x89620,
+                focal_x: 0x8968c,
+                focal_y: 0x89694
             }
         );
         assert_eq!(find_destination(&pe, minimap.object), Ok(0));
@@ -1911,8 +1911,8 @@ mod tests {
         assert_eq!(
             chat,
             Ok(chat::Chat {
-                messages: 0x154fa48,
-                cycle: 0xe98c14,
+                messages: 0x15a78d0,
+                cycle: 0xeaff2c,
                 message_cycle: 0x8,
                 kind: 0x40,
                 name: 0x48,
@@ -1926,7 +1926,7 @@ mod tests {
         println!("{projectiles:x?}");
         assert_eq!(
             (projectiles.list, projectiles.node, projectiles.cycle),
-            (0xcc70, 0x18, 0xe98c14)
+            (0xccb0, 0x18, 0xeaff2c)
         );
         assert_eq!(
             (
@@ -1954,7 +1954,7 @@ mod tests {
             spot_anims,
             SpotAnims {
                 list: 0x160,
-                cycle: 0xe98c14,
+                cycle: 0xeaff2c,
                 start_cycle: 0x260,
                 level: 0x264,
                 x: 0x268,
@@ -1991,9 +1991,9 @@ mod tests {
         assert_eq!(
             camera,
             camera::Camera {
-                position: 0x895c8,
-                pitch: 0x895dc,
-                yaw: 0x895e0
+                position: 0x89608,
+                pitch: 0x8961c,
+                yaw: 0x89620
             }
         );
         let scene = find_scene(&pe).expect("scene not found");
@@ -2015,7 +2015,7 @@ mod tests {
         assert_eq!(
             local,
             local_projection::LocalProjection {
-                zoom: 0x4830,
+                zoom: 0x4878,
                 view_holder: 0x1b0,
                 view: 0x8,
                 view_center: 0x14,
@@ -2040,11 +2040,11 @@ mod tests {
         assert_eq!(
             login_panel,
             LoginPanel {
-                panel_x: 0xe98bd8,
-                box_x: 0x154fc64,
-                center_x: 0xe98bdc,
-                y: 0xcfb094,
-                screen: 0xe98c10
+                panel_x: 0xeafef8,
+                box_x: 0x15a7aec,
+                center_x: 0xeafef0,
+                y: 0xd11090,
+                screen: 0xeaff28
             }
         );
 
@@ -2164,12 +2164,9 @@ mod tests {
             let click = found("menu click", build, find_menu_click(pe, &menu));
             let open = found("menu open", build, find_menu_open(pe, &click));
             let name = build.display().to_string();
-            let expected = if name.contains("e470c533") {
-                0x800
-            } else {
-                0x7c0
-            };
-            assert_eq!(open, expected, "{name}");
+            if name.contains("osclient-243.1") {
+                assert_eq!(open, 0x800, "{name}");
+            }
         });
     }
 
@@ -2228,8 +2225,8 @@ mod tests {
         for_each_archived_build(|build, pe| {
             let runs = found("script runs", build, find_script_runs(pe));
             let name = build.file_name().unwrap().to_string_lossy();
-            let function = if name.contains("a2636a01") {
-                0x1995c0
+            let function = if name.contains("osclient-243.1") {
+                0x124020
             } else {
                 runs.function
             };
@@ -2251,13 +2248,13 @@ mod tests {
     fn finds_varc_setters_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             let setters = found("varc setters", build, find_varc_setters(pe));
-            if build.to_string_lossy().contains("a2636a01") {
+            if build.to_string_lossy().contains("osclient-243.1") {
                 assert_eq!(
                     setters,
                     VarcSetters {
-                        get_int: 0x33220,
-                        set_int: 0x33130,
-                        set_object: 0x333f0
+                        get_int: 0x33df0,
+                        set_int: 0x33d00,
+                        set_object: 0x33fc0
                     },
                     "{}",
                     build.display()
@@ -2271,8 +2268,8 @@ mod tests {
         for_each_archived_build(|build, pe| {
             let containers = found("item containers", build, find_item_containers(pe));
             let setter = found("item setter", build, find_item_setter(pe, &containers));
-            if build.to_string_lossy().contains("a2636a01") {
-                assert_eq!(setter, 0x30f60, "{}", build.display());
+            if build.to_string_lossy().contains("osclient-243.1") {
+                assert_eq!(setter, 0x31b00, "{}", build.display());
             }
         });
     }
@@ -2320,7 +2317,7 @@ mod tests {
             found("chat", build, find_chat(pe));
             let camera = found("camera", build, find_camera(pe, client));
             assert_eq!(camera.yaw, minimap.angle);
-            if build.to_string_lossy().contains("e470c533") {
+            if build.to_string_lossy().contains("osclient-243.1") {
                 found("world select", build, find_world_select(pe, client));
             }
             found(

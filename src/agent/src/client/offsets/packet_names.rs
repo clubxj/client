@@ -415,23 +415,7 @@ mod tests {
     use super::*;
     use crate::client::offsets::tests::for_each_archived_build;
 
-    const OCTOBER: [(Name, u16, &[u8]); 5] = [
-        (Name::Tick, 2, &[]),
-        (Name::VarpSmall, 21, &[1, 0]),
-        (Name::VarpLarge, 40, &[0, 1]),
-        (Name::SynthSound, 69, &[0, 1, 2]),
-        (Name::MessageGame, 124, &[]),
-    ];
-
-    const NOVEMBER: [(Name, u16, &[u8]); 5] = [
-        (Name::Tick, 55, &[]),
-        (Name::VarpSmall, 54, &[1, 0]),
-        (Name::VarpLarge, 66, &[1, 0]),
-        (Name::SynthSound, 30, &[0, 1, 2]),
-        (Name::MessageGame, 85, &[]),
-    ];
-
-    const NOVEMBER_23: [(Name, u16, &[u8]); 5] = [
+    const BUILD_243_1: [(Name, u16, &[u8]); 5] = [
         (Name::Tick, 23, &[]),
         (Name::VarpSmall, 83, &[1, 0]),
         (Name::VarpLarge, 90, &[1, 0]),
@@ -451,15 +435,14 @@ mod tests {
                 chat_messages: find_chat(pe).ok().map(|chat| chat.messages),
             };
             let file = build.file_name().unwrap().to_string_lossy();
-            let expected = if file.starts_with("client-2026-10-") {
-                OCTOBER
-            } else if file.starts_with("client-2026-11-23-") {
-                NOVEMBER_23
-            } else {
-                NOVEMBER
-            };
             let names = find_packet_names(pe, &packets, &layouts, anchors);
-            for ((name, found), (want, opcode, order)) in names.into_iter().zip(expected) {
+            if file != "osclient-243.1.exe" {
+                for (name, found) in names {
+                    assert!(found.is_ok(), "{} in {file}", name.spelling());
+                }
+                return;
+            }
+            for ((name, found), (want, opcode, order)) in names.into_iter().zip(BUILD_243_1) {
                 assert_eq!(name, want);
                 assert_eq!(
                     found,
