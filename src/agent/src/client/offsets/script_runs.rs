@@ -11,6 +11,8 @@ pub struct ScriptRuns {
 pub const ARG_SIZE: u32 = 0x28;
 pub const ARG_KIND: u32 = 0x20;
 pub const KIND_INT: u8 = 1;
+const FIRST_ARG_PLACEHOLDER: u64 = 0x8000_0001;
+const LAST_ARG_PLACEHOLDER: u64 = 0x8000_000a;
 
 fn is_event_runner(instrs: &[Instruction]) -> bool {
     let compares = |value: u64| {
@@ -28,7 +30,7 @@ fn is_event_runner(instrs: &[Instruction]) -> bool {
             && w[1].op0_register() == w[0].op0_register()
             && immediate(&w[1]) == Some(7)
     });
-    range && compares(0x12) && compares(0x55) && compares(0x56)
+    range && compares(0x12) && (FIRST_ARG_PLACEHOLDER..=LAST_ARG_PLACEHOLDER).all(compares)
 }
 
 fn fields(instrs: &[Instruction]) -> Option<(u32, u32, u32)> {
@@ -88,3 +90,4 @@ pub fn find_script_runs(pe: &Pe) -> Result<ScriptRuns, ScanError> {
     }
     one(found)
 }
+

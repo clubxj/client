@@ -218,12 +218,12 @@ fn children(pe: &Pe) -> Result<u32, ScanError> {
     for &(begin, end) in &pe.functions {
         let instrs = function_instrs(pe, begin, end);
         for (at, cmp) in instrs.iter().enumerate() {
-            let Some(count) = field_operand(cmp, 0) else {
+            let Some(count) = field_operand(cmp, 0).or_else(|| field_operand(cmp, 1)) else {
                 continue;
             };
             if cmp.mnemonic() != Mnemonic::Cmp
                 || cmp.memory_size() != iced_x86::MemorySize::UInt64
-                || cmp.op1_kind() != OpKind::Register
+                || ![cmp.op0_kind(), cmp.op1_kind()].contains(&OpKind::Register)
             {
                 continue;
             }
@@ -286,3 +286,4 @@ pub fn find_component_fields(pe: &Pe) -> Result<ComponentFields, ScanError> {
         children: children(pe)?,
     })
 }
+

@@ -73,24 +73,32 @@ fn zoom_reads(instrs: &[Instruction]) -> Vec<u32> {
     found
 }
 
-fn angle_reads(instrs: &[Instruction], client: u32) -> Vec<u32> {
+const CALL_ARGUMENT_WINDOW: usize = 6;
+
+fn angle_argument(instrs: &[Instruction], client: u32, focal_x: u32) -> Vec<u32> {
     let clients = client_registers(instrs, client);
-    let mut found = Vec::new();
-    for (at, i) in instrs.iter().enumerate() {
-        let Some(field) = client_field(i, &clients).filter(|_| i.mnemonic() == Mnemonic::Movsxd)
-        else {
-            continue;
-        };
-        let index = i.op0_register();
-        if instrs[at + 1..].iter().take(3).any(|t| {
-            t.op1_kind() == OpKind::Memory
-                && t.memory_index() == index
-                && t.memory_index_scale() == 4
-        }) {
-            found.push(field);
-        }
-    }
-    found
+    let loads = |register: Register, window: &[Instruction]| -> Vec<u32> {
+        window
+            .iter()
+            .filter(|i| i.op0_kind() == OpKind::Register && i.op0_register() == register)
+            .filter_map(|i| client_field(i, &clients))
+            .collect()
+    };
+    instrs
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.mnemonic() == Mnemonic::Call)
+        .flat_map(|(at, _)| {
+            let window = &instrs[at.saturating_sub(CALL_ARGUMENT_WINDOW)..at];
+            let passes_focal = loads(Register::EDX, window).contains(&focal_x)
+                && loads(Register::R8D, window).contains(&(focal_x + 8));
+            if passes_focal {
+                loads(Register::R9D, window)
+            } else {
+                Vec::new()
+            }
+        })
+        .collect()
 }
 
 fn focal_reads(instrs: &[Instruction], client: u32) -> Vec<u32> {
@@ -123,17 +131,7 @@ pub fn find_minimap(pe: &Pe, client: u32) -> Result<Minimap, ScanError> {
         .collect())?;
     let zoom = one(zoom_reads(&functions[draw]))?;
     let focal_x = one(focal_reads(&functions[draw], client))?;
-    let angle = one(functions
-        .iter()
-        .flat_map(|f| angle_reads(f, client))
-        .collect())?;
-    let clients = client_registers(&functions[draw], client);
-    if !functions[draw]
-        .iter()
-        .any(|i| client_field(i, &clients) == Some(angle))
-    {
-        return Err(ScanError::NotFound);
-    }
+    let angle = one(angle_argument(&functions[draw], client, focal_x))?;
     Ok(Minimap {
         object,
         zoom,
@@ -217,3 +215,4 @@ mod tests {
         assert_eq!(destination_compares(&instrs, 0x40eab8), Vec::<u32>::new());
     }
 }
+

@@ -131,7 +131,11 @@ impl Camera {
                 view_fields.i32(p.view_offset_x as u64)?,
                 view_fields.i32(p.view_offset_y as u64)?,
             ],
-            scale: canvas_fields.f32(layout.interfaces.ui_scale as u64)?,
+            scale: if layout.interfaces.ui_scale == 0 {
+                1.0
+            } else {
+                canvas_fields.f32(layout.interfaces.ui_scale as u64)?
+            },
             ratio: [
                 ui[0] as f32 / canvas_size[0] as f32,
                 ui[1] as f32 / canvas_size[1] as f32,

@@ -192,9 +192,10 @@ pub fn find_run_energy(pe: &Pe) -> Result<RunEnergy, ScanError> {
                 .enumerate()
                 .find_map(|(k, i)| {
                     extends(i, Mnemonic::Movsx).then(|| {
-                        instrs
-                            .get(n + 2 + k)
-                            .and_then(|next| store(next, i.op0_register()))
+                        instrs[n + 2 + k..]
+                            .iter()
+                            .take(3)
+                            .find_map(|next| store(next, i.op0_register()))
                     })?
                 });
             if weight == Some(energy + 4) {
@@ -356,6 +357,8 @@ fn npc_name_getter(instrs: &[Instruction]) -> Option<(u32, u32, u32)> {
     })
 }
 
+const PLAYER_NAME_AFTER_OVERRIDE: u32 = 8;
+
 pub fn find_actor_names(pe: &Pe) -> Result<ActorNames, ScanError> {
     let by_name = lua_binding(pe, "getNpcIdByName")?;
     let calls = direct_calls(pe);
@@ -394,7 +397,7 @@ pub fn find_actor_names(pe: &Pe) -> Result<ActorNames, ScanError> {
                         .entry(read.memory_displacement64() as u32)
                         .or_default() += 1;
                 }
-            } else if (0x700..0x800).contains(&disp) {
+            } else if disp == npc_name_override + PLAYER_NAME_AFTER_OVERRIDE {
                 let reads_string = after.iter().take(1).any(|i| {
                     i.mnemonic() == Mnemonic::Movsx
                         && i.memory_base() == reg
@@ -559,3 +562,4 @@ pub fn find_npc_head_icons(pe: &Pe) -> Result<NpcHeadIcons, ScanError> {
     let (field, sprites) = one(found)?;
     Ok(NpcHeadIcons { field, sprites })
 }
+

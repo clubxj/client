@@ -231,8 +231,13 @@ fn ownership_in(
     let ([ownership], [never_public]) = (&after_timers(false)[..], &after_timers(true)[..]) else {
         return None;
     };
+    let inlined = on_object
+        .iter()
+        .filter(|s| s.byte && matches!(s.source, Source::Stack(_)) && s.field != *never_public)
+        .map(|s| s.field);
     let setters: HashSet<u32> = calls(instrs)
         .filter_map(|(_, target)| byte_setter(pe, target))
+        .chain(inlined)
         .collect();
     let op_flags = single(&setters.into_iter().collect::<Vec<_>>()).ok()?;
     Some(GroundItemOwnership {
@@ -315,3 +320,4 @@ pub fn find_item_pile(pe: &Pe, decoration: &DecorationLayout) -> Result<u32, Sca
     }
     one(found)
 }
+

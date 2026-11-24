@@ -122,6 +122,9 @@ pub fn name_request(
 
 fn scale(memory: &impl Memory, layout: &Layout, client: u64) -> Option<f32> {
     let i = &layout.interfaces;
+    if i.ui_scale == 0 {
+        return Some(1.0);
+    }
     let canvas = memory.ptr(client + i.canvas as u64)?;
     memory
         .f32(canvas + i.ui_scale as u64)

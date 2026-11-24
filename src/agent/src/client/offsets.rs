@@ -136,12 +136,16 @@ pub struct Pe<'a> {
     image: &'a [u8],
     code: Vec<Section>,
     functions: Vec<(u32, u32)>,
-    unwinds: Vec<u32>,
+    unwinds: Vec<Option<u32>>,
     calls: OnceCell<Vec<(u32, u32)>>,
     rdx_leas: OnceCell<Vec<(u32, u32)>>,
 }
 
 const UNW_FLAG_CHAININFO: u8 = 4;
+const LEAF_ALIGN: u32 = 16;
+const MAX_LEAF: u32 = 0x200;
+const INT3: u8 = 0xcc;
+const RET: u8 = 0xc3;
 
 fn chunk_root(pe: &Pe, begin: u32) -> Option<u32> {
     let mut begin = begin;
@@ -151,7 +155,10 @@ fn chunk_root(pe: &Pe, begin: u32) -> Option<u32> {
         if b != begin {
             return None;
         }
-        let unwind = pe.unwinds[index] as usize;
+        let Some(unwind) = pe.unwinds[index] else {
+            return Some(begin);
+        };
+        let unwind = unwind as usize;
         let flags = *pe.image.get(unwind)? >> 3;
         if flags & UNW_FLAG_CHAININFO == 0 {
             return Some(begin);
@@ -370,20 +377,51 @@ impl<'a> Pe<'a> {
             .collect::<Option<_>>()?;
         entries.retain(|&(begin, end, _)| end > begin && end as usize <= image.len());
         entries.sort_unstable();
-        let functions = entries
-            .iter()
-            .map(|&(begin, end, _)| (begin, end))
-            .collect();
-        let unwinds = entries.iter().map(|&(_, _, unwind)| unwind).collect();
 
-        Some(Self {
+        let mut pe = Self {
             image,
             code,
-            functions,
-            unwinds,
+            functions: Vec::new(),
+            unwinds: Vec::new(),
             calls: OnceCell::new(),
             rdx_leas: OnceCell::new(),
-        })
+        };
+        let mut all: Vec<(u32, u32, Option<u32>)> = entries
+            .iter()
+            .map(|&(begin, end, unwind)| (begin, end, Some(unwind)))
+            .collect();
+        pe.functions = entries.iter().map(|&(begin, end, _)| (begin, end)).collect();
+        all.extend(pe.leaf_functions().into_iter().map(|(begin, end)| (begin, end, None)));
+        all.sort_unstable();
+        pe.functions = all.iter().map(|&(begin, end, _)| (begin, end)).collect();
+        pe.unwinds = all.iter().map(|&(_, _, unwind)| unwind).collect();
+        Some(pe)
+    }
+
+    fn leaf_functions(&self) -> Vec<(u32, u32)> {
+        let mut targets: Vec<u32> = rel32_branches(self, 0xe8)
+            .filter_map(|(_, target)| u32::try_from(target).ok())
+            .filter(|&target| target % LEAF_ALIGN == 0 && self.in_code(target as usize))
+            .filter(|&target| self.function_containing(target).is_none())
+            .filter(|&target| {
+                target
+                    .checked_sub(1)
+                    .and_then(|before| self.image.get(before as usize))
+                    .is_some_and(|&byte| byte == INT3 || byte == RET)
+            })
+            .collect();
+        targets.sort_unstable();
+        targets.dedup();
+        targets
+            .into_iter()
+            .filter_map(|begin| {
+                let instrs = image_function(self.image, begin, MAX_LEAF);
+                let last = instrs.last()?;
+                let ends = matches!(last.mnemonic(), Mnemonic::Ret | Mnemonic::Jmp);
+                let valid = instrs.iter().all(|i| !i.is_invalid());
+                (ends && valid).then(|| (begin, last.next_ip() as u32))
+            })
+            .collect()
     }
 
     fn function_containing(&self, rva: u32) -> Option<(u32, u32)> {
@@ -841,10 +879,10 @@ pub fn find_local_player(pe: &Pe) -> Result<LocalPlayer, ScanError> {
         let Some((index, lookup)) = player_getter(pe, site) else {
             continue;
         };
-        let found = (
-            index,
-            hash_table_offset(pe, lookup, MAX_THUNKS).ok_or(ScanError::NotFound)?,
-        );
+        let Some(table) = hash_table_offset(pe, lookup, MAX_THUNKS) else {
+            continue;
+        };
+        let found = (index, table);
         if player.is_some_and(|p| p != found) {
             return Err(ScanError::Ambiguous(2));
         }
@@ -1373,6 +1411,8 @@ fn group_getter(instrs: &[Instruction]) -> Option<u32> {
     ok.then(|| load_from(load, Register::RCX)).flatten()
 }
 
+pub const UNSCALED: u32 = 0;
+
 pub fn find_interfaces(pe: &Pe) -> Result<Interfaces, ScanError> {
     let mut layouts = Vec::new();
     let mut lookups = Vec::new();
@@ -1471,7 +1511,11 @@ pub fn find_interfaces(pe: &Pe) -> Result<Interfaces, ScanError> {
             })
         })?
     });
-    let ui_scale = one(scales.collect())?;
+    let ui_scale = match one(scales.collect()) {
+        Ok(offset) => offset,
+        Err(ScanError::NotFound) => UNSCALED,
+        Err(error) => return Err(error),
+    };
 
     Ok(Interfaces {
         root,
@@ -2503,6 +2547,11 @@ mod no_panics {
         };
         for_each_archived_build(&mut survey);
         for_each_legacy_build(&mut survey);
+        for (build, row) in &table {
+            for (rule, value) in row {
+                println!("SURVEY {build} {rule} {value}");
+            }
+        }
         let panics: Vec<String> = table
             .iter()
             .flat_map(|(build, row)| {
