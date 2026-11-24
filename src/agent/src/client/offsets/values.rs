@@ -482,6 +482,7 @@ pub struct World {
     pub run_energy: RunEnergy,
     pub lists: ActorLists,
     pub names: ActorNames,
+    pub client: u32,
     pub player: LocalPlayer,
     pub actor: ActorPosition,
 }

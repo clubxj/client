@@ -442,7 +442,7 @@ mod tests {
         for_each_archived_build(|build, pe| {
             let packets = find_packets(pe).unwrap();
             let layouts = find_packet_layouts(pe, &packets).unwrap();
-            let client = find_local_player(pe).unwrap().client;
+            let client = find_client(pe, find_game_state(pe).unwrap()).unwrap();
             let anchors = PacketAnchors {
                 tick_count: find_tick_count(pe, client).ok(),
                 varps: super::super::find_varps(pe).ok(),

@@ -93,7 +93,6 @@ pub struct ActorPosition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LocalPlayer {
-    pub client: u32,
     pub world_view_id: u32,
     pub player_index: u32,
     pub world_views: u32,
@@ -672,6 +671,10 @@ pub fn find_game_state(pe: &Pe) -> Result<u32, ScanError> {
     single(&found)
 }
 
+pub fn find_client(pe: &Pe, game_state: u32) -> Result<u32, ScanError> {
+    client_global(pe, &[game_state])
+}
+
 fn decode_at(pe: &Pe, rva: u32, limit: usize) -> Vec<Instruction> {
     let Some(section) = pe.section_containing(rva as usize) else {
         return Vec::new();
@@ -892,10 +895,7 @@ pub fn find_local_player(pe: &Pe) -> Result<LocalPlayer, ScanError> {
     }
     let (player_index, players) = player.ok_or(ScanError::NotFound)?;
 
-    let client = client_global(pe, &[world_view_id, player_index, manager])?;
-
     Ok(LocalPlayer {
-        client,
         world_view_id,
         player_index,
         world_views,
@@ -1677,12 +1677,13 @@ mod tests {
 
         let game_state = find_game_state(&pe).expect("game state not found");
         println!("game state +{game_state:#x}");
+        let client = find_client(&pe, game_state).expect("client not found");
 
-        let skills = find_skills(&pe, player.client).expect("skills not found");
+        let skills = find_skills(&pe, client).expect("skills not found");
         println!("{skills:x?}");
         assert_eq!(skills.count, 25);
 
-        let tick_count = find_tick_count(&pe, player.client).expect("tick count not found");
+        let tick_count = find_tick_count(&pe, client).expect("tick count not found");
         println!("tick count +{tick_count:#x}");
         let varps = find_varps(&pe).expect("varps not found");
         println!("varps RVA {varps:#x}");
@@ -1721,7 +1722,7 @@ mod tests {
                 next: 0x38
             }
         );
-        let varcs = find_varcs(&pe, player.client).expect("varcs not found");
+        let varcs = find_varcs(&pe, client).expect("varcs not found");
         println!("{varcs:x?}");
         assert_eq!(
             varcs,
@@ -1800,7 +1801,7 @@ mod tests {
         let sprite = find_component_sprite(&pe).expect("component sprite not found");
         println!("component sprite +{sprite:#x}");
         assert_eq!(sprite, 0xc8);
-        let projection = find_projection(&pe, player.client).expect("projection not found");
+        let projection = find_projection(&pe, client).expect("projection not found");
         println!("{projection:x?}");
         let menu = find_menu(&pe).expect("menu not found");
         println!("{menu:x?}");
@@ -1867,7 +1868,7 @@ mod tests {
                 plane: 0x18
             }
         );
-        let minimap = find_minimap(&pe, player.client).expect("minimap not found");
+        let minimap = find_minimap(&pe, client).expect("minimap not found");
         println!("{minimap:x?}");
         assert_eq!(
             minimap,
@@ -1960,7 +1961,7 @@ mod tests {
                 op_flags: 0x40
             })
         );
-        let camera = find_camera(&pe, player.client).expect("camera not found");
+        let camera = find_camera(&pe, client).expect("camera not found");
         println!("{camera:x?}");
         assert_eq!(
             camera,
@@ -1983,7 +1984,7 @@ mod tests {
         let decoration = find_decoration_layout(&pe, &scene).expect("decoration layout not found");
         assert_eq!(find_item_pile(&pe, &decoration), Ok(0x120));
         let local =
-            find_local_projection(&pe, player.client, interfaces.canvas, &projection, &scene)
+            find_local_projection(&pe, client, interfaces.canvas, &projection, &scene)
                 .expect("local projection not found");
         println!("{local:x?}");
         assert_eq!(
@@ -2262,27 +2263,28 @@ mod tests {
     fn finds_every_offset_in_archived_builds() {
         for_each_archived_build(|build, pe| {
             let game_state = found("game state", build, find_game_state(pe));
+            let client = found("client", build, find_client(pe, game_state));
             found("login panel", build, find_login_panel(pe, game_state));
             let interfaces = found("interfaces", build, find_interfaces(pe));
             let player = found("local player", build, find_local_player(pe));
             found("item containers", build, find_item_containers(pe));
-            found("varcs", build, find_varcs(pe, player.client));
+            found("varcs", build, find_varcs(pe, client));
             found("run energy", build, find_run_energy(pe));
             found("actor lists", build, find_actor_lists(pe));
             let names = found("actor names", build, find_actor_names(pe));
             found("component invalidate", build, find_component_invalidate(pe));
             found("component sprite", build, find_component_sprite(pe));
             found("component fields", build, find_component_fields(pe));
-            let projection = found("projection", build, find_projection(pe, player.client));
+            let projection = found("projection", build, find_projection(pe, client));
             let menu = found("menu", build, find_menu(pe));
             found("menu order", build, find_menu_order(pe, &menu));
             let click = found("menu click", build, find_menu_click(pe, &menu));
             found("menu layout", build, find_menu_layout(pe, &click));
             found("selection", build, find_selection(pe, &menu));
-            let minimap = found("minimap", build, find_minimap(pe, player.client));
+            let minimap = found("minimap", build, find_minimap(pe, client));
             found("destination", build, find_destination(pe, minimap.object));
             let ground_items = found("ground items", build, find_ground_items(pe));
-            let tick_count = found("tick count", build, find_tick_count(pe, player.client));
+            let tick_count = found("tick count", build, find_tick_count(pe, client));
             found(
                 "ground item ownership",
                 build,
@@ -2291,10 +2293,10 @@ mod tests {
             found("projectiles", build, find_projectiles(pe));
             found("spot animations", build, find_spot_anims(pe));
             found("chat", build, find_chat(pe));
-            let camera = found("camera", build, find_camera(pe, player.client));
+            let camera = found("camera", build, find_camera(pe, client));
             assert_eq!(camera.yaw, minimap.angle);
             if build.to_string_lossy().contains("e470c533") {
-                found("world select", build, find_world_select(pe, player.client));
+                found("world select", build, find_world_select(pe, client));
             }
             found(
                 "appearance decoder",
@@ -2333,7 +2335,7 @@ mod tests {
             found(
                 "local projection",
                 build,
-                find_local_projection(pe, player.client, interfaces.canvas, &projection, &scene),
+                find_local_projection(pe, client, interfaces.canvas, &projection, &scene),
             );
         });
     }
@@ -2374,7 +2376,12 @@ mod no_panics {
             put("local player", r(&player));
             let game_state = guard(|| find_game_state(pe));
             put("game state", r(&game_state));
-            let client = player.as_ref().ok().map(|p| p.client);
+            let client = game_state
+                .as_ref()
+                .ok()
+                .map(|&g| guard(|| find_client(pe, g)));
+            put("client", client.as_ref().map_or_else(skip, r));
+            let client = client.and_then(|c| c.ok());
             put(
                 "skills",
                 client.map_or_else(skip, |c| r(&guard(|| find_skills(pe, c)))),

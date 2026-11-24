@@ -42,7 +42,7 @@ use super::graphics::{
 };
 use super::offsets::{
     find_actor_lists, find_actor_names, find_actor_path, find_actor_position,
-    find_animation_height, find_appearance_decoder, find_camera, find_chat, find_collision_maps,
+    find_animation_height, find_appearance_decoder, find_camera, find_chat, find_client, find_collision_maps,
     find_component_fields, find_component_invalidate, find_component_sprite,
     find_decoration_layout, find_destination, find_frame, find_game_object_layout, find_game_state,
     find_ground_item_ownership, find_ground_items, find_instance_flag, find_interfaces,
@@ -439,18 +439,14 @@ unsafe fn find_offsets() {
     let path = actor.and_then(|a| found("Actor path", guarded(|| find_actor_path(pe, a.x))));
     let player = found("Local player", guarded(|| find_local_player(pe)));
     let game_state = found("Game state", guarded(|| find_game_state(pe)));
-    let skills = player.and_then(|p| found("Skills", guarded(|| find_skills(pe, p.client))));
-    let tick_count =
-        player.and_then(|p| found("Tick count", guarded(|| find_tick_count(pe, p.client))));
+    let client = game_state.and_then(|state| found("Client", guarded(|| find_client(pe, state))));
+    let skills = client.and_then(|c| found("Skills", guarded(|| find_skills(pe, c))));
+    let tick_count = client.and_then(|c| found("Tick count", guarded(|| find_tick_count(pe, c))));
     let varps = found("Varps", guarded(|| find_varps(pe)));
     let login = game_state
         .and_then(|offset| found("Login panel", guarded(|| find_login_panel(pe, offset))));
-    let login_provider = player.and_then(|p| {
-        found(
-            "Login provider",
-            guarded(|| find_login_provider(pe, p.client)),
-        )
-    });
+    let login_provider =
+        client.and_then(|c| found("Login provider", guarded(|| find_login_provider(pe, c))));
     let interfaces = found("Interfaces", guarded(|| find_interfaces(pe)));
     let sprite =
         interfaces.and_then(|_| found("Component sprite", guarded(|| find_component_sprite(pe))));
@@ -461,8 +457,8 @@ unsafe fn find_offsets() {
     let fields =
         interfaces.and_then(|_| found("Component fields", guarded(|| find_component_fields(pe))));
     let world_select =
-        player.and_then(|p| found("World select", guarded(|| find_world_select(pe, p.client))));
-    let minimap = player.and_then(|p| found("Minimap", guarded(|| find_minimap(pe, p.client))));
+        client.and_then(|c| found("World select", guarded(|| find_world_select(pe, c))));
+    let minimap = client.and_then(|c| found("Minimap", guarded(|| find_minimap(pe, c))));
     let destination =
         minimap.and_then(|m| found("Destination", guarded(|| find_destination(pe, m.object))));
     let ground_items = found("Ground items", guarded(|| find_ground_items(pe)));
@@ -525,34 +521,34 @@ unsafe fn find_offsets() {
         .unwrap_or_default();
     let script_runs = found("Script runs", guarded(|| find_script_runs(pe)));
     let varc_setters = found("Varc setters", guarded(|| find_varc_setters(pe)));
-    let tick = player.zip(tick_count).map(|(p, offset)| (p.client, offset));
+    let tick = client.zip(tick_count);
     let containers = guarded(|| find_item_containers(pe));
     let item_setter = containers.ok().and_then(|c| {
         found("Item setter", guarded(|| find_item_setter(pe, &c))).map(|rule| (rule, c))
     });
-    let camera = player.and_then(|p| found("Camera", guarded(|| find_camera(pe, p.client))));
-    let projection =
-        player.and_then(|p| found("Projection", guarded(|| find_projection(pe, p.client))));
+    let camera = client.and_then(|c| found("Camera", guarded(|| find_camera(pe, c))));
+    let projection = client.and_then(|c| found("Projection", guarded(|| find_projection(pe, c))));
     let scene = projection.and_then(|_| found("Scene", guarded(|| find_scene(pe))));
     let collision =
         scene.and_then(|s| found("Collision maps", guarded(|| find_collision_maps(pe, &s))));
     let instance_flag = found("Instance flag", guarded(|| find_instance_flag(pe)));
-    let local_projection = player.zip(interfaces).zip(projection.zip(scene)).and_then(
-        |((p, i), (projection, scene))| {
+    let local_projection = client.zip(interfaces).zip(projection.zip(scene)).and_then(
+        |((c, i), (projection, scene))| {
             found(
                 "Local projection",
-                guarded(|| find_local_projection(pe, p.client, i.canvas, &projection, &scene)),
+                guarded(|| find_local_projection(pe, c, i.canvas, &projection, &scene)),
             )
         },
     );
-    let world = player.zip(actor).and_then(|(player, actor)| {
+    let world = client.zip(player).zip(actor).and_then(|((client, player), actor)| {
         let world = (|| {
             Ok::<_, (&str, ScanError)>(World {
                 containers: containers.map_err(|e| ("item containers", e))?,
-                varcs: guarded(|| find_varcs(pe, player.client)).map_err(|e| ("varcs", e))?,
+                varcs: guarded(|| find_varcs(pe, client)).map_err(|e| ("varcs", e))?,
                 run_energy: guarded(|| find_run_energy(pe)).map_err(|e| ("run energy", e))?,
                 lists: guarded(|| find_actor_lists(pe)).map_err(|e| ("NPC and player lists", e))?,
                 names: guarded(|| find_actor_names(pe)).map_err(|e| ("actor names", e))?,
+                client,
                 player,
                 actor,
             })
@@ -570,13 +566,12 @@ unsafe fn find_offsets() {
     }
 
     let module_base = image.as_ptr() as u64;
-    let client = player.map_or(0, |p| p.client);
     let mut layout = Layout {
         module_base,
-        client,
+        client: client.unwrap_or(0),
         ..Layout::default()
     };
-    if let Some(offset) = game_state.filter(|_| player.is_some()) {
+    if let Some(offset) = game_state.filter(|_| client.is_some()) {
         layout.found |= part::GAME_STATE;
         layout.game_state = offset;
     }
@@ -709,7 +704,7 @@ unsafe fn find_offsets() {
             focal: m.focal_x,
         };
     }
-    if let Some(i) = interfaces.filter(|_| player.is_some()) {
+    if let (Some(i), Some(client)) = (interfaces, client) {
         let c = i.component;
         layout.found |= part::INTERFACES;
         layout.interfaces = InterfaceLayout {
@@ -840,7 +835,7 @@ unsafe fn find_offsets() {
         layout.found |= part::WORLD;
         layout.world = WorldLayout {
             module_base,
-            client: w.player.client,
+            client: w.client,
             world_views: w.player.world_views,
             world_view_id: w.player.world_view_id,
             base_x: w.actor.base_x,

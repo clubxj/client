@@ -665,7 +665,7 @@ mod tests {
             if !build.to_string_lossy().contains("e470c533") {
                 return;
             }
-            let client = find_local_player(pe).unwrap().client;
+            let client = find_client(pe, find_game_state(pe).unwrap()).unwrap();
             let found = find_world_select(pe, client);
             assert_eq!(
                 found,

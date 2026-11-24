@@ -315,12 +315,9 @@ mod tests {
     #[test]
     fn finds_login_provider_in_archived_builds() {
         for_each_archived_build(|build, pe| {
-            let player = found("local player", build, find_local_player(pe));
-            let provider = found(
-                "login provider",
-                build,
-                find_login_provider(pe, player.client),
-            );
+            let game_state = found("game state", build, find_game_state(pe));
+            let client = found("client", build, find_client(pe, game_state));
+            let provider = found("login provider", build, find_login_provider(pe, client));
             if build.to_string_lossy().contains("c65749a2") {
                 assert_eq!(
                     provider,
