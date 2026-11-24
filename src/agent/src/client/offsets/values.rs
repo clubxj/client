@@ -93,55 +93,71 @@ pub struct Varcs {
     pub kind: u32,
 }
 
-pub fn find_varcs(pe: &Pe, client: u32) -> Result<Varcs, ScanError> {
-    let getter = lua_binding(pe, "getIntegerVarc")?;
-    let instrs = decode_at(pe, getter, 3);
-    let [global, object, jmp, ..] = instrs.as_slice() else {
-        return Err(ScanError::NotFound);
-    };
-    let reads_client =
-        global.is_ip_rel_memory_operand() && global.ip_rel_memory_address() as u32 == client;
-    let object =
-        load_from(object, Register::RAX).filter(|_| object.op0_register() == Register::RCX);
-    let (true, Some(object), Mnemonic::Jmp) = (reads_client, object, jmp.mnemonic()) else {
-        return Err(ScanError::NotFound);
-    };
+const LOOKUP_INSTRS: usize = 24;
+const OBJECT_WINDOW: usize = 8;
 
-    let lookup = decode_at(pe, jmp.near_branch_target() as u32, 24);
-    let begin = lookup
+fn varc_lookup(instrs: &[Instruction]) -> Option<(u32, u32, u32, u32)> {
+    let begin = instrs
         .iter()
-        .find_map(|i| load_from(i, Register::RCX).filter(|_| i.op0_register() == Register::RCX));
-    let end = lookup
+        .find_map(|i| load_from(i, Register::RCX).filter(|_| i.op0_register() == Register::RCX))?;
+    let end = instrs
         .iter()
-        .find_map(|i| load_from(i, Register::RCX).filter(|_| i.op0_register() == Register::RDX));
-    let entry_size = lookup.iter().find_map(|i| {
+        .find_map(|i| load_from(i, Register::RCX).filter(|_| i.op0_register() == Register::RDX))?;
+    let entry_size = instrs.iter().find_map(|i| {
         (i.mnemonic() == Mnemonic::Lea
             && i.memory_base() == Register::RAX
             && i.memory_index() == Register::None)
             .then(|| i.memory_displacement64() as u32)
-    });
-    let kind = lookup.iter().find_map(|i| {
+    })?;
+    let kind = instrs.iter().find_map(|i| {
         (i.mnemonic() == Mnemonic::Cmp
             && i.memory_size() == iced_x86::MemorySize::UInt8
             && i.memory_base() == Register::RAX
             && i.immediate(1) == 1)
             .then(|| i.memory_displacement64() as u32)
-    });
-    let value = lookup
+    })?;
+    let value = instrs
         .iter()
-        .find_map(|i| load_from(i, Register::RAX).filter(|_| i.op0_register() == Register::EAX));
-    match (begin, end, entry_size, kind, value) {
-        (Some(begin), Some(end), Some(entry_size), Some(kind), Some(value)) if end == begin + 8 => {
-            Ok(Varcs {
-                object,
-                begin,
-                entry_size,
-                value,
-                kind,
-            })
-        }
-        _ => Err(ScanError::NotFound),
-    }
+        .find_map(|i| load_from(i, Register::RAX).filter(|_| i.op0_register() == Register::EAX))?;
+    (end == begin + 8).then_some((begin, entry_size, kind, value))
+}
+
+fn client_object_argument(caller: &Caller, client: u32) -> Option<u32> {
+    let before = &caller.instrs[caller.at.saturating_sub(OBJECT_WINDOW)..caller.at];
+    let clients: Vec<Register> = before
+        .iter()
+        .filter(|i| {
+            i.op0_kind() == OpKind::Register
+                && i.is_ip_rel_memory_operand()
+                && i.ip_rel_memory_address() as u32 == client
+        })
+        .map(|i| i.op0_register())
+        .collect();
+    before.iter().rev().find_map(|i| {
+        (i.op0_kind() == OpKind::Register && i.op0_register() == Register::RCX)
+            .then(|| load_from(i, i.memory_base()))
+            .flatten()
+            .filter(|_| clients.contains(&i.memory_base()))
+    })
+}
+
+pub fn find_varcs(pe: &Pe, client: u32) -> Result<Varcs, ScanError> {
+    let (lookup, (begin, entry_size, kind, value)) = single(
+        &call_targets(pe)
+            .into_iter()
+            .filter_map(|target| Some((target, varc_lookup(&decode_at(pe, target, LOOKUP_INSTRS))?)))
+            .collect::<Vec<_>>(),
+    )?;
+    let object = one(callers(pe, lookup)
+        .filter_map(|caller| client_object_argument(&caller, client))
+        .collect())?;
+    Ok(Varcs {
+        object,
+        begin,
+        entry_size,
+        value,
+        kind,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
