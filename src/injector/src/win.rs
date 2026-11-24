@@ -84,8 +84,8 @@ use ipc::{
 };
 
 use crate::{
-    Client, Connection, DisplayName, GameState, Image, ItemIconRequest, LoadReport, Overlay,
-    Layer, Position, Rgba, TotalXp, Widget, dll_version,
+    Client, Connection, DisplayName, GameState, Image, ItemIconRequest, Layer, LoadReport, Overlay,
+    Position, Rgba, TotalXp, Widget, dll_version,
     memory::Memory,
     projection::{self, Terrain},
     state,
@@ -356,7 +356,10 @@ fn versioned_copy(bytes: &[u8], version: &str) -> Result<PathBuf, String> {
         return Ok(copy);
     }
 
-    let partial = dir.join(format!("{MODULE_PREFIX}-{version}.{}.tmp", std::process::id()));
+    let partial = dir.join(format!(
+        "{MODULE_PREFIX}-{version}.{}.tmp",
+        std::process::id()
+    ));
     fs::write(&partial, bytes).map_err(|e| format!("Cannot write {}: {e}", partial.display()))?;
     if let Err(error) = fs::rename(&partial, &copy) {
         let _ = fs::remove_file(&partial);
@@ -547,7 +550,7 @@ pub fn unload(pid: u32) -> Result<(), String> {
         return Ok(());
     }
     let event = open_event(unload_event_name(pid), EVENT_MODIFY_STATE).ok_or(
-        "it's a build from before hot reload, which can't unload. Restart the client once.",
+        "the agent never started listening for unload, either because it's a build from before hot reload or because it didn't find the game window when it loaded. Restart the client once.",
     )?;
     if unsafe { SetEvent(event.0) } == 0 {
         return Err(format!("SetEvent failed: {}", io::Error::last_os_error()));
@@ -925,8 +928,7 @@ pub fn project_from(
     points: &[projection::Point],
     viewpoint: projection::Viewpoint,
 ) -> Result<Vec<[f32; 2]>, String> {
-    project_locally(pid, points, viewpoint, false)
-        .map_err(|why| format!("local projection: {why}"))
+    project_locally(pid, points, viewpoint, false).map_err(|why| format!("local projection: {why}"))
 }
 
 fn decorations(pid: u32) -> Option<Vec<projection::Decoration>> {
@@ -3823,12 +3825,7 @@ pub(crate) fn paint_overlay(
     )
 }
 
-pub fn draw_lines(
-    pid: u32,
-    lines: &[[i32; 4]],
-    color: Rgba,
-    layer: Layer,
-) -> Result<(), String> {
+pub fn draw_lines(pid: u32, lines: &[[i32; 4]], color: Rgba, layer: Layer) -> Result<(), String> {
     with_overlay(
         pid,
         overlay_mode::ON_SERIAL,
@@ -4932,8 +4929,22 @@ unsafe fn draw_stroke(
 ) {
     for shift in 0..STROKE_WIDTH {
         unsafe {
-            draw_line(buf, width, height, [x1 + shift, y1, x2 + shift, y2], color, layer);
-            draw_line(buf, width, height, [x1, y1 + shift, x2, y2 + shift], color, layer);
+            draw_line(
+                buf,
+                width,
+                height,
+                [x1 + shift, y1, x2 + shift, y2],
+                color,
+                layer,
+            );
+            draw_line(
+                buf,
+                width,
+                height,
+                [x1, y1 + shift, x2, y2 + shift],
+                color,
+                layer,
+            );
         }
     }
 }

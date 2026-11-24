@@ -59,7 +59,7 @@ use super::state::{LayoutMap, LAYOUT_MAP};
 use super::unload::HookCall;
 use crate::shared::{
     memory::{memory_manager, try_memory_manager, MemoryManager, MEMORY_MANAGER},
-    sync::event_listener,
+    sync::Events,
 };
 use ipc::input::{
     ACT_MESSAGE, CACHE_MESSAGE, MODIFIERS_MESSAGE, NAME_MESSAGE, OPEN_CONSOLE_MESSAGE,
@@ -1025,8 +1025,13 @@ unsafe fn find_offsets() {
 pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
     let hwnd = lparam as u64;
 
+    let pid = GetCurrentProcessId();
+    let events = Events::create(pid);
+    if events.is_none() {
+        println!("[Agent]: Cannot create the unload and work events, agent can't unload.\r\n");
+    }
+
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let pid = GetCurrentProcessId();
         let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::create_map(pid)));
         match LayoutMap::create(pid) {
             Some(layout) => drop(LAYOUT_MAP.set(layout)),
@@ -1038,12 +1043,13 @@ pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
         hook_wgl_swap_buffers();
         find_offsets();
         super::definitions::start();
-
-        event_listener(pid);
     }));
 
     if result.is_err() {
-        println!("[Agent]: Failed to start, agent is inactive in this client.\r\n");
+        println!("[Agent]: Failed to start, agent is inactive in this client until unloaded.\r\n");
+    }
+    if let Some(events) = events {
+        events.listen();
     }
     0
 }
