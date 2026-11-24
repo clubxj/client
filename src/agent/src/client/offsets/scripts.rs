@@ -105,19 +105,34 @@ fn invalidate_at(pe: &Pe, rva: u32) -> Option<(u32, u32)> {
     Some((rva, holder))
 }
 
+const TEXT_MIN: u32 = 0x80;
+
 pub fn find_component_invalidate(pe: &Pe) -> Result<ComponentInvalidate, ScanError> {
     let case = setter_case(pe, setter_handler(pe)?, SET_TEXT)?;
     let instrs = decode_at(pe, case, 250);
 
-    let mut adds: HashMap<u32, usize> = HashMap::new();
-    for i in &instrs {
-        if i.mnemonic() == Mnemonic::Add
-            && i.op0_kind() == OpKind::Register
-            && i.op0_register().size() == 8
-            && matches!(i.op1_kind(), OpKind::Immediate32to64)
-        {
-            *adds.entry(i.immediate(1) as u32).or_default() += 1;
+    let field_address = |i: &Instruction| {
+        let wide = i.op0_kind() == OpKind::Register && i.op0_register().size() == 8;
+        match i.mnemonic() {
+            Mnemonic::Add if wide && i.op1_kind() == OpKind::Immediate32to64 => {
+                Some(i.immediate(1) as u32)
+            }
+            Mnemonic::Lea
+                if wide
+                    && i.memory_index() == Register::None
+                    && !matches!(
+                        i.memory_base(),
+                        Register::None | Register::RIP | Register::RSP | Register::RBP
+                    ) =>
+            {
+                Some(i.memory_displacement64() as u32).filter(|&d| d >= TEXT_MIN)
+            }
+            _ => None,
         }
+    };
+    let mut adds: HashMap<u32, usize> = HashMap::new();
+    for field in instrs.iter().filter_map(field_address) {
+        *adds.entry(field).or_default() += 1;
     }
     let text = one(adds
         .into_iter()
@@ -126,12 +141,7 @@ pub fn find_component_invalidate(pe: &Pe) -> Result<ComponentInvalidate, ScanErr
         .collect())?;
     let after = instrs
         .iter()
-        .position(|i| {
-            i.mnemonic() == Mnemonic::Add
-                && i.op0_register().size() == 8
-                && i.op1_kind() == OpKind::Immediate32to64
-                && i.immediate(1) as u32 == text
-        })
+        .position(|i| field_address(i) == Some(text))
         .ok_or(ScanError::NotFound)?;
     let found = instrs[after..].windows(3).find_map(|w| {
         let [a, b, call] = w else { return None };

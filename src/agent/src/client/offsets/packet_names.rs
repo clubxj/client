@@ -207,11 +207,13 @@ fn find_varps(
                 if fields.len() != 2 || id == value {
                     return None;
                 }
-                let sets = calls(&case.code).any(|(_, target)| {
-                    *setters
-                        .entry(target)
-                        .or_insert_with(|| loads_global(pe, target, data))
-                });
+                let passes_array = case.code.iter().any(|i| rip_lea(i) == Some(varps));
+                let sets = passes_array
+                    || calls(&case.code).any(|(_, target)| {
+                        *setters
+                            .entry(target)
+                            .or_insert_with(|| loads_global(pe, target, data))
+                    });
                 sets.then(|| NamedPacket {
                     opcode: case.opcode,
                     order: vec![id as u8, value as u8],

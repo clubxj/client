@@ -43,6 +43,7 @@ fn sets_flag(i: &Instruction) -> Option<u32> {
 }
 
 const FLAG_WINDOW: usize = 2;
+const MODEL_RELOAD_WINDOW: usize = 4;
 
 pub fn find_npc_model(pe: &Pe, npc_definition: u32) -> Result<NpcModel, ScanError> {
     let mut found = Vec::new();
@@ -101,13 +102,32 @@ fn model_height(pe: &Pe, get_model: u32, bounding_box: u32) -> Option<(u32, u32)
         .iter()
         .position(|i| sets_flag(i) == Some(bounding_box))?;
     let model = instrs[flag].memory_base();
-    let at = instrs[..flag].iter().position(|i| {
+    let stack_slot = |i: &Instruction, register: Register| {
+        (i.mnemonic() == Mnemonic::Mov
+            && i.op0_kind() == OpKind::Register
+            && i.op0_register() == register
+            && i.op1_kind() == OpKind::Memory
+            && i.memory_base() == Register::RSP)
+            .then(|| i.memory_displacement64())
+    };
+    let spilled = flag
+        .checked_sub(1)
+        .and_then(|before| stack_slot(&instrs[before], model));
+    let holds_model = |at: usize, register: Register| {
+        register == model
+            || spilled.is_some_and(|slot| {
+                instrs[at.saturating_sub(MODEL_RELOAD_WINDOW)..at]
+                    .iter()
+                    .any(|i| stack_slot(i, register) == Some(slot))
+            })
+    };
+    let at = instrs[..flag].iter().enumerate().position(|(at, i)| {
         i.mnemonic() == Mnemonic::Mov
             && i.op0_kind() == OpKind::Register
             && i.op0_register().size() == 4
             && i.op1_kind() == OpKind::Memory
-            && i.memory_base() == model
             && i.memory_index() == Register::None
+            && holds_model(at, i.memory_base())
     })?;
     let height = instrs[at].memory_displacement64() as u32;
     let slot = instrs[at.saturating_sub(3)..at].iter().find_map(|i| {
