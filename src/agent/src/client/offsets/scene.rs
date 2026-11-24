@@ -382,47 +382,77 @@ pub struct DecorationLayout {
     pub y_offset: u32,
 }
 
-pub fn find_decoration_layout(pe: &Pe, scene: &Scene) -> Result<DecorationLayout, ScanError> {
+const DECORATION_WINDOW: usize = 4;
+const SECOND_OFFSET: u32 = 8;
+
+fn object_field(i: &Instruction) -> Option<(Register, u32)> {
+    (i.op1_kind() == OpKind::Memory
+        && i.memory_index() == Register::None
+        && !matches!(
+            i.memory_base(),
+            Register::None | Register::RIP | Register::RSP | Register::RBP
+        ))
+    .then(|| (i.memory_base(), i.memory_displacement64() as u32))
+}
+
+fn offset_adds(instrs: &[Instruction], tag: u32) -> Vec<(u32, u32)> {
+    let adds_field = |i: &Instruction| {
+        (i.mnemonic() == Mnemonic::Add
+            && i.op0_kind() == OpKind::Register
+            && i.op0_register().size() == 4)
+            .then(|| object_field(i))
+            .flatten()
+    };
     let mut found = Vec::new();
-    for &(begin, end) in &pe.functions {
-        let instrs = function_instrs(pe, begin, end);
-        for w in instrs.windows(5) {
-            let (Some((a, base, x_offset)), Some((_, b2, height))) =
-                (mem_load(&w[0], 4), mem_load(&w[1], 4))
-            else {
-                continue;
-            };
-            let adds = |i: &Instruction, reg: Register| {
-                (i.mnemonic() == Mnemonic::Add
+    for (n, add) in instrs.iter().enumerate() {
+        let Some((base, x)) = adds_field(add) else {
+            continue;
+        };
+        if x.checked_add(8).is_none_or(|y| y >= tag) {
+            continue;
+        }
+        let window = &instrs[n.saturating_sub(DECORATION_WINDOW)..(n + DECORATION_WINDOW + 1).min(instrs.len())];
+        let loaded = |register: Register| {
+            window.iter().find_map(|i| {
+                (i.mnemonic() == Mnemonic::Mov
                     && i.op0_kind() == OpKind::Register
-                    && i.op0_register() == reg
-                    && i.op1_kind() == OpKind::Memory
-                    && i.memory_base() == base)
-                    .then(|| i.memory_displacement64() as u32)
-            };
-            let Some(x) = adds(&w[2], a) else { continue };
-            let Some((c, b3, y_offset)) = mem_load(&w[3], 4) else {
-                continue;
-            };
-            let Some(y) = adds(&w[4], c) else { continue };
-            if b2 == base
-                && b3 == base
-                && height == x + 4
-                && y == x + 8
-                && y < scene.tag
-                && y_offset == x_offset + 4
-            {
-                found.push(DecorationLayout {
-                    x,
-                    height,
-                    y,
-                    x_offset,
-                    y_offset,
-                });
-            }
+                    && i.op0_register() == register)
+                    .then(|| object_field(i))
+                    .flatten()
+                    .filter(|&(b, _)| b == base)
+                    .map(|(_, offset)| offset)
+            })
+        };
+        let Some(x_offset) = loaded(add.op0_register()) else {
+            continue;
+        };
+        let y_add = window
+            .iter()
+            .find(|i| adds_field(i) == Some((base, x + 8)));
+        if y_add.is_some_and(|y| loaded(y.op0_register()) == Some(x_offset + 4)) {
+            found.push((x, x_offset));
         }
     }
-    one(found)
+    found
+}
+
+pub fn find_decoration_layout(pe: &Pe, scene: &Scene) -> Result<DecorationLayout, ScanError> {
+    let mut adds = Vec::new();
+    for &(begin, end) in &pe.functions {
+        adds.extend(offset_adds(&function_instrs(pe, begin, end), scene.tag));
+    }
+    let (x, x_offset) = one(adds
+        .iter()
+        .copied()
+        .filter(|&(x, offset)| adds.contains(&(x, offset + SECOND_OFFSET)))
+        .collect())?;
+    Ok(DecorationLayout {
+        x,
+        height: x + 4,
+        y: x + 8,
+        x_offset,
+        y_offset: x_offset + 4,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

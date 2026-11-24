@@ -572,22 +572,24 @@ fn position_in(mins: &[Load], maxs: &[Load]) -> Option<(u32, u32)> {
 }
 
 fn world_base_in(code: &[u8], rva: u32) -> Option<u32> {
-    let subs: Vec<i64> = instructions(code, rva)
+    let subs: Vec<Load> = instructions(code, rva)
         .filter(|i| {
             i.mnemonic() == Mnemonic::Sub
                 && i.op0_kind() == OpKind::Register
                 && i.op1_kind() == OpKind::Memory
-                && i.memory_base() == Register::RAX
                 && i.memory_index() == Register::None
+                && !matches!(i.memory_base(), Register::None | Register::RIP | Register::RSP)
         })
-        .map(|i| i.memory_displacement64() as i64)
+        .map(|i| (i.memory_base(), i.memory_displacement64() as i64))
         .collect();
 
-    let pairs: Vec<i64> = subs
+    let mut pairs: Vec<i64> = subs
         .iter()
-        .copied()
-        .filter(|&d| d >= 0 && subs.contains(&(d + 4)))
+        .filter(|&&(base, d)| d >= 0 && subs.contains(&(base, d + 4)))
+        .map(|&(_, d)| d)
         .collect();
+    pairs.sort_unstable();
+    pairs.dedup();
     match pairs.as_slice() {
         [only] => Some(*only as u32),
         _ => None,
@@ -1086,14 +1088,13 @@ fn login_y_write(instrs: &[Instruction]) -> Option<u32> {
 
 fn panel_x_write(instrs: &[Instruction]) -> Option<u32> {
     const NEG_PANEL_WIDTH: u32 = LOGIN_PANEL_WIDTH.wrapping_neg();
-    let (mut since_subtract, mut since_divide) = (None::<u32>, None::<u32>);
+    let (mut since_subtract, mut halved) = (None::<u32>, false);
 
     for instr in instrs.iter().filter(|i| !i.is_invalid()) {
-        if let Some(n) = since_divide {
+        if halved {
             if let Some((_, global)) = global_store(instr).filter(|&(from, _)| from.size() == 4) {
                 return Some(global);
             }
-            since_divide = (n < 20).then_some(n + 1);
         }
 
         if let Some(n) = since_subtract {
@@ -1101,7 +1102,7 @@ fn panel_x_write(instrs: &[Instruction]) -> Option<u32> {
                 && instr.op1_kind() == OpKind::Immediate8
                 && instr.immediate(1) == 1;
             since_subtract = if halves {
-                since_divide.get_or_insert(0);
+                halved = true;
                 None
             } else {
                 (n < 10).then_some(n + 1)
