@@ -219,7 +219,7 @@ pub fn take_resume() -> Option<BreakPlan> {
         .take()
 }
 
-pub const KINDS: [&str; 10] = [
+pub const KINDS: [&str; 11] = [
     "label",
     "check",
     "number",
@@ -227,6 +227,7 @@ pub const KINDS: [&str; 10] = [
     "choice",
     "list",
     "grid",
+    "tasks",
     "equipment",
     "inventory",
     "prayer",
@@ -610,6 +611,237 @@ impl Grid {
     }
 }
 
+pub const MAX_TASKS: usize = 50;
+pub const TASK_FIELD_KINDS: [&str; 4] = ["check", "number", "text", "choice"];
+const TASK_FIELD_REFUSED: [&str; 5] = ["visible_when", "enabled_by", "disabled_by", "above", "row"];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskType {
+    pub id: String,
+    pub label: String,
+    pub fields: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Task {
+    pub kind: usize,
+    pub values: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tasks {
+    pub types: Vec<TaskType>,
+    pub defaults: Vec<Task>,
+    pub max: usize,
+}
+
+pub fn number_value(n: f64) -> Value {
+    if n.fract() == 0.0 && n.abs() < 9e15 {
+        json!(n as i64)
+    } else {
+        json!(n)
+    }
+}
+
+pub fn accepts(field: &Value, value: &Value) -> bool {
+    match kind(field) {
+        "check" => value.is_boolean(),
+        "number" => value.as_f64().is_some_and(|n| {
+            let (low, high) = number_bounds(&Value::Null, field, |_| None);
+            let integer = field
+                .get("integer")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            low <= n && n <= high && (!integer || n.fract() == 0.0)
+        }),
+        "choice" => value
+            .as_str()
+            .is_some_and(|s| options(field).iter().any(|o| o == s)),
+        _ => value.is_string(),
+    }
+}
+
+fn check_task_field(field: &Value) -> Result<(), String> {
+    let kind = kind(field);
+    if !TASK_FIELD_KINDS.contains(&kind) {
+        return Err(format!(
+            "a task field is one of {}",
+            TASK_FIELD_KINDS.join(", ")
+        ));
+    }
+    match id(field) {
+        None => return Err("needs an id".into()),
+        Some("type") => return Err("`type` names the task, so no field can use it".into()),
+        Some(_) => {}
+    }
+    if let Some(key) = TASK_FIELD_REFUSED
+        .iter()
+        .find(|key| field.get(**key).is_some())
+    {
+        return Err(format!("task fields don't take `{key}`"));
+    }
+    if kind == "choice" && options(field).is_empty() {
+        return Err("a choice needs options".into());
+    }
+    if field.get("box_first").is_some()
+        && !(kind == "number" && field.get("box_first").is_some_and(Value::is_boolean))
+    {
+        return Err("`box_first` is true or false, on a number".into());
+    }
+    if !default_value(field).is_some_and(|value| accepts(field, &value)) {
+        return Err("its default is outside its range".into());
+    }
+    Ok(())
+}
+
+impl TaskType {
+    fn parse(row: &Value) -> Result<Self, String> {
+        let id = text_of(row, "id")?.ok_or("needs an id")?;
+        let fields = match row.get("fields") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(fields)) => fields.clone(),
+            Some(_) => return Err("`fields` is a list".into()),
+        };
+        for (i, field) in fields.iter().enumerate() {
+            check_task_field(field).map_err(|e| format!("field {}: {e}", i + 1))?;
+        }
+        if has_repeats(fields.iter().filter_map(self::id).collect()) {
+            return Err("two fields share an id".into());
+        }
+        Ok(Self {
+            id: id.to_owned(),
+            label: text_of(row, "label")?.unwrap_or(id).to_owned(),
+            fields,
+        })
+    }
+}
+
+impl Tasks {
+    pub fn parse(field: &Value) -> Result<Self, String> {
+        let Some(types) = field.get("types").and_then(Value::as_array) else {
+            return Err("a task list needs `types`, each with an id".into());
+        };
+        let types = types
+            .iter()
+            .enumerate()
+            .map(|(i, row)| TaskType::parse(row).map_err(|e| format!("type {}: {e}", i + 1)))
+            .collect::<Result<Vec<_>, _>>()?;
+        if types.is_empty() {
+            return Err("a task list needs `types`, each with an id".into());
+        }
+        if has_repeats(types.iter().map(|t| &t.id).collect()) {
+            return Err("two types share an id".into());
+        }
+        let max = match field.get("max") {
+            None | Some(Value::Null) => MAX_TASKS,
+            Some(max) => max
+                .as_u64()
+                .filter(|m| (1..=MAX_TASKS as u64).contains(m))
+                .ok_or(format!("`max` is a whole number from 1 to {MAX_TASKS}"))?
+                as usize,
+        };
+        let mut tasks = Self {
+            types,
+            defaults: Vec::new(),
+            max,
+        };
+        let defaults = match field.get("default") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(rows)) => rows
+                .iter()
+                .enumerate()
+                .map(|(i, row)| {
+                    tasks
+                        .given(row)
+                        .map_err(|e| format!("default task {}: {e}", i + 1))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            Some(_) => return Err("`default` is a list of tasks".into()),
+        };
+        if defaults.len() > max {
+            return Err("`default` holds more tasks than `max`".into());
+        }
+        tasks.defaults = defaults;
+        Ok(tasks)
+    }
+
+    fn given(&self, row: &Value) -> Result<Task, String> {
+        let Some(row) = row.as_object() else {
+            return Err("a task is an object with a `type`".into());
+        };
+        let type_id = row
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or("needs a `type`")?;
+        let kind = self
+            .types
+            .iter()
+            .position(|t| t.id == type_id)
+            .ok_or_else(|| format!("\"{type_id}\" is not a type"))?;
+        for (key, value) in row.iter().filter(|(key, _)| *key != "type") {
+            let field = self.types[kind]
+                .fields
+                .iter()
+                .find(|f| id(f) == Some(key))
+                .ok_or_else(|| format!("`{key}` is not a field of \"{type_id}\""))?;
+            if !accepts(field, value) {
+                return Err(format!("`{key}` is not a value its field takes"));
+            }
+        }
+        Ok(self.fill(kind, row))
+    }
+
+    fn fill(&self, kind: usize, given: &Map<String, Value>) -> Task {
+        let values = self.types[kind]
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let id = id(field)?;
+                let value = given
+                    .get(id)
+                    .filter(|value| accepts(field, value))
+                    .cloned()
+                    .or_else(|| default_value(field))?;
+                Some((id.to_owned(), value))
+            })
+            .collect();
+        Task { kind, values }
+    }
+
+    pub fn fresh(&self, kind: usize) -> Task {
+        self.fill(kind, &Map::new())
+    }
+
+    pub fn picked(&self, saved: Option<&Value>) -> Vec<Task> {
+        let Some(Value::Array(rows)) = saved else {
+            return self.defaults.clone();
+        };
+        rows.iter()
+            .filter_map(|row| {
+                let row = row.as_object()?;
+                let type_id = row.get("type")?.as_str()?;
+                let kind = self.types.iter().position(|t| t.id == type_id)?;
+                Some(self.fill(kind, row))
+            })
+            .take(self.max)
+            .collect()
+    }
+
+    pub fn value(&self, tasks: &[Task]) -> Value {
+        Value::Array(
+            tasks
+                .iter()
+                .map(|task| {
+                    let mut row =
+                        Map::from_iter([("type".to_owned(), json!(self.types[task.kind].id))]);
+                    row.extend(task.values.clone());
+                    Value::Object(row)
+                })
+                .collect(),
+        )
+    }
+}
+
 pub fn enabled_by(field: &Value) -> Option<&str> {
     field.get("enabled_by").and_then(Value::as_str)
 }
@@ -677,7 +909,10 @@ pub fn number_bounds(
     field: &Value,
     value_of: impl Fn(&str) -> Option<f64>,
 ) -> (f64, f64) {
-    let integer = field.get("integer").and_then(Value::as_bool).unwrap_or(false);
+    let integer = field
+        .get("integer")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut low = field.get("min").and_then(Value::as_f64).unwrap_or(f64::MIN);
     let mut high = field.get("max").and_then(Value::as_f64).unwrap_or(f64::MAX);
     if let Some((other, percent)) = above(field)
@@ -794,6 +1029,9 @@ pub fn validate(spec: &Value) -> Result<(), String> {
         if kind == "grid" {
             Grid::parse(field).map_err(|e| format!("field \"{id}\": {e}"))?;
         }
+        if kind == "tasks" {
+            Tasks::parse(field).map_err(|e| format!("field \"{id}\": {e}"))?;
+        }
         if field.get("required").is_some() && !matches!(kind, "equipment" | "inventory") {
             return Err(format!(
                 "field \"{id}\": only equipment and inventory fields take `required`"
@@ -835,6 +1073,9 @@ pub fn default_value(field: &Value) -> Option<Value> {
         "grid" => Grid::parse(field)
             .ok()
             .map(|grid| grid.value(&grid.defaults())),
+        "tasks" => Tasks::parse(field)
+            .ok()
+            .map(|tasks| tasks.value(&tasks.defaults)),
         "list" => Some(Value::Object(
             items(field)
                 .into_iter()
@@ -1145,6 +1386,98 @@ mod tests {
         ] {
             assert!(
                 validate(&json!({ "fields": [grid(bad.clone())] })).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    fn task_list(extra: Value) -> Value {
+        let mut field = json!({
+            "id": "tasks",
+            "kind": "tasks",
+            "types": [
+                { "id": "chop", "label": "Chop", "fields": [
+                    { "id": "tree", "kind": "choice", "options": ["Oak", "Yew"], "default": "Yew" },
+                    { "id": "logs", "kind": "number", "default": 0, "min": 0, "max": 100, "integer": true }
+                ] },
+                { "id": "bank" }
+            ],
+            "default": [{ "type": "chop", "tree": "Oak" }, { "type": "bank" }]
+        });
+        field
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        field
+    }
+
+    #[test]
+    fn task_lists_fill_defaults_and_drop_what_no_longer_fits() {
+        let field = task_list(json!({}));
+        assert_eq!(validate(&json!({ "fields": [field.clone()] })), Ok(()));
+        assert_eq!(
+            default_value(&field),
+            Some(json!([{ "type": "chop", "tree": "Oak", "logs": 0 }, { "type": "bank" }]))
+        );
+        let tasks = Tasks::parse(&field).unwrap();
+        let saved = json!([
+            { "type": "bank" },
+            { "type": "gone" },
+            { "type": "chop", "tree": "Maple", "logs": 50 },
+            { "type": "chop", "logs": 101 },
+            "nonsense"
+        ]);
+        assert_eq!(
+            tasks.value(&tasks.picked(Some(&saved))),
+            json!([
+                { "type": "bank" },
+                { "type": "chop", "tree": "Yew", "logs": 50 },
+                { "type": "chop", "tree": "Yew", "logs": 0 }
+            ])
+        );
+        assert_eq!(tasks.picked(Some(&json!([]))), []);
+        assert_eq!(tasks.picked(None), tasks.defaults);
+        let capped = Tasks::parse(&task_list(json!({ "max": 2 }))).unwrap();
+        assert_eq!(
+            capped
+                .picked(Some(
+                    &json!([{ "type": "bank" }, { "type": "bank" }, { "type": "bank" }])
+                ))
+                .len(),
+            2
+        );
+        assert_eq!(number_value(3.0), json!(3));
+        assert_eq!(number_value(2.5), json!(2.5));
+    }
+
+    #[test]
+    fn task_list_mistakes_are_refused() {
+        let chop =
+            |fields: Value| json!({ "types": [{ "id": "chop", "fields": fields }], "default": [] });
+        for bad in [
+            json!({ "types": [] }),
+            json!({ "types": [{ "id": "a" }, { "id": "a" }] }),
+            json!({ "types": [{ "label": "No id" }] }),
+            json!({ "max": 0 }),
+            json!({ "max": 51 }),
+            json!({ "max": 1 }),
+            json!({ "default": [{ "type": "gone" }] }),
+            json!({ "default": [{ "type": "chop", "tree": "Maple" }] }),
+            json!({ "default": [{ "type": "chop", "axe": "Rune" }] }),
+            json!({ "default": [{ "tree": "Oak" }] }),
+            json!({ "default": { "type": "chop" } }),
+            chop(json!([{ "id": "type", "kind": "check" }])),
+            chop(json!([{ "id": "a", "kind": "list", "items": [{ "id": "x" }] }])),
+            chop(json!([{ "id": "a", "kind": "check" }, { "id": "a", "kind": "text" }])),
+            chop(json!([{ "id": "a", "kind": "choice" }])),
+            chop(json!([{ "id": "a", "kind": "number", "default": 5, "max": 4 }])),
+            chop(
+                json!([{ "id": "a", "kind": "check", "visible_when": { "id": "b", "equals": true } }]),
+            ),
+            chop(json!([{ "kind": "check" }])),
+        ] {
+            assert!(
+                validate(&json!({ "fields": [task_list(bad.clone())] })).is_err(),
                 "{bad}"
             );
         }

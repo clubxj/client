@@ -750,6 +750,11 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             let run = run_in(&mut app.runs, Some(id)).expect("just added");
             run.form = Some(crate::form::Form::new(fakes::grid_spec(), None));
         }),
+        ("run-tasks", |app| {
+            let id = fakes::add_run(app, None, true);
+            let run = run_in(&mut app.runs, Some(id)).expect("just added");
+            run.form = Some(crate::form::Form::new(fakes::tasks_spec(), None));
+        }),
         ("run-equipment", |app| {
             let id = fakes::running(app, ToolsTab::Equipment);
             fakes::open_layouts(app, id);
@@ -956,6 +961,30 @@ mod fakes {
                 { "kind": "grid", "id": "loot", "label": "Item", "colors": false, "default": "keep",
                   "columns": [{ "id": "keep", "label": "Keep" }, { "id": "drop", "label": "Drop" }],
                   "items": [{ "id": "bones", "label": "Bones" }, { "id": "coins", "label": "Coins" }, { "id": "herbs", "label": "Herbs", "default": "drop" }] }
+            ]
+        })
+    }
+
+    pub(super) fn tasks_spec() -> serde_json::Value {
+        serde_json::json!({
+            "fields": [
+                { "kind": "tasks", "id": "tasks", "label": "Tasks, in order",
+                  "types": [
+                      { "id": "chop", "label": "Chop logs", "fields": [
+                          { "id": "tree", "kind": "choice", "label": "Tree", "options": ["Oak", "Willow", "Yew"] },
+                          { "id": "logs", "kind": "number", "label": "Logs (0 is unlimited)", "default": 0, "min": 0, "max": 10000, "integer": true }
+                      ] },
+                      { "id": "fletch", "label": "Fletch", "fields": [
+                          { "id": "string", "kind": "check", "label": "String the bows", "default": true }
+                      ] },
+                      { "id": "sell", "label": "Sell at the shop" }
+                  ],
+                  "default": [
+                      { "type": "chop", "tree": "Yew", "logs": 500 },
+                      { "type": "fletch" },
+                      { "type": "chop" },
+                      { "type": "sell" }
+                  ] }
             ]
         })
     }

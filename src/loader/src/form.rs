@@ -56,7 +56,13 @@ pub enum FieldValue {
     Text(String),
     List(Vec<(String, String, bool)>),
     Grid(GridValue),
+    Tasks(TasksValue),
     Layout(Option<String>),
+}
+
+pub struct TasksValue {
+    tasks: spec_form::Tasks,
+    picked: Vec<spec_form::Task>,
 }
 
 pub struct GridValue {
@@ -101,8 +107,7 @@ pub enum Outcome {
 fn collect_one(value: &FieldValue) -> Value {
     match value {
         FieldValue::Check(b) => json!(b),
-        FieldValue::Number(n) if n.fract() == 0.0 && n.abs() < 9e15 => json!(*n as i64),
-        FieldValue::Number(n) => json!(n),
+        FieldValue::Number(n) => spec_form::number_value(*n),
         FieldValue::Text(s) => json!(s),
         FieldValue::List(rows) => Value::Object(
             rows.iter()
@@ -110,6 +115,7 @@ fn collect_one(value: &FieldValue) -> Value {
                 .collect(),
         ),
         FieldValue::Grid(value) => value.grid.value(&value.picked),
+        FieldValue::Tasks(value) => value.tasks.value(&value.picked),
         FieldValue::Layout(name) => json!(name),
     }
 }
@@ -140,6 +146,13 @@ fn value_of(field: &Value, saved: Option<&Value>) -> Option<FieldValue> {
             picked: grid.picked(saved),
             grid,
             query: String::new(),
+        }));
+    }
+    if spec_form::kind(field) == "tasks" {
+        let tasks = spec_form::Tasks::parse(field).ok()?;
+        return Some(FieldValue::Tasks(TasksValue {
+            picked: tasks.picked(saved),
+            tasks,
         }));
     }
     let default = spec_form::default_value(field)?;
@@ -272,7 +285,10 @@ impl Form {
             ..
         } = self;
         let fields = spec_form::fields(spec);
-        let columns = spec.get("columns").and_then(Value::as_bool).unwrap_or(false);
+        let columns = spec
+            .get("columns")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let gaps = Gaps {
             row: spec_form::row_gap(spec).map_or(ROW_GAP, |g| g as f32),
             heading: spec_form::heading_gap(spec).map_or(HEADING_GAP, |g| g as f32),
@@ -283,6 +299,7 @@ impl Form {
             layouts,
             rules,
             gaps,
+            in_task: false,
         };
         if !columns {
             return show_fields(fields, values, &mut place, window, cx).into_any_element();
@@ -309,6 +326,8 @@ impl Form {
 
 pub type WithForm = Rc<dyn Fn(&mut App, &mut dyn FnMut(&mut Form))>;
 
+type Change = Rc<dyn Fn(&mut App, &mut dyn FnMut(&mut FieldValue))>;
+
 pub struct FormUi {
     with: WithForm,
     numbers: HashMap<String, NumberField>,
@@ -324,16 +343,16 @@ impl FormUi {
         }
     }
 
-    fn change(&self, id: &str) -> impl Fn(&mut App, &mut dyn FnMut(&mut FieldValue)) + 'static {
+    fn change(&self, id: &str) -> Change {
         let (with, id) = (self.with.clone(), id.to_owned());
-        move |cx, change| {
+        Rc::new(move |cx, change| {
             with(cx, &mut |form| {
                 if let Some(value) = form.values.get_mut(&id) {
                     change(value);
                 }
                 form.fit_numbers();
             })
-        }
+        })
     }
 }
 
@@ -343,6 +362,7 @@ struct Place<'a> {
     layouts: &'a ScriptLayouts,
     rules: &'a KindRules,
     gaps: Gaps,
+    in_task: bool,
 }
 
 fn visible(field: &Value, values: &HashMap<String, FieldValue>) -> bool {
@@ -412,8 +432,10 @@ fn show_field(
     let usable = spec_form::enabled_by(field).is_none_or(checked)
         && !spec_form::disabled_by(field).is_some_and(checked);
     let bounds = number_bounds(place.spec, field, values);
-    let value = spec_form::id(field).and_then(|id| values.get_mut(id));
-    field_ui(field, value, bounds, usable, place, window, cx)
+    let id = spec_form::id(field).unwrap_or_default();
+    let change = place.ui.change(id);
+    let value = values.get_mut(id);
+    field_ui(field, value, bounds, usable, id, change, place, window, cx)
 }
 
 fn text(label: &str, usable: bool) -> Div {
@@ -422,11 +444,14 @@ fn text(label: &str, usable: bool) -> Div {
         .child(label.to_owned())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn field_ui(
     field: &Value,
     value: Option<&mut FieldValue>,
     bounds: (f64, f64),
     usable: bool,
+    key: &str,
+    change: Change,
     place: &mut Place,
     window: &mut Window,
     cx: &mut App,
@@ -442,13 +467,13 @@ fn field_ui(
     let element = match (spec_form::kind(field), value) {
         ("label", _) => match spec_form::heading(field) {
             Some(1) => widgets::heading(label.to_owned()),
-            Some(_) => widgets::strong(label.to_owned()).text_size((theme::BODY + theme::HEADING) / 2.0),
+            Some(_) => {
+                widgets::strong(label.to_owned()).text_size((theme::BODY + theme::HEADING) / 2.0)
+            }
             None => text(label, usable),
         }
         .into_any_element(),
         ("list", Some(FieldValue::List(rows))) => {
-            let change = place.ui.change(&id);
-            let change = Rc::new(change);
             let list = rows.iter().enumerate().fold(
                 div().flex().flex_col(),
                 |list, (i, (_, row_label, on))| {
@@ -500,34 +525,37 @@ fn field_ui(
                 .into_any_element()
         }
         ("grid", Some(FieldValue::Grid(value))) => {
-            grid_ui(&id, label, value, usable, place, window, cx)
+            grid_ui(&id, label, value, usable, change, place, window, cx)
         }
-        ("check", Some(FieldValue::Check(on))) => {
-            let change = place.ui.change(&id);
-            fields::checkbox(
-                format!("form-check-{id}"),
-                label.to_owned(),
-                *on,
-                usable,
-                move |on, cx| {
-                    change(cx, &mut |value| {
-                        if let FieldValue::Check(b) = value {
-                            *b = on;
-                        }
-                    })
-                },
-            )
-            .into_any_element()
+        ("tasks", Some(FieldValue::Tasks(value))) => {
+            tasks_ui(&id, label, value, usable, change, place, window, cx)
         }
+        ("check", Some(FieldValue::Check(on))) => fields::checkbox(
+            format!("form-check-{key}"),
+            label.to_owned(),
+            *on,
+            usable,
+            move |on, cx| {
+                change(cx, &mut |value| {
+                    if let FieldValue::Check(b) = value {
+                        *b = on;
+                    }
+                })
+            },
+        )
+        .into_any_element(),
         ("number", Some(FieldValue::Number(n))) => {
             let range = Range::new(bounds.0..=bounds.1);
-            let range = if field.get("integer").and_then(Value::as_bool).unwrap_or(false) {
+            let range = if field
+                .get("integer")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
                 range.integer()
             } else {
                 number("step").map_or(range, |step| range.step(step))
             };
-            let change = place.ui.change(&id);
-            let input = place.ui.numbers.entry(id.clone()).or_insert_with(|| {
+            let input = place.ui.numbers.entry(key.to_owned()).or_insert_with(|| {
                 NumberField::new(
                     range,
                     false,
@@ -555,7 +583,6 @@ fn field_ui(
             .into_any_element()
         }
         ("choice", Some(FieldValue::Text(selected))) => {
-            let change = Rc::new(place.ui.change(&id));
             let picks = spec_form::options(field)
                 .into_iter()
                 .map(|option| {
@@ -572,12 +599,18 @@ fn field_ui(
                 .collect();
             div()
                 .flex()
-                .flex_col()
-                .items_start()
-                .gap(theme::LINE_GAP)
-                .when(!label.is_empty(), |this| this.child(text(&with_colon(label), usable)))
+                .map(|this| {
+                    if place.in_task {
+                        this.items_center().gap(theme::ITEM_GAP)
+                    } else {
+                        this.flex_col().items_start().gap(theme::LINE_GAP)
+                    }
+                })
+                .when(!label.is_empty(), |this| {
+                    this.child(text(&with_colon(label), usable))
+                })
                 .child(fields::select(
-                    format!("form-choice-{id}"),
+                    format!("form-choice-{key}"),
                     selected.clone(),
                     picks,
                     usable,
@@ -586,8 +619,7 @@ fn field_ui(
                 .into_any_element()
         }
         (_, Some(FieldValue::Text(value))) => {
-            let change = place.ui.change(&id);
-            let input = place.ui.texts.entry(id.clone()).or_insert_with(|| {
+            let input = place.ui.texts.entry(key.to_owned()).or_insert_with(|| {
                 TextField::new(
                     "",
                     move |typed, cx| {
@@ -612,7 +644,6 @@ fn field_ui(
         }
         (_, Some(FieldValue::Layout(chosen))) => {
             let kind = layout_kind(field)?;
-            let change = Rc::new(place.ui.change(&id));
             let picker = layouts::picker(
                 kind,
                 place.layouts,
@@ -634,7 +665,11 @@ fn field_ui(
                 .items_start()
                 .gap(theme::LINE_GAP)
                 .child(text(
-                    &with_colon(if label.is_empty() { kind.label() } else { label }),
+                    &with_colon(if label.is_empty() {
+                        kind.label()
+                    } else {
+                        label
+                    }),
                     usable,
                 ))
                 .child(picker)
@@ -654,21 +689,25 @@ fn grid_radio(color: Option<Rgba>, selected: bool, open: bool) -> Div {
         .rounded_full();
     match (selected, color) {
         (true, Some(color)) => ring.bg(color),
-        (true, None) => ring
-            .border_1()
-            .border_color(theme::FG)
-            .child(div().size(px(GRID_RADIO / 2.0)).rounded_full().bg(theme::FG)),
+        (true, None) => ring.border_1().border_color(theme::FG).child(
+            div()
+                .size(px(GRID_RADIO / 2.0))
+                .rounded_full()
+                .bg(theme::FG),
+        ),
         (false, _) => ring
             .border_1()
             .border_color(theme::alpha(theme::COMMENT, if open { 1.0 } else { 0.35 })),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn grid_ui(
     id: &str,
     label: &str,
     value: &GridValue,
     usable: bool,
+    change: Change,
     place: &mut Place,
     window: &mut Window,
     cx: &mut App,
@@ -678,7 +717,6 @@ fn grid_ui(
         picked,
         query,
     } = value;
-    let change = Rc::new(place.ui.change(id));
     let set = {
         let change = change.clone();
         move |rows: Vec<usize>, column: usize, cx: &mut App| {
@@ -722,7 +760,12 @@ fn grid_ui(
         .map(|c| grid.count(picked, c))
         .collect();
     let color = |c: usize| grid.columns[c].color.map(gpui_kit::rgb);
-    let small = |text: String| div().text_size(theme::SMALL).text_color(theme::COMMENT).child(text);
+    let small = |text: String| {
+        div()
+            .text_size(theme::SMALL)
+            .text_color(theme::COMMENT)
+            .child(text)
+    };
     let header = grid.columns.iter().enumerate().fold(
         div()
             .flex()
@@ -767,54 +810,59 @@ fn grid_ui(
             )
         },
     );
-    let rows = shown.iter().enumerate().fold(div().flex().flex_col(), |rows, (n, &i)| {
-        let item = &grid.items[i];
-        let name = div()
-            .flex()
-            .flex_1()
-            .min_w_0()
-            .items_baseline()
-            .gap(px(6.0))
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .child(item.label.clone())
-            .when_some(item.detail.clone(), |this, detail| this.child(small(detail)));
-        let row = grid.columns.iter().enumerate().fold(
-            div()
+    let rows = shown
+        .iter()
+        .enumerate()
+        .fold(div().flex().flex_col(), |rows, (n, &i)| {
+            let item = &grid.items[i];
+            let name = div()
                 .flex()
-                .items_center()
-                .h(theme::ROW_HEIGHT)
-                .px(px(6.0))
-                .when(n % 2 == 1, |this| this.bg(theme::BG_FLOAT))
-                .when(!usable, |this| this.text_color(theme::COMMENT))
-                .child(name),
-            |row, (c, column)| {
-                let selected = picked[i] == c;
-                let open = usable && column.max.is_none_or(|max| counts[c] < max);
-                let set = set.clone();
-                row.child(
-                    div()
-                        .id(format!("form-grid-{id}-{i}-{c}"))
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .justify_center()
-                        .w(px(GRID_CELL_WIDTH))
-                        .h(theme::ROW_HEIGHT - px(4.0))
-                        .border_1()
-                        .border_color(theme::alpha(theme::BLUE, 0.0))
-                        .when(selected, |this| this.bg(theme::BG_HL))
-                        .child(grid_radio(color(c), selected, open))
-                        .when(open && !selected, |this| {
-                            this.cursor_pointer()
-                                .hover(|style| style.border_color(theme::BLUE))
-                                .on_click(move |_, _, cx| set(vec![i], c, cx))
-                        }),
-                )
-            },
-        );
-        rows.child(row)
-    });
+                .flex_1()
+                .min_w_0()
+                .items_baseline()
+                .gap(px(6.0))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(item.label.clone())
+                .when_some(item.detail.clone(), |this, detail| {
+                    this.child(small(detail))
+                });
+            let row = grid.columns.iter().enumerate().fold(
+                div()
+                    .flex()
+                    .items_center()
+                    .h(theme::ROW_HEIGHT)
+                    .px(px(6.0))
+                    .when(n % 2 == 1, |this| this.bg(theme::BG_FLOAT))
+                    .when(!usable, |this| this.text_color(theme::COMMENT))
+                    .child(name),
+                |row, (c, column)| {
+                    let selected = picked[i] == c;
+                    let open = usable && column.max.is_none_or(|max| counts[c] < max);
+                    let set = set.clone();
+                    row.child(
+                        div()
+                            .id(format!("form-grid-{id}-{i}-{c}"))
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .w(px(GRID_CELL_WIDTH))
+                            .h(theme::ROW_HEIGHT - px(4.0))
+                            .border_1()
+                            .border_color(theme::alpha(theme::BLUE, 0.0))
+                            .when(selected, |this| this.bg(theme::BG_HL))
+                            .child(grid_radio(color(c), selected, open))
+                            .when(open && !selected, |this| {
+                                this.cursor_pointer()
+                                    .hover(|style| style.border_color(theme::BLUE))
+                                    .on_click(move |_, _, cx| set(vec![i], c, cx))
+                            }),
+                    )
+                },
+            );
+            rows.child(row)
+        });
     let rows = if shown.is_empty() {
         rows.child(widgets::weak("No matches").px(px(6.0)).py(px(4.0)))
     } else {
@@ -862,4 +910,250 @@ fn grid_ui(
                 .when_some(grid.note.clone(), |this, note| this.child(small(note))),
         )
         .into_any_element()
+}
+
+type EditTasks = Rc<dyn Fn(&mut App, &dyn Fn(&spec_form::Tasks, &mut Vec<spec_form::Task>))>;
+
+#[allow(clippy::too_many_arguments)]
+fn task_field(
+    id: &str,
+    row: usize,
+    task: &spec_form::Task,
+    type_id: &str,
+    field: &Value,
+    usable: bool,
+    change: &Change,
+    place: &mut Place,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    let field_id = spec_form::id(field)?.to_owned();
+    let mut current = value_of(field, task.values.get(&field_id))?;
+    let key = format!("{id}/{row}/{type_id}/{field_id}");
+    let kind = task.kind;
+    let (change, owned) = (change.clone(), field.clone());
+    let change: Change = Rc::new(move |cx, apply| {
+        change(cx, &mut |value| {
+            if let FieldValue::Tasks(value) = value
+                && let Some(task) = value.picked.get_mut(row)
+                && task.kind == kind
+                && let Some(mut current) = value_of(&owned, task.values.get(&field_id))
+            {
+                apply(&mut current);
+                task.values.insert(field_id.clone(), collect_one(&current));
+            }
+        })
+    });
+    let bounds = spec_form::number_bounds(&Value::Null, field, |_| None);
+    place.in_task = true;
+    let element = field_ui(
+        field,
+        Some(&mut current),
+        bounds,
+        usable,
+        &key,
+        change,
+        place,
+        window,
+        cx,
+    );
+    place.in_task = false;
+    element
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tasks_ui(
+    id: &str,
+    label: &str,
+    value: &TasksValue,
+    usable: bool,
+    change: Change,
+    place: &mut Place,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let TasksValue { tasks, picked } = value;
+    let edit: EditTasks = {
+        let change = change.clone();
+        Rc::new(move |cx, edit| {
+            change(cx, &mut |value| {
+                if let FieldValue::Tasks(value) = value {
+                    edit(&value.tasks, &mut value.picked);
+                }
+            })
+        })
+    };
+    let count = picked.len();
+    let button = |name: &str,
+                  row: usize,
+                  text: &'static str,
+                  enabled: bool,
+                  act: fn(&mut Vec<spec_form::Task>, usize)| {
+        let edit = edit.clone();
+        widgets::button(
+            format!("form-task-{name}-{id}-{row}"),
+            text,
+            usable && enabled,
+            move |_, _, cx| edit(cx, &|_, picked| act(picked, row)),
+        )
+    };
+    let mut rows = div().flex().flex_col();
+    for (i, task) in picked.iter().enumerate() {
+        let kind = &tasks.types[task.kind];
+        let type_picks = tasks
+            .types
+            .iter()
+            .enumerate()
+            .map(|(k, other)| {
+                let edit = edit.clone();
+                fields::Pick::new(other.label.clone(), k == task.kind, move |cx| {
+                    edit(cx, &|tasks, picked| {
+                        if let Some(task) = picked.get_mut(i)
+                            && task.kind != k
+                        {
+                            *task = tasks.fresh(k);
+                        }
+                    })
+                })
+            })
+            .collect();
+        let settings = kind.fields.iter().fold(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .flex_wrap()
+                .items_center()
+                .gap_x(px(place.gaps.row))
+                .gap_y(px(FIELD_GAP)),
+            |settings, field| {
+                settings.children(task_field(
+                    id, i, task, &kind.id, field, usable, &change, place, window, cx,
+                ))
+            },
+        );
+        rows = rows.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(theme::ITEM_GAP)
+                .px(px(4.0))
+                .py(px(4.0))
+                .when(i % 2 == 1, |this| this.bg(theme::BG_FLOAT))
+                .child(text(&format!("{}.", i + 1), usable).flex_none())
+                .child(fields::select(
+                    format!("form-task-type-{id}-{i}"),
+                    kind.label.clone(),
+                    type_picks,
+                    usable,
+                    None,
+                ))
+                .child(settings)
+                .child(button("up", i, "Up", i > 0, |picked, row| {
+                    picked.swap(row - 1, row)
+                }))
+                .child(button("down", i, "Down", i + 1 < count, |picked, row| {
+                    picked.swap(row, row + 1)
+                }))
+                .child(button("remove", i, "Remove", true, |picked, row| {
+                    picked.remove(row);
+                })),
+        );
+    }
+    if picked.is_empty() {
+        rows = rows.child(widgets::weak("No tasks").px(px(4.0)).py(px(4.0)));
+    }
+    let add_picks = tasks
+        .types
+        .iter()
+        .enumerate()
+        .map(|(k, kind)| {
+            let edit = edit.clone();
+            fields::Pick::new(kind.label.clone(), false, move |cx| {
+                edit(cx, &|tasks, picked| {
+                    if picked.len() < tasks.max {
+                        picked.push(tasks.fresh(k));
+                    }
+                })
+            })
+        })
+        .collect();
+    let reset = edit.clone();
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .gap(theme::LINE_GAP)
+        .when(!label.is_empty(), |this| this.child(text(label, usable)))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .gap(px(6.0))
+                .p(px(6.0))
+                .border_1()
+                .border_color(theme::BORDER)
+                .rounded(px(2.0))
+                .child(rows)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(fields::select(
+                            format!("form-task-add-{id}"),
+                            "Add task",
+                            add_picks,
+                            usable && count < tasks.max,
+                            None,
+                        ))
+                        .child(
+                            widgets::button(
+                                format!("form-task-reset-{id}"),
+                                "Reset",
+                                usable,
+                                move |_, _, cx| {
+                                    reset(cx, &|tasks, picked| picked.clone_from(&tasks.defaults))
+                                },
+                            )
+                            .tooltip(widgets::tooltip("Put the tasks back to the defaults")),
+                        ),
+                ),
+        )
+        .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remembered_tasks_are_submitted_in_order() {
+        let spec = json!({ "fields": [{
+            "id": "tasks",
+            "kind": "tasks",
+            "types": [
+                { "id": "chop", "fields": [{ "id": "logs", "kind": "number", "default": 5, "min": 0, "max": 10, "integer": true }] },
+                { "id": "bank" }
+            ],
+            "default": [{ "type": "chop" }]
+        }] });
+        let submit =
+            |form: &Form| match form.submitted(&ScriptLayouts::default(), &Known::default()) {
+                Outcome::Submitted(values) => values,
+                Outcome::Cancelled => unreachable!(),
+            };
+        assert_eq!(
+            submit(&Form::new(spec.clone(), None)),
+            json!({ "tasks": [{ "type": "chop", "logs": 5 }] })
+        );
+        let remembered = json!({ "tasks": [{ "type": "bank" }, { "type": "chop", "logs": 11 }] });
+        let form = Form::new(spec, remembered.as_object());
+        assert_eq!(
+            submit(&form),
+            json!({ "tasks": [{ "type": "bank" }, { "type": "chop", "logs": 5 }] })
+        );
+        assert_eq!(Value::Object(form.remembered()), submit(&form));
+    }
 }

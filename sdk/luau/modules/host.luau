@@ -277,9 +277,27 @@ export type GridColumn = {
 	max: number?,
 }
 
+export type TaskType = {
+	id: string,
+	label: string?,
+	fields: { FormField }?,
+}
+
 export type FormField = {
 	id: string?,
-	kind: ("label" | "check" | "number" | "text" | "choice" | "list" | "grid" | "equipment" | "inventory" | "prayer")?,
+	kind: (
+		"label"
+		| "check"
+		| "number"
+		| "text"
+		| "choice"
+		| "list"
+		| "grid"
+		| "tasks"
+		| "equipment"
+		| "inventory"
+		| "prayer"
+	)?,
 	label: string?,
 	text: string?,
 	default: any?,
@@ -290,6 +308,7 @@ export type FormField = {
 	integer: boolean?,
 	items: { { id: string, label: string?, detail: string?, default: (boolean | string)? } }?,
 	columns: { GridColumn }?,
+	types: { TaskType }?,
 	colors: boolean?,
 	search: string?,
 	note: string?,
