@@ -4,8 +4,9 @@ use std::rc::Rc;
 
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::{
-    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, Rgba,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, Context, Div, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Point, Render, Rgba, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
 };
 use injector::form::{self as spec_form};
 use serde_json::{Map, Value, json};
@@ -908,6 +909,43 @@ fn grid_ui(
 
 type EditTasks = Rc<dyn Fn(&mut App, &dyn Fn(&spec_form::Tasks, &mut Vec<spec_form::Task>))>;
 
+#[derive(Clone)]
+struct DraggedTask {
+    field: String,
+    row: usize,
+    label: String,
+}
+
+struct TaskGhost {
+    dragged: DraggedTask,
+    offset: Point<Pixels>,
+}
+
+impl Render for TaskGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .relative()
+            .left(self.offset.x)
+            .top(self.offset.y - px(12.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .bg(theme::BG_HL)
+            .border_1()
+            .border_color(theme::BORDER)
+            .rounded(px(2.0))
+            .text_color(theme::FG)
+            .child(self.dragged.label.clone())
+    }
+}
+
+fn move_task(picked: &mut Vec<spec_form::Task>, from: usize, to: usize) {
+    if from == to || from >= picked.len() || to >= picked.len() {
+        return;
+    }
+    let task = picked.remove(from);
+    picked.insert(to, task);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn task_field(
     id: &str,
@@ -978,19 +1016,6 @@ fn tasks_ui(
         })
     };
     let count = picked.len();
-    let button = |name: &str,
-                  row: usize,
-                  text: &'static str,
-                  enabled: bool,
-                  act: fn(&mut Vec<spec_form::Task>, usize)| {
-        let edit = edit.clone();
-        widgets::button(
-            format!("form-task-{name}-{id}-{row}"),
-            text,
-            usable && enabled,
-            move |_, _, cx| edit(cx, &|_, picked| act(picked, row)),
-        )
-    };
     let mut rows = div().flex().flex_col();
     for (i, task) in picked.iter().enumerate() {
         let kind = &tasks.types[task.kind];
@@ -1026,6 +1051,34 @@ fn tasks_ui(
                 ))
             },
         );
+        let dragged = DraggedTask {
+            field: id.to_owned(),
+            row: i,
+            label: format!("{}. {}", i + 1, kind.label),
+        };
+        let handle = div()
+            .id(SharedString::from(format!("form-task-drag-{id}-{i}")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(theme::LINE_GAP)
+            .child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_color(theme::COMMENT)
+                    .child("≡"),
+            )
+            .child(text(&format!("{}.", i + 1), usable))
+            .when(usable, |this| {
+                this.cursor_grab()
+                    .tooltip(widgets::tooltip("Drag to move"))
+                    .on_drag(dragged, |dragged, offset, _, cx| {
+                        let dragged = dragged.clone();
+                        cx.new(|_| TaskGhost { dragged, offset })
+                    })
+            });
+        let dropped = edit.clone();
+        let field = id.to_owned();
         rows = rows.child(
             div()
                 .flex()
@@ -1034,7 +1087,24 @@ fn tasks_ui(
                 .px(px(4.0))
                 .py(px(4.0))
                 .when(i % 2 == 1, |this| this.bg(theme::BG_FLOAT))
-                .child(text(&format!("{}.", i + 1), usable).flex_none())
+                .when(usable, |this| {
+                    let over = field.clone();
+                    this.drag_over::<DraggedTask>(move |style, dragged, _, _| {
+                        if dragged.field == over {
+                            style.bg(theme::SEL)
+                        } else {
+                            style
+                        }
+                    })
+                    .on_drop(move |dragged: &DraggedTask, _, cx| {
+                        if dragged.field != field {
+                            return;
+                        }
+                        let from = dragged.row;
+                        dropped(cx, &|_, picked| move_task(picked, from, i));
+                    })
+                })
+                .child(handle)
                 .child(fields::select(
                     format!("form-task-type-{id}-{i}"),
                     kind.label.clone(),
@@ -1043,15 +1113,21 @@ fn tasks_ui(
                     None,
                 ))
                 .child(settings)
-                .child(button("up", i, "Up", i > 0, |picked, row| {
-                    picked.swap(row - 1, row)
-                }))
-                .child(button("down", i, "Down", i + 1 < count, |picked, row| {
-                    picked.swap(row, row + 1)
-                }))
-                .child(button("remove", i, "Remove", true, |picked, row| {
-                    picked.remove(row);
-                })),
+                .child({
+                    let edit = edit.clone();
+                    widgets::button(
+                        format!("form-task-remove-{id}-{i}"),
+                        "Remove",
+                        usable,
+                        move |_, _, cx| {
+                            edit(cx, &|_, picked| {
+                                if i < picked.len() {
+                                    picked.remove(i);
+                                }
+                            })
+                        },
+                    )
+                }),
         );
     }
     if picked.is_empty() {
