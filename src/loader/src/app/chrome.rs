@@ -23,6 +23,7 @@ pub(super) struct Node {
     label: String,
     color: Option<Rgba>,
     dim: bool,
+    folds: bool,
     pub(super) children: Vec<Node>,
 }
 
@@ -34,6 +35,7 @@ impl Node {
             label: label.into(),
             color: None,
             dim: false,
+            folds: false,
             children: Vec::new(),
         }
     }
@@ -55,7 +57,7 @@ fn flatten(nodes: Vec<Node>, guide: &str, current: Pick, rows: &mut Vec<(String,
     let count = nodes.len();
     for (i, mut node) in nodes.into_iter().enumerate() {
         let last = i + 1 == count;
-        let open = node.contains(current);
+        let open = !node.folds || node.contains(current);
         let children = std::mem::take(&mut node.children);
         rows.push((format!("{guide}{}", if last { "└╴" } else { "├╴" }), node));
         if open {
@@ -300,9 +302,14 @@ impl LoaderApp {
                 .push(page(Page::Development(pid), "development"));
         }
         let mut history = page(Page::History(pid), "history");
+        history.folds = true;
         history.children = self
             .ended_runs_on(pid)
-            .map(|run| self.run_node(run))
+            .map(|run| {
+                let mut run = self.run_node(run);
+                run.folds = true;
+                run
+            })
             .collect();
         if !history.children.is_empty() {
             node.children.push(history);

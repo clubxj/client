@@ -2586,9 +2586,6 @@ impl LoaderApp {
     }
 
     fn rescan_when_due(&mut self) {
-        if self.page != Page::Sessions {
-            return;
-        }
         let due = self.last_scan + RESCAN_EVERY;
         if !self.scanning && Instant::now() >= due {
             self.scan();
