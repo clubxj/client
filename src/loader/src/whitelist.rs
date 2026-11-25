@@ -206,11 +206,11 @@ impl Page {
             .flex()
             .flex_col()
             .gap(theme::LINE_GAP)
-            .pt(px(12.0))
             .child(widgets::heading("HTTP whitelist"))
             .child(widgets::weak(
                 "Scripts can only make HTTP requests to these hosts. Redirects to any other host are refused.",
             ))
+            .child(widgets::warning("Don't add hosts you don't trust."))
             .child(
                 div().flex().pt(px(6.0)).child(widgets::button(
                     "whitelist-add",
@@ -251,8 +251,7 @@ impl Page {
                     )
                     .into_any_element()
                 };
-                table_row()
-                    .when(index % 2 == 0, |this| this.bg(theme::BG_FLOAT))
+                widgets::body_row(("whitelist-row", index), index)
                     .child(
                         div()
                             .id(("whitelist-host", index))
@@ -268,20 +267,12 @@ impl Page {
             .flex()
             .flex_col()
             .child(
-                table_row()
+                widgets::table_row()
                     .child(widgets::strong("Host").flex_1())
                     .child(actions_cell()),
             )
             .children(rows)
     }
-}
-
-fn table_row() -> Div {
-    div()
-        .flex()
-        .items_center()
-        .h(theme::ROW_HEIGHT)
-        .gap(theme::ITEM_GAP)
 }
 
 fn actions_cell() -> Div {

@@ -22,8 +22,8 @@ enum PathField {
 impl PathField {
     fn label(self) -> &'static str {
         match self {
-            Self::SdkDir => "SDK folder",
-            Self::Helper => "injector.exe",
+            Self::SdkDir => "SDK folder:",
+            Self::Helper => "injector.exe:",
         }
     }
 
@@ -249,15 +249,90 @@ impl LoaderApp {
 
     pub(super) fn render_settings(
         &mut self,
+        section: Option<SettingsSection>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let inputs = self.settings_inputs(window, cx);
-        let fields = PathField::shown();
-        for field in &fields {
-            let value = field.of(&mut self.settings).clone();
-            sync_input(inputs.path(*field), &value, window, cx);
-        }
+        let (body, dialogs) = match section {
+            None => {
+                let system = self.render_system_settings(&inputs, window, cx);
+                let interface = self.render_interface_settings(&inputs, window, cx);
+                let sections = self.render_settings_sections(window, cx);
+                let body = div()
+                    .flex()
+                    .flex_col()
+                    .child(settings_block("System", system))
+                    .child(div().mt(SECTION_GAP).child(settings_block("Interface", interface)))
+                    .child(div().mt(SECTION_GAP).child(settings_block("Advanced", sections)));
+                (body, Vec::new())
+            }
+            Some(section) => {
+                let (body, dialogs) = match section {
+                    SettingsSection::Network => self.render_network_settings(&inputs, window, cx),
+                    SettingsSection::Transportation => {
+                        (self.render_transport_settings(cx), Vec::new())
+                    }
+                };
+                let page = div()
+                    .flex()
+                    .flex_col()
+                    .child(div().flex().child(self.render_settings_back(window, cx)))
+                    .child(div().mt(BACK_GAP).child(body));
+                (page, dialogs)
+            }
+        };
+        div()
+            .id("settings-page")
+            .size_full()
+            .overflow_y_scrollbar()
+            .child(div().flex().flex_col().pr(px(12.0)).child(body))
+            .children(dialogs)
+            .into_any_element()
+    }
+
+    fn render_settings_sections(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let labels: Vec<(&str, &str)> = SettingsSection::ALL
+            .iter()
+            .map(|section| (section.icon(), section.title()))
+            .collect();
+        let width = widgets::icon_button_width(window, &labels).max(SECTION_BUTTON_WIDTH);
+        let buttons = SettingsSection::ALL.into_iter().map(|section| {
+            widgets::icon_button(
+                ("settings-section", section as usize),
+                section.icon(),
+                section.title(),
+                width,
+                true,
+                cx.listener(move |app, _: &ClickEvent, _, cx| {
+                    app.go(Page::Settings(Some(section)), None);
+                    cx.notify();
+                }),
+            )
+        });
+        div().flex().flex_col().gap(theme::ITEM_GAP).children(buttons)
+    }
+
+    fn render_settings_back(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        widgets::icon_button(
+            "settings-back",
+            BACK_ICON,
+            "Back",
+            widgets::icon_button_width(window, &[(BACK_ICON, "Back")]),
+            true,
+            cx.listener(|app, _: &ClickEvent, _, cx| {
+                app.go(Page::Settings(None), None);
+                cx.notify();
+            }),
+        )
+    }
+
+    fn render_interface_settings(
+        &mut self,
+        inputs: &Inputs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         if !inputs
             .log_lines
             .read(cx)
@@ -271,48 +346,6 @@ impl LoaderApp {
                 cx,
             );
         }
-        if let Some(text) = self.whitelist_page.draft_input().map(str::to_owned) {
-            sync_input(&inputs.whitelist, &text, window, cx);
-        }
-        for (field, input) in crate::proxies::Field::ALL.iter().zip(&inputs.proxy) {
-            if let Some(value) = self.proxies.draft_value(*field) {
-                sync_input(input, value, window, cx);
-            }
-        }
-        let label = |id: &'static str, text: &'static str, tooltip: Option<&'static str>| {
-            grid_cell().child(
-                div()
-                    .id(id)
-                    .whitespace_nowrap()
-                    .child(text)
-                    .when_some(tooltip, |this, tooltip| {
-                        this.tooltip(widgets::tooltip(tooltip))
-                    }),
-            )
-        };
-        let path_rows: Vec<Div> = fields
-            .iter()
-            .map(|&field| {
-                grid_cell()
-                    .gap(theme::ITEM_GAP)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(FIELD_MIN)
-                            .max_w(FIELD_MAX)
-                            .child(Input::new(inputs.path(field)).small()),
-                    )
-                    .child(widgets::button(
-                        (field.label(), 1usize),
-                        "Browse…",
-                        true,
-                        cx.listener(move |app, _: &ClickEvent, _, cx| {
-                            field.browse(field.of(&mut app.settings));
-                            cx.notify();
-                        }),
-                    ))
-            })
-            .collect();
         let app = cx.entity().downgrade();
         let fonts = crate::ui::theme::UiFont::ALL
             .into_iter()
@@ -330,48 +363,73 @@ impl LoaderApp {
                 })
             })
             .collect();
-        let labels = div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .gap(theme::LINE_GAP)
-            .children(
-                fields
-                    .iter()
-                    .map(|field| label(field.label(), field.label(), field.tooltip())),
-            )
-            .child(label(
-                "output lines",
-                "output lines",
-                Some(LOG_LINES_TOOLTIP),
-            ))
-            .child(label(
-                "interface font",
-                "interface font",
-                Some(UI_FONT_TOOLTIP),
-            ));
-        let controls = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .gap(theme::LINE_GAP)
-            .children(path_rows)
-            .child(
+        settings_form(vec![
+            (
+                label("Output lines:", Some(LOG_LINES_TOOLTIP)),
                 grid_cell().child(
                     div()
                         .w(LOG_LINES_WIDTH)
                         .child(NumberInput::new(&inputs.log_lines).small()),
                 ),
-            )
-            .child(grid_cell().child(widgets::combo("ui-font", self.ui_font.label(), fonts)));
-        let grid = div()
-            .flex()
-            .gap(theme::ITEM_GAP)
-            .child(labels)
-            .child(controls);
+            ),
+            (
+                label("Interface font:", Some(UI_FONT_TOOLTIP)),
+                grid_cell().child(widgets::combo("ui-font", self.ui_font.label(), fonts)),
+            ),
+        ])
+    }
+
+    fn render_system_settings(
+        &mut self,
+        inputs: &Inputs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let rows = PathField::shown()
+            .into_iter()
+            .map(|field| {
+                let value = field.of(&mut self.settings).clone();
+                sync_input(inputs.path(field), &value, window, cx);
+                let control = grid_cell()
+                    .gap(theme::ITEM_GAP)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(FIELD_MIN)
+                            .max_w(FIELD_MAX)
+                            .child(Input::new(inputs.path(field)).small()),
+                    )
+                    .child(widgets::button(
+                        (field.label(), 1usize),
+                        "Browse…",
+                        true,
+                        cx.listener(move |app, _: &ClickEvent, _, cx| {
+                            field.browse(field.of(&mut app.settings));
+                            cx.notify();
+                        }),
+                    ));
+                (label(field.label(), field.tooltip()), control)
+            })
+            .collect();
+        settings_form(rows)
+    }
+
+    fn render_network_settings(
+        &mut self,
+        inputs: &Inputs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Div, Vec<AnyElement>) {
+        if let Some(text) = self.whitelist_page.draft_input().map(str::to_owned) {
+            sync_input(&inputs.whitelist, &text, window, cx);
+        }
+        for (field, input) in crate::proxies::Field::ALL.iter().zip(&inputs.proxy) {
+            if let Some(value) = self.proxies.draft_value(*field) {
+                sync_input(input, value, window, cx);
+            }
+        }
         let on_whitelist = cx.entity().downgrade();
-        let (whitelist, dialog) = self.whitelist_page.render(
+        let (whitelist, whitelist_dialog) = self.whitelist_page.render(
             &crate::script::read(&self.http_whitelist),
             &inputs.whitelist,
             window,
@@ -391,24 +449,15 @@ impl LoaderApp {
                     .ok();
             }),
         );
-        let transports = self.render_transport_settings(cx);
-        div()
-            .id("settings-page")
-            .size_full()
-            .overflow_y_scrollbar()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .pr(px(12.0))
-                    .child(grid)
-                    .child(whitelist)
-                    .child(proxies)
-                    .child(transports),
-            )
-            .children(dialog)
-            .children(proxy_dialog)
-            .into_any_element()
+        let body = div()
+            .flex()
+            .flex_col()
+            .child(whitelist)
+            .child(div().mt(SECTION_GAP).child(proxies));
+        (
+            body,
+            whitelist_dialog.into_iter().chain(proxy_dialog).collect(),
+        )
     }
 
     fn render_transport_settings(&mut self, cx: &mut Context<Self>) -> Div {
@@ -448,8 +497,7 @@ impl LoaderApp {
             .flex()
             .flex_col()
             .gap(theme::LINE_GAP)
-            .pt(px(12.0))
-            .child(widgets::strong("Transports"))
+            .child(widgets::heading("Transportation"))
             .child(widgets::weak(
                 "What scripts may use to get around. A script that needs one that is off stops with an error saying so.",
             ))
@@ -510,21 +558,86 @@ impl LoaderApp {
 }
 
 const TRANSPORT_COLUMN: Pixels = px(220.0);
+const SECTION_GAP: Pixels = px(44.0);
+const FIELD_GAP: Pixels = px(16.0);
+const SECTION_BUTTON_WIDTH: Pixels = px(200.0);
+const BACK_GAP: Pixels = px(20.0);
+const BACK_ICON: &str = "\u{f060}";
+const HEADING_GAP: Pixels = px(10.0);
+
+impl SettingsSection {
+    pub(super) const ALL: [Self; 2] = [Self::Network, Self::Transportation];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Transportation => "transportation",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Network => "Network",
+            Self::Transportation => "Transportation",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Network => "\u{f0ac}",
+            Self::Transportation => "\u{f277}",
+        }
+    }
+}
 
 fn grid_cell() -> Div {
     div().flex().items_center().h(theme::INTERACT_HEIGHT)
 }
 
+fn label(text: &'static str, tooltip: Option<&'static str>) -> Div {
+    grid_cell().child(
+        div()
+            .id(text)
+            .whitespace_nowrap()
+            .child(text)
+            .when_some(tooltip, |this, tooltip| {
+                this.tooltip(widgets::tooltip(tooltip))
+            }),
+    )
+}
+
+fn settings_block(title: &'static str, body: Div) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(HEADING_GAP)
+        .child(widgets::heading(title))
+        .child(body)
+}
+
+fn settings_form(rows: Vec<(Div, Div)>) -> Div {
+    div().flex().flex_col().gap(FIELD_GAP).children(
+        rows.into_iter()
+            .map(|(label, control)| div().flex().flex_col().child(label).child(control)),
+    )
+}
+
 #[cfg(test)]
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
-        ("settings", |app| app.page = Page::Settings),
+        ("settings", |app| app.page = Page::Settings(None)),
+        ("settings-network", |app| {
+            app.page = Page::Settings(Some(SettingsSection::Network))
+        }),
+        ("settings-transportation", |app| {
+            app.page = Page::Settings(Some(SettingsSection::Transportation))
+        }),
         ("settings-proxies", |app| {
-            app.page = Page::Settings;
+            app.page = Page::Settings(Some(SettingsSection::Network));
             app.proxies = crate::proxies::Proxies::with(snapshot_proxies());
         }),
         ("settings-proxy-dialog", |app| {
-            app.page = Page::Settings;
+            app.page = Page::Settings(Some(SettingsSection::Network));
             app.proxies = crate::proxies::Proxies::with(snapshot_proxies());
             app.proxies.click(
                 crate::proxies::Click::Edit("Residential US".into()),
@@ -532,7 +645,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             );
         }),
         ("settings-whitelist", |app| {
-            app.page = Page::Settings;
+            app.page = Page::Settings(Some(SettingsSection::Network));
             let mut list = crate::script::write(&app.http_whitelist);
             list.add("api.example.com").unwrap();
             list.add("*.example.org").unwrap();
@@ -543,7 +656,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             );
         }),
         ("settings-whitelist-dialog", |app| {
-            app.page = Page::Settings;
+            app.page = Page::Settings(Some(SettingsSection::Network));
             let mut list = crate::script::write(&app.http_whitelist);
             app.whitelist_page
                 .click(crate::whitelist::Click::Add, &mut list);

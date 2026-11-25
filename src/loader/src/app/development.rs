@@ -324,10 +324,6 @@ fn client_caption(pid: Option<u32>) -> Div {
     }
 }
 
-fn warning(text: impl Into<SharedString>) -> Div {
-    div().text_color(theme::YELLOW).child(text.into())
-}
-
 fn cell(width: Pixels, rest: Option<Pixels>) -> Div {
     let cell = div()
         .h_full()
@@ -1623,7 +1619,7 @@ impl LoaderApp {
                 this.child(error_label(error))
             })
             .when_some(inspector.varc_error.clone(), |this, error| {
-                this.child(warning(format!("Client variables: {error}")))
+                this.child(widgets::warning(format!("Client variables: {error}")))
             });
         let follow = inspector.follow;
         let table = self.render_log_table(TableId::Vars, &VAR_COLUMNS, shown, follow, var_rows, cx);
@@ -1841,7 +1837,7 @@ impl LoaderApp {
                         def.touches.join(", ")
                     )))
                 })
-                .when_some(decoded.note.clone(), |this, note| this.child(warning(note)));
+                .when_some(decoded.note.clone(), |this, note| this.child(widgets::warning(note)));
         }
         body = body.children(crate::packets::hex_dump(&bytes).into_iter().map(|line| {
             div()

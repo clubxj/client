@@ -364,10 +364,12 @@ impl Proxies {
             .flex()
             .flex_col()
             .gap(theme::LINE_GAP)
-            .pt(px(12.0))
             .child(widgets::heading("Proxies"))
             .child(widgets::weak(
                 "SOCKS5 proxies a client's connections can go through. Pick one on a client's page. They're stored encrypted with your accounts' key.",
+            ))
+            .child(widgets::warning(
+                "Most people don't need a proxy and very often they do more damage than good if you don't know what you are doing.",
             ))
             .when_some(self.locked.clone(), |this, why| {
                 this.child(widgets::error(format!("The saved proxies can't be read: {why}")))
@@ -381,7 +383,9 @@ impl Proxies {
                     move |_, window, cx| add(Click::Add, window, cx),
                 )),
             )
-            .child(div().pt(px(6.0)).child(self.render_list(enabled, &on_click)));
+            .when(!self.saved.is_empty(), |this| {
+                this.child(div().pt(px(6.0)).child(self.render_list(enabled, &on_click)))
+            });
         let dialog = self
             .draft
             .as_ref()
@@ -394,8 +398,7 @@ impl Proxies {
             let armed = self.deleting.as_deref() == Some(saved.name.as_str());
             let (edit, delete) = (on_click.clone(), on_click.clone());
             let (edit_name, delete_name) = (saved.name.clone(), saved.name.clone());
-            table_row()
-                .when(index % 2 == 0, |this| this.bg(theme::BG_FLOAT))
+            widgets::body_row(("proxy-row", index), index)
                 .child(
                     div()
                         .id(("proxy-name", index))
@@ -446,7 +449,7 @@ impl Proxies {
             .flex()
             .flex_col()
             .child(
-                table_row()
+                widgets::table_row()
                     .child(widgets::strong("Name").flex_1())
                     .child(widgets::strong("Address").w(ADDRESS_WIDTH))
                     .child(widgets::strong("Username").w(LOGIN_WIDTH))
@@ -454,14 +457,6 @@ impl Proxies {
             )
             .children(rows)
     }
-}
-
-fn table_row() -> Div {
-    div()
-        .flex()
-        .items_center()
-        .h(theme::ROW_HEIGHT)
-        .gap(theme::ITEM_GAP)
 }
 
 fn actions_cell() -> Div {

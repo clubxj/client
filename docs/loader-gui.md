@@ -23,7 +23,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 | `layouts.rs` | Equipment/inventory/prayer layouts, rules, picker |
 | `breaks.rs`, `xp.rs`, `counters.rs` | Break/sleep editors, run trackers |
 | `hider.rs` | Entity hider categories and the client page's poll state |
-| `proxies.rs` | Saved proxies (Settings section, sealed `proxies.bin`) and each client's chosen proxy |
+| `proxies.rs` | Saved proxies (settings `network/`, sealed `proxies.bin`) and each client's chosen proxy |
 | `form.rs` | Form spec rendering |
 | `queue.rs`, `app/queue_page.rs` | Queue model and pure rules (when an entry ends, what follows an exit, break carry-over); Queue page, start checks and the per-client runner |
 | `http.rs`, `whitelist.rs` | Script HTTP requests, whitelist |
@@ -90,7 +90,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 ## Navigation
 
 - The sidebar is a tree rebuilt every frame from state: `sessions/` lists every detected client, plus any closed client that still has runs. Clients are scanned at start, after a load or unload, and every 5 s (`RESCAN_EVERY`). A scan never sets `busy`, which only disables the client and state-reading buttons while such a job runs; a scan error is logged only when it is new.
-- Only `history/` and the runs under it fold: they show their children only when the current page is in them, so a long history doesn't fill the tree.
+- Only `history/`, the runs under it and `settings/` fold: they show their children only when the current page is in them, so a long history doesn't fill the tree.
 - `Page` names where the user is. Client pages carry the pid; a run page uses `active_run`. Nothing holds a global selected client: every action takes its client from its page, so the store, queue and editor start only on the client whose page started them.
 - A client's children follow its state: idle and loaded shows `scripts/`, `queue/`, `editor/`; a live run (running or configuring) or a queue hides them, since the client lock allows one script per client; `development/` shows while the agent is loaded; ended runs sit under `history/`. A client's page has a button for each of its children, built from the same node. `repair_page` moves the user to the client page (or `sessions/`) when the page they are on stops being offered.
 - Client colour: dimmed without a loaded agent, green while a script or queue runs, red when its latest ended run failed.

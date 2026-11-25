@@ -109,7 +109,7 @@ impl LoaderApp {
             | Page::Terminal
             | Page::Accounts
             | Page::Feedback
-            | Page::Settings => true,
+            | Page::Settings(_) => true,
         }
     }
 

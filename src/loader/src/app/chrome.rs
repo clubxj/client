@@ -12,7 +12,7 @@ const GLOBAL_ITEMS: [(Page, &str, &str); 5] = [
     (Page::Editor(None), "\u{f044}", "editor"),
     (Page::Accounts, "\u{f007}", "accounts"),
     (Page::Feedback, "\u{f075}", "feedback"),
-    (Page::Settings, "\u{f013}", "settings"),
+    (Page::Settings(None), "\u{f013}", "settings"),
 ];
 
 pub(super) type Pick = (Page, Option<u64>);
@@ -88,6 +88,13 @@ impl Chrome {
             )),
         }
     }
+}
+
+fn settings_children() -> Vec<Node> {
+    SettingsSection::ALL
+        .iter()
+        .map(|&section| Node::page((Page::Settings(Some(section)), None), section.label()))
+        .collect()
 }
 
 pub(super) fn sidebar_pick(page: Page, active_run: Option<u64>) -> Pick {
@@ -326,7 +333,12 @@ impl LoaderApp {
             .collect();
         std::iter::once(sessions)
             .chain(GLOBAL_ITEMS.iter().map(|(page, icon, name)| {
-                Node::new((*page, None), *name, format!("{icon} {name}/"))
+                let mut node = Node::new((*page, None), *name, format!("{icon} {name}/"));
+                if *page == Page::Settings(None) {
+                    node.folds = true;
+                    node.children = settings_children();
+                }
+                node
             }))
             .collect()
     }
@@ -776,7 +788,7 @@ impl LoaderApp {
             }
             self.followed_tab = followed;
             self.log_collapsed =
-                matches!(self.page, Page::Accounts | Page::Settings | Page::Feedback);
+                matches!(self.page, Page::Accounts | Page::Settings(_) | Page::Feedback);
             self.log_tab = followed.1.map_or(LogTab::Loader, LogTab::Run);
         }
     }
@@ -794,7 +806,7 @@ impl LoaderApp {
             Page::Terminal => self.render_terminal(window, cx),
             Page::Accounts => self.render_accounts(window, cx),
             Page::Feedback => self.render_feedback(window, cx),
-            Page::Settings => self.render_settings(window, cx),
+            Page::Settings(section) => self.render_settings(section, window, cx),
         }
     }
 

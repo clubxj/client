@@ -301,6 +301,27 @@ pub fn error(text: impl Into<SharedString>) -> Div {
     div().text_color(theme::RED).child(text.into())
 }
 
+pub fn table_row() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(theme::ROW_HEIGHT)
+        .gap(theme::ITEM_GAP)
+}
+
+pub fn body_row(id: impl Into<ElementId>, index: usize) -> Stateful<Div> {
+    striped(table_row().id(id), index)
+}
+
+pub fn striped(row: Stateful<Div>, index: usize) -> Stateful<Div> {
+    row.when(index.is_multiple_of(2), |this| this.bg(theme::BG_FLOAT))
+        .hover(|style| style.bg(theme::alpha(theme::BLUE, 0.12)))
+}
+
+pub fn warning(text: impl Into<SharedString>) -> Div {
+    div().text_color(theme::YELLOW).child(text.into())
+}
+
 
 pub fn separator() -> Div {
     div().h(px(1.0)).my(theme::LINE_GAP).bg(theme::BORDER)

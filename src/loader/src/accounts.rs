@@ -571,6 +571,8 @@ fn change<V: 'static>(
     })
 }
 
+const ADD_ICON: &str = "\u{f234}";
+
 pub fn render<V: 'static>(
     accounts: &Arc<RwLock<Accounts>>,
     ui: &Ui,
@@ -614,9 +616,11 @@ pub fn render<V: 'static>(
         .items_start()
         .gap(LINE_GAP)
         .when(!enabled, |this| this.opacity(0.5))
-        .child(widgets::button(
+        .child(widgets::icon_button(
             "add-account",
+            ADD_ICON,
             "Add account",
+            widgets::icon_button_width(window, &[(ADD_ICON, "Add account")]),
             enabled,
             change(accounts, cx, Accounts::add),
         ))
@@ -806,9 +810,7 @@ fn list<V: 'static>(
             })
             .child(save)
             .child(delete);
-        row(row_height)
-            .id(("account", index))
-            .when(index % 2 == 0, |this| this.bg(theme::BG_FLOAT))
+        widgets::striped(row(row_height).id(("account", index)), index)
             .children(cells)
             .child(lamp)
             .child(actions)

@@ -1119,7 +1119,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("output-collapsed", |app| {
             mixed_loader_log(app);
-            app.page = Page::Settings;
+            app.page = Page::Settings(None);
         }),
         ("output-collapsed-run", |app| {
             run_with_log(app);

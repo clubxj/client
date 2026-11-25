@@ -564,7 +564,13 @@ enum Page {
     Terminal,
     Accounts,
     Feedback,
-    Settings,
+    Settings(Option<SettingsSection>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum SettingsSection {
+    Network,
+    Transportation,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
