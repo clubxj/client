@@ -30,6 +30,64 @@ HuntsmansKit.QUERY = "Enter amount"
 HuntsmansKit.TIMEOUT_MS = 2500
 HuntsmansKit.POLL_MS = 50
 
+HuntsmansKit.STORABLE = table.freeze({
+	"Bird snare",
+	"Noose wand",
+	"Insect net",
+	"Magic insect net",
+	"Butterfly jar",
+	"Box trap",
+	"Rabbit snare",
+	"Unlit torch",
+	"Small fishing net",
+	"Rope",
+	"Magic box",
+	"Imp-in-a-box(1)",
+	"Imp-in-a-box(2)",
+	"Teasing stick",
+	"Hunter's spear",
+	"Wood camo top",
+	"Wood camo legs",
+	"Polar camo top",
+	"Polar camo legs",
+	"Jungle camo top",
+	"Jungle camo legs",
+	"Desert camo top",
+	"Desert camo legs",
+	"Larupia hat",
+	"Larupia top",
+	"Larupia legs",
+	"Graahk headdress",
+	"Graahk top",
+	"Graahk legs",
+	"Kyatt hat",
+	"Kyatt top",
+	"Kyatt legs",
+	"Hunter hood",
+	"Hunter cape",
+	"Hunter cape(t)",
+	"Guild hunter headwear",
+	"Guild hunter top",
+	"Guild hunter legs",
+	"Guild hunter boots",
+	"Ring of pursuit",
+	"Impling jar",
+	"Horn of Plenty",
+	"Horn of Plenty (empty)",
+	"Gryphon feather",
+	"Net trap",
+} :: { string })
+
+function HuntsmansKit.can_store(name: string): boolean
+	local lower = string.lower(name)
+	for _, storable in ipairs(HuntsmansKit.STORABLE) do
+		if string.lower(storable) == lower then
+			return true
+		end
+	end
+	return false
+end
+
 local last_seen: { Stored }? = nil
 
 function HuntsmansKit.held(): boolean

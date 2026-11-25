@@ -28,6 +28,27 @@ HuntsmansKit.POLL_MS = 50
 ```
 The kit's item id, widget ids (frame with the close button, the Fill and Empty buttons, the stored items), the contents container, the filler item drawn in unused cells, options, the Withdraw-X/Deposit-X question, and the wait/poll times.
 
+## HuntsmansKit.STORABLE
+
+Definition:
+```luau
+HuntsmansKit.STORABLE = { "Bird snare", "Noose wand", "Insect net", ... }
+```
+Every item name the kit accepts, from the game's list: traps and nets, jars, torches, rope, magic boxes, teasing sticks and hunter's spears, the camo, larupia, graahk, kyatt and guild hunter outfits, hunter hoods and capes, the ring of pursuit, impling jars, the Horn of Plenty and gryphon feathers. Whistles, pouches, coins, knives and axes aren't on it.
+
+## HuntsmansKit.can_store
+
+Definition:
+```luau
+function HuntsmansKit.can_store(name: string): boolean
+```
+Whether the kit accepts the item, by name, case-insensitive.
+
+Example:
+```luau
+print(HuntsmansKit.can_store("Box trap"), HuntsmansKit.can_store("Knife")) --> true false
+```
+
 ## Types
 
 Definition:
