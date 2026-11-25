@@ -3275,6 +3275,14 @@ pub fn player_hitsplats(
     by_index(pid, indices, world::player_hitsplats)
 }
 
+pub fn npc_overhead_text(pid: u32, indices: &[i32]) -> Result<BTreeMap<i32, String>, String> {
+    by_index(pid, indices, world::npc_overhead_text)
+}
+
+pub fn player_overhead_text(pid: u32, indices: &[i32]) -> Result<BTreeMap<i32, String>, String> {
+    by_index(pid, indices, world::player_overhead_text)
+}
+
 pub fn client_cycle(pid: u32) -> Result<i32, String> {
     let (layout, memory) = reader(pid, part::PROJECTILES, "the client cycle")?;
     memory

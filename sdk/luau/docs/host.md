@@ -788,6 +788,36 @@ local me = assert(Players.me())
 print(#((Host.player_hitsplats({ me.index }) or {})[me.index] or {}))
 ```
 
+## Host.npc_overhead_text
+
+Definition:
+```luau
+Host.npc_overhead_text: (indices: { number }) -> { [number]: string }?
+```
+The text an NPC is saying over its head, per index; NPCs saying nothing and gone NPCs are omitted. Some NPCs speak only here, never in the chatbox. The client clears it when it stops showing, so poll while you wait for it.
+
+Example:
+```luau
+local npc = (Host.npcs() or {})[1]
+print(npc and (Host.npc_overhead_text({ npc.index }) or {})[npc.index])
+```
+
+## Host.player_overhead_text
+
+Definition:
+```luau
+Host.player_overhead_text: (indices: { number }) -> { [number]: string }?
+```
+`Host.npc_overhead_text` for players by `PlayerInfo.index`: their latest public chat while it shows.
+
+Example:
+```luau
+local Players = require("@volcren/players")
+
+local me = assert(Players.me())
+print((Host.player_overhead_text({ me.index }) or {})[me.index])
+```
+
 ## Host.client_cycle
 
 Definition:

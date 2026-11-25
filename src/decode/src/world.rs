@@ -667,6 +667,7 @@ pub struct Hitsplat {
 }
 
 const ACTOR_HITSPLATS: u64 = 0x358;
+const ACTOR_OVERHEAD_TEXT: u64 = 0x2d8;
 const HITSPLAT_SIZE: u64 = 12;
 const HITSPLAT_SLOTS: u64 = 4;
 
@@ -711,6 +712,22 @@ fn actor_hitsplats(memory: &impl Memory, actor: u64) -> Option<Vec<Hitsplat>> {
         }
     }
     Some(splats)
+}
+
+pub fn npc_overhead_text(memory: &impl Memory, layout: &WorldLayout, index: i32) -> Option<String> {
+    actor_overhead_text(memory, actor_at(memory, layout, layout.npc_table, index)?)
+}
+
+pub fn player_overhead_text(
+    memory: &impl Memory,
+    layout: &WorldLayout,
+    index: i32,
+) -> Option<String> {
+    actor_overhead_text(memory, actor_at(memory, layout, layout.players, index)?)
+}
+
+fn actor_overhead_text(memory: &impl Memory, actor: u64) -> Option<String> {
+    read_string(memory, actor + ACTOR_OVERHEAD_TEXT).filter(|text| !text.is_empty())
 }
 
 pub fn npc_size(memory: &impl Memory, layout: &WorldLayout, index: i32) -> Option<i32> {

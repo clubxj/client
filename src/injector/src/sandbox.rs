@@ -31,8 +31,9 @@ use crate::{
     draw, draw_batch, draw_lines, entry_swaps, enum_def, find_path, game_state, game_val_names,
     ground_items, in_instance, item_container, item_names, item_params, item_stackable, landmasses,
     loc_model, loc_shown, locs, map_regions, menu, menu_click, menu_layout, menu_open, movement,
-    nav_plan, npc_hitsplats, npc_model, npc_sizes, npc_type_model, npcs, player_hitsplats,
-    player_model, player_plane, players, project_from, projectiles, raw_packet_layouts,
+    nav_plan, npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npcs,
+    player_hitsplats, player_model, player_overhead_text, player_plane, players, project_from,
+    projectiles, raw_packet_layouts,
     scene_collision, scene_route, selected_widget, send_input, send_input_with, server_tile, spot_anims,
     sub_interfaces, varbit, varc, varp_value, varps, wait_watchers, widget, widget_children,
     widget_model, world_route, world_select,
@@ -149,6 +150,8 @@ mod offline {
         fn npc_sizes(u32, &[i32]) -> BTreeMap<i32, i32>;
         fn npc_hitsplats(u32, &[i32]) -> BTreeMap<i32, Vec<decode::world::Hitsplat>>;
         fn player_hitsplats(u32, &[i32]) -> BTreeMap<i32, Vec<decode::world::Hitsplat>>;
+        fn npc_overhead_text(u32, &[i32]) -> BTreeMap<i32, String>;
+        fn player_overhead_text(u32, &[i32]) -> BTreeMap<i32, String>;
         fn client_cycle(u32) -> i32;
         fn scene_collision(u32) -> (i32, i32, i32, Vec<Vec<u32>>);
         fn scene_route(u32, [i32; 2], [i32; 2], Option<crate::scene_graph::Options>)
@@ -1688,6 +1691,12 @@ pub fn run_with_modules(
     })?;
     s.query("player_hitsplats", |pid, indices: Vec<i32>| {
         player_hitsplats(pid, &indices)
+    })?;
+    s.query("npc_overhead_text", |pid, indices: Vec<i32>| {
+        npc_overhead_text(pid, &indices)
+    })?;
+    s.query("player_overhead_text", |pid, indices: Vec<i32>| {
+        player_overhead_text(pid, &indices)
     })?;
     s.read("client_cycle", client_cycle)?;
     s.query("locs", locs)?;

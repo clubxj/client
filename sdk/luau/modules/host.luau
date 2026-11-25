@@ -917,6 +917,8 @@ return {
 	npc_sizes = g.npc_sizes :: (indices: { number }) -> { [number]: number }?,
 	npc_hitsplats = g.npc_hitsplats :: (indices: { number }) -> { [number]: { Hitsplat } }?,
 	player_hitsplats = g.player_hitsplats :: (indices: { number }) -> { [number]: { Hitsplat } }?,
+	npc_overhead_text = g.npc_overhead_text :: (indices: { number }) -> { [number]: string }?,
+	player_overhead_text = g.player_overhead_text :: (indices: { number }) -> { [number]: string }?,
 	client_cycle = g.client_cycle :: () -> number?,
 	item_stackable = g.item_stackable :: (ids: { number }) -> { boolean? }?,
 	locs = g.locs :: (plane: number?) -> { Loc }?,
