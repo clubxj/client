@@ -102,6 +102,7 @@
 - [Depositbox](depositbox.md)
 - [Fairyring](fairyring.md)
 - [Gnomeglider](gnomeglider.md)
+- [HuntsmansKit](huntsmans_kit.md)
 - [Itemretrieval](itemretrieval.md)
 - [Jewellerybox](jewellerybox.md)
 - [Lamp](lamp.md)

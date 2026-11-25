@@ -233,6 +233,20 @@ if (Quetzal.charges(true) or 0) > 0 then
 end
 ```
 
+## Quetzal.set_charges
+
+Definition:
+```luau
+function Quetzal.set_charges(charges: number)
+```
+Sets the tracked count to `charges`, for changes no chat line reports, such as a recharge at Soar Leader Pitri. Chat lines seen before it no longer apply; later "Check" or flight lines replace it.
+
+Example:
+```luau
+Quetzal.set_charges(5)
+print(Quetzal.charges(true))
+```
+
 ## Quetzal.signal
 
 Definition:

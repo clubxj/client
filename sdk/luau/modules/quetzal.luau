@@ -561,6 +561,11 @@ function Quetzal.charges(cached: boolean?): number?
 	return check()
 end
 
+function Quetzal.set_charges(charges: number)
+	track()
+	tracked.charges = charges
+end
+
 function Quetzal.signal(): (boolean, string?)
 	if Quetzal.is_open() then
 		return true, nil
