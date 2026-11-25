@@ -1,4 +1,5 @@
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::{Entity, Focusable, Hsla, Subscription};
@@ -10,6 +11,7 @@ const COLUMN_GAP: Pixels = px(16.0);
 const SWATCH: Pixels = px(20.0);
 const DISPLAY_NAME_WIDTH: Pixels = px(140.0);
 const CURSOR_SIZE_WIDTH: Pixels = px(100.0);
+const HIDER_COLUMN: Pixels = px(170.0);
 const CURSOR_SIZES: std::ops::RangeInclusive<u8> = 4..=64;
 const DISPLAY_NAME_HINT: &str = "Shown instead of your display name, in this client only, and kept across logins until reset. Empty puts the real name back.";
 
@@ -382,6 +384,42 @@ impl LoaderApp {
             .child(option(labels[1], name))
     }
 
+    fn render_client_hider(&self, pid: u32, cx: &mut Context<Self>) -> Div {
+        let mask = self.hiders.mask(pid);
+        let columns = crate::hider::GROUPS.iter().map(|(title, categories)| {
+            let boxes = categories.iter().map(|category| {
+                let bit = category.bit;
+                Checkbox::new(("hide", bit))
+                    .label(category.label)
+                    .small()
+                    .checked(mask.is_some_and(|mask| mask & bit != 0))
+                    .disabled(mask.is_none())
+                    .on_click(cx.listener(move |app, on: &bool, _, cx| {
+                        if let Some(mask) = app.hiders.mask(pid) {
+                            let mask = if *on { mask | bit } else { mask & !bit };
+                            app.set_hider(pid, mask);
+                        }
+                        cx.notify();
+                    }))
+            });
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme::LINE_GAP)
+                .min_w(HIDER_COLUMN)
+                .child(widgets::strong(*title))
+                .children(boxes)
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme::LINE_GAP)
+            .mt(px(20.0))
+            .child(widgets::strong("Hide"))
+            .child(widgets::weak(crate::hider::HINT))
+            .child(div().flex().flex_wrap().gap(COLUMN_GAP).children(columns))
+    }
+
     fn render_client_children(&self, pid: u32, cx: &mut Context<Self>) -> Div {
         let buttons = self
             .client_node(pid)
@@ -498,6 +536,11 @@ impl LoaderApp {
                     .mt(px(6.0))
                     .child(self.render_client_options(&ui, window, cx)),
             )
+            .when(
+                self.target_of(pid)
+                    .is_some_and(|t| t.client.loaded.is_some()),
+                |page| page.child(self.render_client_hider(pid, cx)),
+            )
         } else {
             page
         };
@@ -551,6 +594,18 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             populated(app);
             app.page = Page::Client(4120);
             app.display_name = "Alt name".into();
+        }),
+        ("client-hider", |app| {
+            populated(app);
+            app.page = Page::Client(4120);
+            let asked_at = app.hiders.change();
+            app.hiders.answered(
+                4120,
+                asked_at,
+                false,
+                Some(injector::hide::OTHERS | injector::hide::WALLS | injector::hide::PROJECTILES),
+            );
+            app.hiders.poll(Instant::now());
         }),
         ("client-unloaded", |app| {
             populated(app);

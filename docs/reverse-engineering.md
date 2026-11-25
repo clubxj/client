@@ -308,6 +308,13 @@ Facts about the client's internals that the code does not state, and the steps f
 - The model's vertices stay in model space; the rotated boxes are cached per orientation at `model+0x238`.
 - `find_render` finds `pass` by its returns, then `draw` as the caller of `pass` whose entry stores `r8d` (the orientation) at `[rsp+0x18]`, then the transient flag as the first byte compare after a register call in `draw`. A second caller, `0x14065daf0` (a `(renderer, renderable, r8, r9d)` draw), wasn't hit while standing among NPCs and locs and isn't hooked; it is probably for projectiles or spot animations.
 
+## Render switches (`offsets/hider.rs`)
+
+- The client's Lua plugin API (`osrs.Entity`) has `render3D(bool)`, `render2D(bool)` and `renderProjectiles(bool)`. Every renderable has a hidden byte (`+0x1c` in 243.1): `render3D` stores the negated value into the actor's, `renderProjectiles` into each projectile's. The scene's per-renderable helper (called from the tile drawer for every slot) returns before drawing and mouse picking when it is set, so a hidden thing can't be clicked. Actors also have a 2D byte (`+0x3a0` in 243.1), nonzero to draw overhead text, hitsplats, health bars and head icons; the 2D pass skips an actor whose byte is 0.
+- `find_hider` takes the hidden byte from the negated store in both setters and requires them to agree, and the 2D byte from `render2D`'s store that isn't into the Lua object itself. It holds from 232.1; older builds register the bindings differently.
+- The predicates (`isOnlineFriend`, `isFriendChat`, `isGroup` for clan, `isIgnored`, `isFollower`, `isLocalFollower`, `isDead`) are members of the Lua entity, `bool f(entity*)`. The entity is small: the actor index at `+8` (the rule checks every predicate reads it there) and a player flag at `+0xc` that only lookups through the shared actor getter read (0 means NPC). The agent calls them with a zeroed 32-byte entity holding just the index; it only calls `isDead` for NPCs.
+- The draw's tag holds the entity type in bits 16 to 18: 0 player, 1 NPC, 2 loc, 3 item pile. The renderable vtables: static loc model `0xc15f90`, animated loc `0xc16620`, player `0xbaafb0`, NPC `0xbab388`, item pile `0xbaa520` (243.1).
+
 ## Definitions on disk (`decode/src/js5.rs`, `decode/src/definitions.rs`, `client/definitions.rs`)
 
 - The client keeps the classic disk cache in the following files: `main_file_cache.dat2` (520-byte sectors) and one `main_file_cache.idx<N>` per index, held open while it runs. Configs are index 2: locs are group 6 and varbits group 14, both bzip2 containers split into one file per id. The reference table (index 255, group 2) is protocol 7.

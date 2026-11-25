@@ -170,6 +170,7 @@ fn renderables(request: &ModelRequest) -> Result<(Vec<u64>, Option<u64>), i32> {
 fn drawn_models(frame: &Frame, request: &ModelRequest) -> Result<Models, i32> {
     let camera = frame.camera.ok_or(model_status::NOT_FOUND)?;
     let (renderables, tag) = renderables(request)?;
+    super::hider::reveal(&renderables);
     let drawn: Vec<&Drawn> = renderables
         .into_iter()
         .filter_map(|renderable| frame.find(renderable, tag))

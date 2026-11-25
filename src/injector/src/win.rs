@@ -74,8 +74,10 @@ use ipc::{
     state::{
         ActRequest, ActState, CACHE_BATCH, CACHE_FILE_MISSING, CACHE_FILE_NO_ROOM, CacheReply,
         CacheRequest, ITEM_ICON_HEIGHT, ITEM_ICON_SHOW_COUNT, ITEM_ICON_WIDTH, LAYOUT_SIZE, Layout,
-        LayoutView, ModelRequest, ReadError, Shared, TotalXpRequest, WorkerRequest, WorldLayout,
-        cache_status, game_state::LOGGED_IN, model_target, name_status, part, state_memory_name,
+        HiderRequest, HiderStatus, LayoutView, ModelRequest, ReadError, Shared, TotalXpRequest,
+        WorkerRequest, WorldLayout,
+        cache_status, game_state::LOGGED_IN, hider_status, model_target, name_status, part,
+        state_memory_name,
         total_xp_status, worker_kind, worker_status,
     },
     unload_event_name,
@@ -868,6 +870,36 @@ pub fn set_total_xp(pid: u32, offset: Option<i64>) -> Result<TotalXp, String> {
             Err(format!("{OTHER_THREAD}, so the total XP isn't faked"))
         }
         other => Err(format!("unknown total XP status {other}")),
+    }
+}
+
+fn hider_mask(status: Option<HiderStatus>) -> Result<u64, String> {
+    match status {
+        Some(status) if status.status == hider_status::NOT_FOUND => Err(
+            "agent didn't find the client's render switches, so it can't hide entities".into(),
+        ),
+        Some(status) => Ok(status.mask),
+        None => Err("cannot read the entity hider's state".into()),
+    }
+}
+
+pub fn hider(pid: u32) -> Result<u64, String> {
+    hider_mask(session(pid)?.view.shared().read_hider_status(100))
+}
+
+pub fn set_hider(pid: u32, mask: u64) -> Result<u64, String> {
+    let session = session(pid)?;
+    let shared = session.view.shared();
+    let sequence = shared.write_hider_request(&HiderRequest { mask });
+    let start = Instant::now();
+    loop {
+        match shared.read_hider_status(100) {
+            Some(status) if status.sequence == sequence => return hider_mask(Some(status)),
+            _ if start.elapsed() >= REQUEST_TIMEOUT => {
+                return Err("agent didn't apply the entity hider: the client drew no frame".into());
+            }
+            _ => sleep(REQUEST_POLL),
+        }
     }
 }
 

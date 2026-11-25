@@ -41,6 +41,17 @@ Clicking a moving thing from outside the client is always a frame or more late, 
 - The agent only presses; the injector moves the mouse (WindMouse after `act_state.spot`) and releases the button.
 - `GONE` means no model for `GONE_FRAMES`; a model that exists but is covered keeps tracking until the timeout.
 
+## Entity hider (`client/hider.rs`)
+
+The loader's Hide boxes set a category mask (`ipc::state::hide`); the agent applies it through the client's own render switches (see [reverse-engineering.md](reverse-engineering.md)), so hidden things are neither drawn nor clickable.
+
+- Runs on the game thread after the draw step, only from the draw step hook: the category predicates are client functions. It adopts a new request each frame and publishes the effective mask in `hider_status`.
+- Each frame it walks the categories that are on or still have something hidden: players and NPCs, the projectile and spot animation lists, and every scene tile on all four planes (walls, wall and floor decorations, objects, item piles). The classification follows the RuneLite plugin: yourself, attackers, then friends, friends chat, clan and ignored before "others"; others' pets, dead NPCs, attackers, thralls and random events before "NPCs". Thralls and random events are NPC id lists.
+- It writes only to entities found in this frame's walk, and puts back only flags it set itself (tracked by address with the category that hid it); a tracked address the walk no longer finds is dropped without a write, since its object may be freed.
+- A model read (`model.rs`, used by act and the worker) of something hidden clears that category's bit, so the next frame shows it and the loader's box turns off. That read itself finds no model.
+- Unload asks the next frame to show everything again (`hider::stop`); if no frame comes within a second, the flags stay.
+- Identical static locs share one renderable, so hiding a loc kind hides every copy of a loc that also sits in another slot kind.
+
 ## Event logs
 
 `packets.rs`, `script_runs.rs`, `varc_log.rs`, `item_log.rs` detour client functions (rules in `offsets/`) and append to shared rings `AGENT_PACKETS_`/`SCRIPTS_`/`VARCS_`/`ITEMS_<pid>`; `log.rs` holds the shared parts. Format and reader wake-ups: [ipc-protocol.md](ipc-protocol.md).

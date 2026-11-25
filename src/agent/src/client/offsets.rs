@@ -8,6 +8,7 @@ mod camera;
 mod chat;
 mod frame;
 mod ground_items;
+mod hider;
 #[cfg(test)]
 mod highlights;
 mod item_icon;
@@ -37,6 +38,7 @@ pub use camera::find_camera;
 pub use chat::find_chat;
 pub use frame::{find_frame, Frame};
 pub use ground_items::{find_ground_item_ownership, find_ground_items, find_item_pile};
+pub use hider::{find_hider, Hider};
 pub use item_icon::find_item_icon;
 pub use item_setter::find_item_setter;
 pub use local_projection::find_local_projection;
@@ -2431,6 +2433,7 @@ mod no_panics {
                 r(&guard(|| find_component_invalidate(pe))),
             );
             put("component fields", r(&guard(|| find_component_fields(pe))));
+            put("hider", r(&guard(|| find_hider(pe))));
             put(
                 "world select",
                 client.map_or_else(skip, |c| r(&guard(|| find_world_select(pe, c)))),

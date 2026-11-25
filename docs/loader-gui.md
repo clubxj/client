@@ -22,6 +22,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 | `feedback.rs` | Feedback page/tab, diagnostics, name scrubbing, sealed run records |
 | `layouts.rs` | Equipment/inventory/prayer layouts, rules, picker |
 | `breaks.rs`, `xp.rs`, `counters.rs` | Break/sleep editors, run trackers |
+| `hider.rs` | Entity hider categories and the client page's poll state |
 | `form.rs` | Form spec rendering |
 | `queue.rs`, `app/queue_page.rs` | Queue model and pure rules (when an entry ends, what follows an exit, break carry-over); Queue page, start checks and the per-client runner |
 | `http.rs`, `whitelist.rs` | Script HTTP requests, whitelist |
@@ -149,6 +150,11 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - A form's `required` items and `locked` prayers (`layouts::Rules`) are fitted into every layout and the value sent, each frame a tab shows. An inventory layout with no room is unusable and sends null.
 - The secondary ammo slot is always shown since a layout can't know about a bolt pouch or quiver; the SDK ignores it without one.
 - Prayer data and upgrades come from the client's prayer objs and RuneLite's cs2 scripts; a layout is only a set, the SDK decides how to use it.
+
+## Entity hider
+
+- The client page's Hide boxes show the agent's applied mask, not what was asked: the loader reads it every 2 s while that page is open (`hider::POLL_EVERY`), so a box the agent turned off because a script reached for a hidden thing turns off here too, with a log line. A read asked before the latest change is dropped, so a poll can't undo a click.
+- Nothing is saved: a new agent starts with nothing hidden. The boxes are greyed out unless this loader's own agent is loaded, since an older one speaks another protocol.
 
 ## Development inspectors
 

@@ -14,6 +14,7 @@ mod feedback;
 mod flow_tests;
 mod fold;
 mod form;
+mod hider;
 mod highlight;
 mod http;
 mod icons;

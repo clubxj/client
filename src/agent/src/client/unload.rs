@@ -42,6 +42,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
     }
 
     println!("[Agent]: Unloading.\r\n");
+    super::hider::stop();
     super::drawn::stop();
     unhook_all();
 

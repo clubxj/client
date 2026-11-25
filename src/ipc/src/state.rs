@@ -510,6 +510,52 @@ pub struct TotalXpStatus {
     pub status: i32,
 }
 
+pub mod hide {
+    pub const OTHERS: u64 = 1 << 0;
+    pub const OTHERS_2D: u64 = 1 << 1;
+    pub const FRIENDS: u64 = 1 << 2;
+    pub const FRIENDS_CHAT: u64 = 1 << 3;
+    pub const CLAN: u64 = 1 << 4;
+    pub const IGNORED: u64 = 1 << 5;
+    pub const LOCAL: u64 = 1 << 6;
+    pub const LOCAL_2D: u64 = 1 << 7;
+    pub const NPCS: u64 = 1 << 8;
+    pub const NPCS_2D: u64 = 1 << 9;
+    pub const PETS: u64 = 1 << 10;
+    pub const THRALLS: u64 = 1 << 11;
+    pub const DEAD_NPCS: u64 = 1 << 12;
+    pub const RANDOM_EVENTS: u64 = 1 << 13;
+    pub const ATTACKERS: u64 = 1 << 14;
+    pub const PROJECTILES: u64 = 1 << 15;
+    pub const SPOT_ANIMS: u64 = 1 << 16;
+    pub const WALLS: u64 = 1 << 17;
+    pub const WALL_DECORATIONS: u64 = 1 << 18;
+    pub const GROUND_DECORATIONS: u64 = 1 << 19;
+    pub const OBJECTS: u64 = 1 << 20;
+    pub const GROUND_ITEMS: u64 = 1 << 21;
+    pub const ALL: u64 = (1 << 22) - 1;
+}
+
+pub mod hider_status {
+    pub const OFF: i32 = 0;
+    pub const ON: i32 = 1;
+    pub const NOT_FOUND: i32 = -1;
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HiderRequest {
+    pub mask: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HiderStatus {
+    pub sequence: u32,
+    pub status: i32,
+    pub mask: u64,
+}
+
 pub mod game_val {
     pub const OBJ: u32 = 0;
     pub const NPC: u32 = 1;
@@ -835,6 +881,12 @@ pub struct LayoutMemory {
     pub act_state_sequence: u32,
     pub reserved22: u32,
     pub act_state: ActState,
+    pub hider_request_sequence: u32,
+    pub reserved23: u32,
+    pub hider_request: HiderRequest,
+    pub hider_status_sequence: u32,
+    pub reserved24: u32,
+    pub hider_status: HiderStatus,
 }
 
 pub const LAYOUT_SIZE: usize = core::mem::size_of::<LayoutMemory>();
@@ -941,6 +993,8 @@ impl<'a> Shared<'a> {
     seqlocked!(worker_reply_sequence, worker_reply: WorkerReply; fill write_worker_reply_with);
     seqlocked!(act_request_sequence, act_request: ActRequest; request write_act_request, read_act_request(1));
     seqlocked!(act_state_sequence, act_state: ActState; reply write_act_state, read_act_state);
+    seqlocked!(hider_request_sequence, hider_request: HiderRequest; request write_hider_request, read_hider_request(1));
+    seqlocked!(hider_status_sequence, hider_status: HiderStatus; reply write_hider_status, read_hider_status);
 
     pub fn worker_reply_answers(self) -> Option<u32> {
         let this = self.this();
@@ -1141,6 +1195,37 @@ mod tests {
                 + ACT_BLOCKERS * 16
         );
         assert_eq!(size_of::<ActState>(), 40 + entry);
+        assert_eq!(size_of::<HiderRequest>(), 8);
+        assert_eq!(size_of::<HiderStatus>(), 16);
+        assert_eq!(
+            offset_of!(LayoutMemory, hider_request),
+            offset_of!(LayoutMemory, act_state) + size_of::<ActState>() + 8
+        );
+    }
+
+    #[test]
+    fn hider_requests_and_status_round_trip() {
+        let mut memory = memory();
+        let ptr = memory.as_mut_ptr();
+        unsafe {
+            let shared = Shared::create(NonNull::new(ptr).unwrap());
+            assert_eq!(
+                shared.read_hider_request(),
+                Some((0, HiderRequest::default()))
+            );
+            let request = HiderRequest {
+                mask: hide::OTHERS | hide::WALLS,
+            };
+            assert_eq!(shared.write_hider_request(&request), 2);
+            assert_eq!(shared.read_hider_request(), Some((2, request)));
+            let status = HiderStatus {
+                sequence: 2,
+                status: hider_status::ON,
+                mask: hide::OTHERS,
+            };
+            shared.write_hider_status(&status);
+            assert_eq!(shared.read_hider_status(1), Some(status));
+        }
     }
 
     #[test]

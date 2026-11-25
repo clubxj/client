@@ -11,6 +11,7 @@ pub use decode::{
     world_select::WorldSelect,
 };
 use ipc::{Header, Incompatible};
+pub use ipc::state::hide;
 pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
@@ -332,7 +333,7 @@ pub(crate) use win::paint_overlay;
 pub use win::{
     ItemWatcher, PacketWatcher, cache_archive_files, cache_archives, cache_files, cache_locs,
     chat_messages, client_cycle, collision_area, connection, draw, draw_batch, draw_lines,
-    entry_swaps, enum_def, find_path, game_state, game_val_names, ground_items, in_instance,
+    entry_swaps, enum_def, find_path, game_state, game_val_names, ground_items, hider, in_instance,
     item_changes, item_changes_wait, item_container, item_containers, item_families, item_icons,
     item_names, item_params, item_stackable, landmasses, list_clients, load, loc_model, loc_shown,
     locs, map_regions, memory_words, menu, menu_click, menu_layout, menu_open, movement, nav_plan,
@@ -340,12 +341,58 @@ pub use win::{
     packets, raw_packet_layouts,
     player_hitsplats, player_model, player_plane, player_words, players, project, project_from,
     projectiles, scene_collision, scene_route, scene_tiles, scene_tiles_next_frame, screenshot,
-    script_runs, selected_widget, server_tile, set_cursor, set_display_name, set_total_xp,
+    script_runs, selected_widget, server_tile, set_cursor, set_display_name, set_hider, set_total_xp,
     spot_anims, sprites, sub_interfaces, unload, varbit, varbits_of, varc, varc_changes,
     varp_value, varps, wait_watchers, watch_client, widget, widget_children, widget_dump,
     widget_model, widget_tree, widget_words, world_debug, world_entities, world_route,
     world_select,
 };
+
+pub const HIDER_NAMES: [(&str, u64); 22] = [
+    ("others", hide::OTHERS),
+    ("others-2d", hide::OTHERS_2D),
+    ("friends", hide::FRIENDS),
+    ("friends-chat", hide::FRIENDS_CHAT),
+    ("clan", hide::CLAN),
+    ("ignored", hide::IGNORED),
+    ("local", hide::LOCAL),
+    ("local-2d", hide::LOCAL_2D),
+    ("npcs", hide::NPCS),
+    ("npcs-2d", hide::NPCS_2D),
+    ("pets", hide::PETS),
+    ("thralls", hide::THRALLS),
+    ("dead-npcs", hide::DEAD_NPCS),
+    ("random-events", hide::RANDOM_EVENTS),
+    ("attackers", hide::ATTACKERS),
+    ("projectiles", hide::PROJECTILES),
+    ("spot-anims", hide::SPOT_ANIMS),
+    ("walls", hide::WALLS),
+    ("wall-decorations", hide::WALL_DECORATIONS),
+    ("ground-decorations", hide::GROUND_DECORATIONS),
+    ("objects", hide::OBJECTS),
+    ("ground-items", hide::GROUND_ITEMS),
+];
+
+pub fn hider_mask(names: &str) -> Result<u64, String> {
+    if names == "off" {
+        return Ok(0);
+    }
+    names.split(',').try_fold(0, |mask, name| {
+        HIDER_NAMES
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, bit)| mask | bit)
+            .ok_or_else(|| format!("Unknown hider category: {name}"))
+    })
+}
+
+pub fn hider_names(mask: u64) -> Vec<&'static str> {
+    HIDER_NAMES
+        .iter()
+        .filter(|(_, bit)| mask & bit != 0)
+        .map(|(name, _)| *name)
+        .collect()
+}
 
 pub fn dll_version(dll: &[u8]) -> String {
     String::from_utf8_lossy(&ipc::build_id(dll)).into_owned()

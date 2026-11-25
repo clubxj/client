@@ -550,11 +550,69 @@ fn actors<M: Memory, T>(
     Some(found)
 }
 
-pub fn npcs(memory: &impl Memory, layout: &WorldLayout) -> Option<Vec<Npc>> {
+type ActorList = ((u64, u64, i32), (i32, i32));
+
+fn npc_list(memory: &impl Memory, layout: &WorldLayout) -> Option<ActorList> {
     let (view, base) = world_view_with_base(memory, layout, client(memory, layout)?)?;
     let indices = memory.ptr(view + layout.npc_indices as u64)?;
     let count = memory.i32(view + layout.npc_indices as u64 + 8)?;
-    let list = (view + layout.npc_table as u64, indices, count);
+    Some(((view + layout.npc_table as u64, indices, count), base))
+}
+
+fn player_list(memory: &impl Memory, layout: &WorldLayout) -> Option<ActorList> {
+    let client = client(memory, layout)?;
+    let (view, base) = world_view_with_base(memory, layout, client)?;
+    let count = memory.i32(client + layout.player_count as u64)?;
+    Some((
+        (
+            view + layout.players as u64,
+            client + layout.player_count as u64 + 4,
+            count,
+        ),
+        base,
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActorObject {
+    pub index: i32,
+    pub address: u64,
+    pub id: i32,
+    pub interacting_npc: i32,
+    pub interacting_player: i32,
+}
+
+fn actor_object(index: i32, address: u64, id: i32, actor: &Actor) -> ActorObject {
+    ActorObject {
+        index,
+        address,
+        id,
+        interacting_npc: actor.interacting_npc,
+        interacting_player: actor.interacting_player,
+    }
+}
+
+pub fn npc_objects(memory: &impl Memory, layout: &WorldLayout) -> Option<Vec<ActorObject>> {
+    let (list, base) = npc_list(memory, layout)?;
+    let definition = [(layout.npc_definition as u64, 8)];
+    actors(memory, layout, list, base, &definition, |m, npc, a| {
+        let id = m
+            .ptr(npc + layout.npc_definition as u64)
+            .and_then(|d| m.i32(d + layout.definition_id as u64))
+            .unwrap_or(-1);
+        actor_object(a.index, npc, id, &a)
+    })
+}
+
+pub fn player_objects(memory: &impl Memory, layout: &WorldLayout) -> Option<Vec<ActorObject>> {
+    let (list, base) = player_list(memory, layout)?;
+    actors(memory, layout, list, base, &[], |_, player, a| {
+        actor_object(a.index, player, -1, &a)
+    })
+}
+
+pub fn npcs(memory: &impl Memory, layout: &WorldLayout) -> Option<Vec<Npc>> {
+    let (list, base) = npc_list(memory, layout)?;
     actors(
         memory,
         layout,
@@ -768,14 +826,7 @@ pub fn world_debug(memory: &impl Memory, layout: &WorldLayout) -> Option<Vec<Str
 }
 
 pub fn players(memory: &impl Memory, layout: &WorldLayout) -> Option<Vec<Player>> {
-    let client = client(memory, layout)?;
-    let (view, base) = world_view_with_base(memory, layout, client)?;
-    let count = memory.i32(client + layout.player_count as u64)?;
-    let list = (
-        view + layout.players as u64,
-        client + layout.player_count as u64 + 4,
-        count,
-    );
+    let (list, base) = player_list(memory, layout)?;
     actors(
         memory,
         layout,
@@ -976,6 +1027,20 @@ pub fn projectiles(memory: &impl Memory, layout: &Layout) -> Option<Vec<Projecti
     Some(projectiles)
 }
 
+pub fn projectile_objects(memory: &impl Memory, layout: &Layout) -> Option<Vec<u64>> {
+    let p = &layout.projectiles;
+    let client = client(memory, &layout.world)?;
+    let mut objects = Vec::new();
+    list_objects(
+        memory,
+        client + p.list as u64,
+        p.node as u64,
+        MAX_PROJECTILES,
+        |at| objects.push(at),
+    )?;
+    Some(objects)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpotAnim {
     pub id: i32,
@@ -993,11 +1058,11 @@ pub struct SpotAnim {
 const MAX_SPOT_ANIMS: u64 = 512;
 const SPOT_ANIM_NODE: u64 = 0x18;
 
-pub fn spot_anims(memory: &impl Memory, layout: &Layout) -> Option<Vec<SpotAnim>> {
+fn spot_anim_views(memory: &impl Memory, layout: &Layout) -> Option<Vec<(u64, i32)>> {
     let client = ipc::read::client(memory, layout)?;
     let (own, _) = ipc::read::local_player_in(memory, layout, client)?;
     let own_id = memory.i32(client + layout.player.world_view_id as u64)?;
-    let mut objects = Vec::new();
+    let mut views = Vec::new();
     if own_id != TOP_LEVEL_VIEW
         && let Some(top) = table_get(
             memory,
@@ -1005,9 +1070,34 @@ pub fn spot_anims(memory: &impl Memory, layout: &Layout) -> Option<Vec<SpotAnim>
             TOP_LEVEL_VIEW,
         )
     {
-        objects.extend(spot_anims_in(memory, layout, top, TOP_LEVEL_VIEW).unwrap_or_default());
+        views.push((top, TOP_LEVEL_VIEW));
     }
-    objects.extend(spot_anims_in(memory, layout, own, own_id)?);
+    views.push((own, own_id));
+    Some(views)
+}
+
+pub fn spot_anims(memory: &impl Memory, layout: &Layout) -> Option<Vec<SpotAnim>> {
+    let views = spot_anim_views(memory, layout)?;
+    let (own, others) = views.split_last()?;
+    let mut objects = Vec::new();
+    for &(view, id) in others {
+        objects.extend(spot_anims_in(memory, layout, view, id).unwrap_or_default());
+    }
+    objects.extend(spot_anims_in(memory, layout, own.0, own.1)?);
+    Some(objects)
+}
+
+pub fn spot_anim_objects(memory: &impl Memory, layout: &Layout) -> Option<Vec<u64>> {
+    let mut objects = Vec::new();
+    for (view, _) in spot_anim_views(memory, layout)? {
+        list_objects(
+            memory,
+            view + layout.spot_anims.list as u64,
+            SPOT_ANIM_NODE,
+            MAX_SPOT_ANIMS,
+            |at| objects.push(at),
+        )?;
+    }
     Some(objects)
 }
 

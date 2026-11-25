@@ -128,6 +128,12 @@ fn dispatch(args: &[&str]) -> String {
         ["console", pid] => with_pid(pid, injector::open_console),
         ["state", pid] => with_pid(pid, injector::game_state),
         ["name", pid, name] => with_pid(pid, |pid| injector::set_display_name(pid, name)),
+        ["hider", pid] => with_pid(pid, |pid| injector::hider(pid).map(injector::hider_names)),
+        ["hider", pid, names] => with_pid(pid, |pid| {
+            injector::hider_mask(names)
+                .and_then(|mask| injector::set_hider(pid, mask))
+                .map(injector::hider_names)
+        }),
         ["total-xp", pid, offset] => with_pid(pid, |pid| match *offset {
             "off" => injector::set_total_xp(pid, None),
             "random" => injector::game_state(pid).and_then(|state| {
@@ -467,6 +473,10 @@ fn run() -> ExitCode {
         );
         eprintln!(
             "       injector varp <pid> <id> | varps <pid> | varbit <pid> <id> | enum <pid> <id> | item-params <pid> <ids...> | name <pid> <display name>"
+        );
+        eprintln!(
+            "       injector hider <pid> [off | <category>,...] (categories: {})",
+            injector::HIDER_NAMES.map(|(name, _)| name).join(" ")
         );
         eprintln!(
             "       injector container <pid> <id> | containers <pid> | widget-tree <pid> | widget-words <pid> <group> <child> <index|-1> <count> | widget-dump <pid> <count> | item-names <pid> <id>... | item-icons <pid> <id[:quantity[:1]]>... | sprites <pid> <id>... | item-stackable <pid> <id>... | item-families <pid> <id>... | varc <pid> <id> | npcs <pid> | tiles <pid> [layer]... | npc-model <pid> <index> | spot-anims <pid> | packets <pid> <since> | scripts <pid> <since> | varc-changes <pid> <since> | item-changes <pid> <since> [wait ms] (u64 max: only the position) | locs <pid> | loc-model <pid> <kind> <scene x> <scene y> <id> | ground-items <pid> | chat <pid> | players <pid> | world-select <pid> | selected <pid>"

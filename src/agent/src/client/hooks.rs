@@ -51,7 +51,7 @@ use super::offsets::{
     find_menu_click, find_menu_layout, find_menu_open, find_menu_order, find_menu_settings,
     find_minimap, find_model_faces, find_model_vertices, find_npc_head_icons, find_npc_model,
     find_packet_layouts, find_packet_names, find_packets, find_projectiles, find_projection,
-    find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
+    find_hider, find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
     find_spot_anims, find_tick_count, find_varc_setters, find_varcs, find_varps, find_world_select,
     guarded, NamedPacket, PacketAnchors, Pe, ScanError, World,
 };
@@ -1002,6 +1002,9 @@ unsafe fn find_offsets() {
         {
             super::drawn::hook(module_base, render, slot);
         }
+    }
+    if let Some(rule) = found("Hider", guarded(|| find_hider(pe))) {
+        super::hider::set_rule(module_base, rule);
     }
     if let Some(rule) = found("Frame", guarded(|| find_frame(pe))) {
         super::frame::hook(module_base, image.len() as u64, rule);

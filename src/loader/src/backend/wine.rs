@@ -273,6 +273,27 @@ pub fn set_display_name(
     call(target, settings, "name", &[name])
 }
 
+fn hider_mask(names: Vec<String>) -> Result<u64, String> {
+    if names.is_empty() {
+        return Ok(0);
+    }
+    injector::hider_mask(&names.join(","))
+}
+
+pub fn hider(target: &Target, settings: &Settings) -> Result<u64, String> {
+    call(target, settings, "hider", &[]).and_then(hider_mask)
+}
+
+pub fn set_hider(target: &Target, settings: &Settings, mask: u64) -> Result<u64, String> {
+    let names = injector::hider_names(mask);
+    let names = if names.is_empty() {
+        "off".to_owned()
+    } else {
+        names.join(",")
+    };
+    call(target, settings, "hider", &[&names]).and_then(hider_mask)
+}
+
 pub fn varps(target: &Target, settings: &Settings) -> Result<Option<Vec<i32>>, String> {
     call(target, settings, "varps", &[])
 }

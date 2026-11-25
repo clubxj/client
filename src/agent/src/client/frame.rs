@@ -60,6 +60,7 @@ unsafe extern "system" fn draw(app: u64, delta: f32) {
         OFFSET_Y.load(Ordering::Relaxed),
     );
     on_frame(offset);
+    let _ = catch_unwind(super::hider::on_frame);
 }
 
 unsafe fn hook_draw(app: u64) {

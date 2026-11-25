@@ -94,6 +94,12 @@ enum Event {
         name: String,
         result: Result<DisplayName, String>,
     },
+    Hider {
+        pid: u32,
+        asked_at: u64,
+        polled: bool,
+        result: Result<u64, String>,
+    },
     Tiles {
         pid: u32,
         result: Result<usize, String>,
@@ -1186,6 +1192,7 @@ pub struct LoaderApp {
     queue_runners: Vec<crate::queue::Runner>,
     queue_page: queue_page::Page,
     clients_ui: Option<clients::Ui>,
+    hiders: crate::hider::Hiders,
     accounts_ui: Option<crate::accounts::Ui>,
     run_ui: run_page::Ui,
     cursor: Cursor,
@@ -1312,6 +1319,7 @@ impl LoaderApp {
             queue_runners: Vec::new(),
             queue_page: queue_page::Page::default(),
             clients_ui: None,
+            hiders: crate::hider::Hiders::default(),
             accounts_ui: None,
             run_ui: run_page::Ui::default(),
             cursor: storage.get(CURSOR_KEY).unwrap_or(DEFAULT_CURSOR),
@@ -2662,6 +2670,50 @@ impl LoaderApp {
         });
     }
 
+    fn poll_hider(&mut self) {
+        let Page::Client(pid) = self.page else {
+            return;
+        };
+        let Some(target) = self
+            .target_of(pid)
+            .filter(|t| t.client.loaded.is_some() && t.client.version == self.agent_version)
+            .cloned()
+        else {
+            self.hiders.forget(pid);
+            return;
+        };
+        let now = Instant::now();
+        match self.hiders.due(now) {
+            Some(wait) if wait.is_zero() => {}
+            Some(wait) => {
+                self.wake.wake_after(wait);
+                return;
+            }
+            None => return,
+        }
+        let asked_at = self.hiders.poll(now);
+        self.wake.wake_after(crate::hider::POLL_EVERY);
+        self.background(move |settings| Event::Hider {
+            pid,
+            asked_at,
+            polled: true,
+            result: backend::hider(&target, &settings),
+        });
+    }
+
+    fn set_hider(&mut self, pid: u32, mask: u64) {
+        let Some(target) = self.target_of(pid).cloned() else {
+            return;
+        };
+        let asked_at = self.hiders.change();
+        self.background(move |settings| Event::Hider {
+            pid,
+            asked_at,
+            polled: false,
+            result: backend::set_hider(&target, &settings, mask),
+        });
+    }
+
     fn set_display_name(&mut self, target: Target) {
         let pid = target.client.pid;
         let name = self.display_name.trim().to_owned();
@@ -2688,6 +2740,7 @@ impl LoaderApp {
                     | Event::Widgets { .. }
                     | Event::WidgetMouse { .. }
                     | Event::Scanned(_)
+                    | Event::Hider { .. }
             ) {
                 self.busy = false;
             }
@@ -2881,6 +2934,28 @@ impl LoaderApp {
                         }
                     }
                     Err(error) => self.script_error(format!("Couldn't end the session: {error}. The server will end it within 5 minutes.")),
+                },
+                Event::Hider {
+                    pid,
+                    asked_at,
+                    polled,
+                    result,
+                } => match result {
+                    Ok(mask) => {
+                        let shown = self.hiders.answered(pid, asked_at, polled, Some(mask));
+                        if polled && shown != 0 {
+                            self.info(format!(
+                                "{pid}: showing {} again, because a script reached for something hidden.",
+                                crate::hider::labels(shown).join(", ")
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        self.hiders.answered(pid, asked_at, polled, None);
+                        if !polled {
+                            self.error(format!("Hiding entities in {pid} failed: {error}"));
+                        }
+                    }
                 },
                 Event::Done { pid, what, result } => {
                     if let Err(error) = result {
@@ -4004,6 +4079,7 @@ impl LoaderApp {
         self.poll_inventory();
         self.poll_icons();
         self.poll_widget_mouse();
+        self.poll_hider();
     }
 
     pub fn save(&mut self) {

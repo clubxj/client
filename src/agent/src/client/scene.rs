@@ -428,24 +428,82 @@ pub fn locs(request: i32) -> Result<Locs, Unavailable> {
     })
 }
 
-fn slots(memory: &OwnMemory, rules: &Rules, object: u64) -> Vec<u32> {
+fn cached_slots<'c>(
+    memory: &OwnMemory,
+    rules: &Rules,
+    cache: &'c mut HashMap<u64, Vec<u32>>,
+    object: u64,
+) -> &'c [u32] {
     let Some(vtable) = memory.ptr(object) else {
-        return Vec::new();
+        return &[];
     };
+    cache.entry(vtable).or_insert_with(|| {
+        let first = memory.ptr(vtable).unwrap_or(0);
+        match unsafe { client_image() } {
+            Some(image) if first > rules.module_base => {
+                render_slots(image, (first - rules.module_base) as u32)
+            }
+            _ => Vec::new(),
+        }
+    })
+}
+
+fn slots(memory: &OwnMemory, rules: &Rules, object: u64) -> Vec<u32> {
     let mut cache = SLOTS.lock().unwrap();
     let cache = cache.get_or_insert_with(HashMap::new);
-    cache
-        .entry(vtable)
-        .or_insert_with(|| {
-            let first = memory.ptr(vtable).unwrap_or(0);
-            match unsafe { client_image() } {
-                Some(image) if first > rules.module_base => {
-                    render_slots(image, (first - rules.module_base) as u32)
+    cached_slots(memory, rules, cache, object).to_vec()
+}
+
+fn object_renderables(
+    memory: &OwnMemory,
+    rules: &Rules,
+    cache: &mut HashMap<u64, Vec<u32>>,
+    object: u64,
+    mut visit: impl FnMut(u64),
+) {
+    for &offset in cached_slots(memory, rules, cache, object) {
+        if let Some(renderable) = memory.ptr(object + offset as u64) {
+            visit(renderable);
+        }
+    }
+}
+
+pub fn visit_renderables(mut visit: impl FnMut(u8, u64)) -> Option<()> {
+    let memory = OwnMemory;
+    let rules = RULES.get()?;
+    let view = view(&memory, rules)?;
+    let mut blocks = Blocks::new(rules);
+    let mut cache = SLOTS.lock().ok()?;
+    let cache = cache.get_or_insert_with(HashMap::new);
+    for plane in 0..4 {
+        let Some(tiles) = Tiles::new(&memory, rules, view.scene, plane) else {
+            continue;
+        };
+        let Some(objects) = tiles.objects(&memory) else {
+            continue;
+        };
+        for tile in objects.into_iter().filter(|&tile| tile != 0) {
+            let Some(tile) = read_fields(&memory, tile, &mut blocks.tile) else {
+                continue;
+            };
+            for (slot, kind, _) in single_slots(rules) {
+                if let Some(object) = tile.ptr(slot) {
+                    object_renderables(&memory, rules, cache, object, |r| visit(kind, r));
                 }
-                _ => Vec::new(),
             }
-        })
-        .clone()
+            if let Some(pile) = rules.item_pile.and_then(|offset| tile.ptr(offset)) {
+                object_renderables(&memory, rules, cache, pile, |r| {
+                    visit(loc_kind::ITEM_PILE, r)
+                });
+            }
+            for object in game_objects(&memory, rules, &tile, &mut blocks.game) {
+                if let Some(renderable) = memory.ptr(object.object + rules.game.renderable as u64) {
+                    visit(loc_kind::GAME, renderable);
+                }
+            }
+        }
+    }
+    Some(())
 }
 
 pub fn loc_renderables(kind: u8, x: i32, y: i32, id: i32) -> Option<(Vec<u64>, Option<u64>)> {

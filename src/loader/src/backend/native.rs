@@ -122,6 +122,14 @@ pub fn set_display_name(
     injector::set_display_name(target.client.pid, name)
 }
 
+pub fn hider(target: &Target, _settings: &Settings) -> Result<u64, String> {
+    injector::hider(target.client.pid)
+}
+
+pub fn set_hider(target: &Target, _settings: &Settings, mask: u64) -> Result<u64, String> {
+    injector::set_hider(target.client.pid, mask)
+}
+
 pub fn varps(target: &Target, _settings: &Settings) -> Result<Option<Vec<i32>>, String> {
     injector::varps(target.client.pid)
 }
