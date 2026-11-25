@@ -209,6 +209,8 @@ Grouping.ROWS = 22
 Grouping.BUTTON = 32
 Grouping.NO_ACTIVITY = "Select an activity..."
 Grouping.TELEPORT = "Teleport to"
+Grouping.ARENA = 762
+Grouping.ARENA_CLOSE = 2
 
 export type Activity = {
 	name: string,
@@ -216,12 +218,41 @@ export type Activity = {
 	area: Widget,
 }
 
-function Grouping.is_open(): boolean
+local function showing(group: number): boolean
 	if SidePanels.current() ~= SidePanels.SIDE_CHANNELS then
 		return false
 	end
-	local w = widget(Grouping.GROUP, 0)
+	local w = widget(group, 0)
 	return w ~= nil and not w.hidden and w.width > 0
+end
+
+function Grouping.arena_open(): boolean
+	return showing(Grouping.ARENA)
+end
+
+function Grouping.close_arena(): boolean
+	if not Grouping.arena_open() then
+		return true
+	end
+	local close = widget(Grouping.ARENA, Grouping.ARENA_CLOSE)
+	if close == nil or close.hidden then
+		return false
+	end
+	Mouse.click(close)
+	if
+		Widgets.wait_within(function(): boolean
+			return not Grouping.arena_open()
+		end, Minigames.OPEN_TIMEOUT_MS, Minigames.POLL_MS)
+	then
+		Random.sleep(Minigames.OPEN_SETTLE_MS[1], Minigames.OPEN_SETTLE_MS[2])
+		return true
+	end
+	Log.log("Minigames", "the PvP Arena panel didn't close")
+	return false
+end
+
+function Grouping.is_open(): boolean
+	return showing(Grouping.GROUP) and not Grouping.arena_open()
 end
 
 function Grouping.open(): boolean
@@ -232,6 +263,9 @@ function Grouping.open(): boolean
 		return false
 	end
 	sleep(Minigames.SETTLE_MS)
+	if not Grouping.close_arena() then
+		return false
+	end
 	if Grouping.is_open() then
 		return true
 	end

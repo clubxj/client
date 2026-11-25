@@ -43,8 +43,10 @@ Grouping.ROWS = 22
 Grouping.BUTTON = 32
 Grouping.NO_ACTIVITY = "Select an activity..."
 Grouping.TELEPORT = "Teleport to"
+Grouping.ARENA = 762
+Grouping.ARENA_CLOSE = 2
 ```
-- Widget children and options of both views.
+- Widget children and options of both views, and the PvP Arena panel and its close button.
 - Waits: open, hover menu, pit dialogue, poll, hover settle, random pause after opening.
 - Scrolling: pixels per wheel notch, most notches per scroll, most scrolls.
 
@@ -187,7 +189,7 @@ Definition:
 ```luau
 function Grouping.is_open(): boolean
 ```
-Whether the side channels tab shows the Grouping view.
+Whether the side channels tab shows the Grouping view, and not the PvP Arena panel over it.
 
 Example:
 ```luau
@@ -200,11 +202,37 @@ Definition:
 ```luau
 function Grouping.open(): boolean
 ```
-Opens the side channels tab and, if needed, clicks its Grouping tab. `true` when showing.
+Opens the side channels tab, closes the PvP Arena panel if it is showing, and, if needed, clicks its Grouping tab. `true` when showing.
 
 Example:
 ```luau
 Grouping.open()
+```
+
+## Grouping.arena_open
+
+Definition:
+```luau
+function Grouping.arena_open(): boolean
+```
+Whether the side channels tab shows the PvP Arena panel (group 762), which the Grouping view's PvP Arena button opens in its place, hiding the dropdown and teleport button.
+
+Example:
+```luau
+print(Grouping.arena_open())
+```
+
+## Grouping.close_arena
+
+Definition:
+```luau
+function Grouping.close_arena(): boolean
+```
+Clicks the PvP Arena panel's close button and waits for the panel to go, then pauses like after opening. `true` at once if the panel isn't showing; `false` if there is no close button or the panel stayed.
+
+Example:
+```luau
+Grouping.close_arena()
 ```
 
 ## Grouping.selected
