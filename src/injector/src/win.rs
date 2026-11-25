@@ -2425,6 +2425,90 @@ fn cache_regions(pid: u32, (x1, y1, x2, y2): (i32, i32, i32, i32)) -> Result<Reg
     Ok(wanted.iter().map(|r| (*r, cached[r].clone())).collect())
 }
 
+fn block_hollow_locs(
+    pid: u32,
+    scenes: &mut [&mut crate::scene_collision::SceneCollision],
+) -> Result<(), String> {
+    use decode::definitions::LocDef;
+    let locs = loc_list(&locs_state(pid, decode::locs::request::ALL_PLANES)?);
+    let ids: Vec<u32> = locs.iter().map(|l| l.id as u32).collect();
+    read_loc_texts(pid, &ids)?;
+    let hollow: Vec<(&crate::Loc, LocDef)> = {
+        let cached = lock(&LOC_TEXTS);
+        let known = of_client(&cached, pid);
+        locs.iter()
+            .filter_map(|loc| {
+                let (def, _) = known?.get(&(loc.id as u32))?.as_ref()?;
+                def.hollow.then_some((loc, *def))
+            })
+            .collect()
+    };
+    if hollow.is_empty() {
+        return Ok(());
+    }
+    let bridged: Vec<bool> = with_terrain(pid, |terrain| {
+        hollow
+            .iter()
+            .map(|(loc, _)| {
+                terrain
+                    .setting(1, loc.scene_x, loc.scene_y)
+                    .is_some_and(|s| s & crate::devtools::TILE_FLAG_BRIDGE != 0)
+            })
+            .collect()
+    })?;
+    let server_only = crate::collision::flag::DOORS | crate::collision::flag::NO_FLOOR;
+    for ((loc, def), bridged) in hollow.iter().zip(bridged) {
+        let (Some(shape), Some(rotation)) = (loc.shape, loc.rotation) else {
+            continue;
+        };
+        let plane = loc.plane - bridged as i32;
+        for scene in scenes.iter_mut().filter(|s| s.plane == plane) {
+            for (dx, dy, bits) in crate::collision::loc_marks(shape, rotation, def) {
+                scene.block(loc.x + dx, loc.y + dy, bits & !server_only);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn live_scene(pid: u32, from: [i32; 2]) -> Result<crate::scene_collision::SceneCollision, String> {
+    let (layout, memory) = reader(pid, part::COLLISION, "the scene's collision maps")?;
+    if state::current(&memory, &layout) != Some(LOGGED_IN) {
+        return Err("not logged in".into());
+    }
+    let mut scene = crate::scene_collision::read(&memory, &layout)
+        .ok_or("the scene's collision map can't be read")?;
+    block_hollow_locs(pid, &mut [&mut scene])?;
+    if scene.flags(from[0], from[1]).is_none() {
+        return Err(format!(
+            "{}, {} isn't in the loaded scene",
+            from[0], from[1]
+        ));
+    }
+    Ok(scene)
+}
+
+pub fn reach_route(
+    pid: u32,
+    from: [i32; 2],
+    target: crate::pathfinding::Target,
+) -> Result<crate::pathfinding::Route, String> {
+    let scene = live_scene(pid, from)?;
+    crate::pathfinding::target_route(|x, y| scene.flags(x, y), (from[0], from[1]), &target)
+        .ok_or_else(|| format!("no tile near {}, {} can be walked to", target.x, target.y))
+}
+
+pub fn reach_tiles(
+    pid: u32,
+    target: crate::pathfinding::Target,
+) -> Result<Vec<crate::pathfinding::Tile>, String> {
+    let scene = live_scene(pid, [target.x, target.y])?;
+    Ok(crate::pathfinding::stand_tiles(
+        |x, y| scene.flags(x, y),
+        &target,
+    ))
+}
+
 pub fn scene_route(
     pid: u32,
     from: [i32; 2],
@@ -2433,18 +2517,7 @@ pub fn scene_route(
 ) -> Result<crate::pathfinding::Route, String> {
     use crate::scene_collision::RING;
     const MAX_WINDOW: i32 = 400;
-    let (layout, memory) = reader(pid, part::COLLISION, "the scene's collision maps")?;
-    if state::current(&memory, &layout) != Some(LOGGED_IN) {
-        return Err("not logged in".into());
-    }
-    let scene = crate::scene_collision::read(&memory, &layout)
-        .ok_or("the scene's collision map can't be read")?;
-    if scene.flags(from[0], from[1]).is_none() {
-        return Err(format!(
-            "{}, {} isn't in the loaded scene",
-            from[0], from[1]
-        ));
-    }
+    let scene = live_scene(pid, from)?;
     let (from, to) = ((from[0], from[1]), (to[0], to[1]));
     let seen: Vec<Arc<crate::scene_collision::SceneCollision>> = if options.is_some() {
         let mut seen = lock(&SEEN_SCENES);
@@ -2596,8 +2669,9 @@ pub fn nav_plan(
     if state::current(&memory, &layout) != Some(LOGGED_IN) {
         return Err("not logged in".into());
     }
-    let live = crate::scene_collision::read_all(&memory, &layout)
+    let mut live = crate::scene_collision::read_all(&memory, &layout)
         .ok_or("the scene's collision maps can't be read")?;
+    block_hollow_locs(pid, &mut live.iter_mut().flatten().collect::<Vec<_>>())?;
     let scene = live
         .iter()
         .flatten()
@@ -2873,8 +2947,9 @@ type SceneCollision = (i32, i32, i32, Vec<Vec<u32>>);
 
 pub fn scene_collision(pid: u32) -> Result<SceneCollision, String> {
     let (layout, memory) = reader(pid, part::COLLISION, "the scene's collision maps")?;
-    let scene = crate::scene_collision::read(&memory, &layout)
+    let mut scene = crate::scene_collision::read(&memory, &layout)
         .ok_or("the scene's collision map can't be read")?;
+    block_hollow_locs(pid, &mut [&mut scene])?;
     let (x1, y1, x2, y2) = scene.bounds();
     let flags = (x1..=x2)
         .map(|x| {

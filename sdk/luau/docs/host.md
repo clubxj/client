@@ -42,6 +42,7 @@ All are plain tables; see `host.luau` for every field.
 | `Tile` / `NavTile` / `Area` / `Corners` / `ScreenPoint` / `FinePoint` | Coordinate shapes. |
 | `CameraView` | A camera yaw and zoom to project with (`project`). |
 | `SceneRoute` / `WorldRoute` / `NavPlan` / `NavOptions` / `SceneRouteOptions` | Pathing results and options. |
+| `ReachTarget` | What `Host.reach_route` walks to: `kind` `"npc"` (south-west tile, `size`), `"loc"` (`size_x`, `size_y`, `shape`, `rotation` as on `Loc`) or `"tile"` (a ground item). |
 | `Shape` | A `rect`, `line` or `clear` for `Host.draw_batch`. |
 | `Layer` | `"world"` or `"ui"`: the overlay layer of a drawing. |
 | `FormSpec` / `FormField` / `GridColumn` / `TaskType` | A settings window. |
@@ -1117,13 +1118,47 @@ if me then
 end
 ```
 
+## Host.reach_route
+
+Definition:
+```luau
+Host.reach_route: (from: Tile, to: ReachTarget) -> (SceneRoute?, string?)
+```
+The route the player walks when they pick an option on `to` from `from`, start first, on the live scene. The server walks the player for NPC, object and item options, not the client, so this follows the server's reach rules: an NPC is used from a tile beside it with no wall between, never from under it; a ground item only from its own tile; an object from its own tile or a side with no wall between, and walls and wall decorations only from the sides their shape faces. An object's blocked sides (staircases used from one side) aren't known, so every open side counts. Unreachable: `reached` false and the route ends where the server stops, the reachable tile nearest `to` within 10 (fewest steps on a tie). That can be `from` itself: picking a banker behind a wall from right outside it gets "I can't reach that".
+
+Example:
+```luau
+local me = Host.game_state().position
+local npc = Npcs.nearest("Banker", me)
+if me and npc then
+	local route = Host.reach_route({ x = me.x, y = me.y }, Npcs.reach(npc))
+	print(route and route.reached)
+end
+```
+
+## Host.reach_tiles
+
+Definition:
+```luau
+Host.reach_tiles: (to: ReachTarget) -> ({ Tile }?, string?)
+```
+The walkable tiles `to` is used from under `Host.reach_route`'s rules, whether or not they can be walked to from here. Empty for an item on a blocked tile, such as a table.
+
+Example:
+```luau
+local loc = Objects.nearest("Bank booth")
+for _, t in ipairs(loc and Host.reach_tiles(Objects.reach(loc)) or {}) do
+	print(t.x, t.y)
+end
+```
+
 ## Host.collision
 
 Definition:
 ```luau
 Host.collision: (area: Corners?) -> (Collision?, string?)
 ```
-Live collision flags of your plane for the scene or `area`. Tile (`x + i`, `y + j`) is `flags[i * height + j + 1]`; [SafeSpot](safespot.md) names the flags. The outer ring has every flag set. About 2 ms.
+Live collision flags of your plane for the scene or `area`. Tile (`x + i`, `y + j`) is `flags[i * height + j + 1]`; [SafeSpot](safespot.md) names the flags. The outer ring has every flag set. Objects the client leaves out of its own map because their definition is hollow (Lumbridge's open bank booths) are blocked, as the server blocks them. About 2 ms.
 
 Example:
 ```luau

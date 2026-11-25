@@ -341,11 +341,11 @@ pub use win::{
     npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npc_words, npcs,
     packet_layouts, packets, player_hitsplats, player_model, player_overhead_text, player_plane,
     player_words, players, project, project_from, projectiles, proxy, raw_packet_layouts,
-    scene_collision, scene_route, scene_tiles, scene_tiles_next_frame, screenshot, script_runs,
-    selected_widget, server_tile, set_cursor, set_display_name, set_hider, set_proxy, set_total_xp,
-    spot_anims, sprites, sub_interfaces, unload, varbit, varbits_of, varc, varc_changes,
-    varp_value, varps, wait_watchers, watch_client, widget, widget_children, widget_dump,
-    widget_model, widget_tree, widget_words, world_debug, world_entities, world_route,
+    reach_route, reach_tiles, scene_collision, scene_route, scene_tiles, scene_tiles_next_frame,
+    screenshot, script_runs, selected_widget, server_tile, set_cursor, set_display_name, set_hider,
+    set_proxy, set_total_xp, spot_anims, sprites, sub_interfaces, unload, varbit, varbits_of, varc,
+    varc_changes, varp_value, varps, wait_watchers, watch_client, widget, widget_children,
+    widget_dump, widget_model, widget_tree, widget_words, world_debug, world_entities, world_route,
     world_select,
 };
 

@@ -226,6 +226,24 @@ Example:
 GroundItems.interact(item, "Take")
 ```
 
+## GroundItems.reach
+
+Definition:
+
+```luau
+function GroundItems.reach(item: GroundItem): Host.ReachTarget
+```
+
+The item's tile as a `Host.reach_route` target.
+
+Example:
+
+```luau
+local me = assert(Walker.position())
+local route = Host.reach_route(me, GroundItems.reach(item))
+print(route and route.reached)
+```
+
 ## GroundItems.approach
 
 Definition:
@@ -234,7 +252,7 @@ Definition:
 function GroundItems.approach(item: GroundItem, options: string | { string }, opts: Clickbox.Approach?): boolean
 ```
 
-Walks towards a distant item and picks the first available of `options`, clicking early once close (see `Clickbox.approach`). Use `interact` for items already on screen.
+Walks towards a distant item and picks the first available of `options` once the pick would reach its tile, so an item behind a fence is walked round to (see `Clickbox.approach`). Use `interact` for items already on screen.
 
 Example:
 

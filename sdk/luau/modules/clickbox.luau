@@ -911,6 +911,29 @@ local function stand_goal(stand: { Tile }, me: Tile): Tile?
 	return nil
 end
 
+local function stands_on(tiles: { Tile }, at: Tile): boolean
+	for _, t in ipairs(tiles) do
+		if t.x == at.x and t.y == at.y then
+			return true
+		end
+	end
+	return false
+end
+
+local function lands(reach: () -> Host.ReachTarget?, extra: { Tile }?): boolean
+	local me = Walker.position()
+	local to = reach()
+	if me == nil or to == nil then
+		return false
+	end
+	local route = Host.reach_route({ x = me.x, y = me.y }, to)
+	if route == nil then
+		return false
+	end
+	local last = route.tiles[#route.tiles]
+	return route.reached or (extra ~= nil and last ~= nil and stands_on(extra, last))
+end
+
 function Clickbox.approach(
 	clickbox: Aim,
 	hovered: () -> boolean,
@@ -918,6 +941,7 @@ function Clickbox.approach(
 	option: string | { string },
 	target: Minimenu.Target?,
 	tile: () -> Tile?,
+	reach: () -> Host.ReachTarget?,
 	opts: Approach?,
 	act: ActTarget?
 ): boolean
@@ -936,7 +960,14 @@ function Clickbox.approach(
 
 	Camera.face(at)
 	local picked_early = false
-	local stand = if o.stand then stand_goal(o.stand, me) else nil
+	local to_reach = reach()
+	local candidates: { Tile } = {}
+	for _, list in { (to_reach and Host.reach_tiles(to_reach)) or {}, o.stand or {} } do
+		for _, t in ipairs(list) do
+			table.insert(candidates, t)
+		end
+	end
+	local stand: Tile? = nil
 	local function goal(): (Tile?, number)
 		if stand then
 			return stand, 0
@@ -947,12 +978,19 @@ function Clickbox.approach(
 		end
 		return { x = math.floor(now.x), y = math.floor(now.y) }, near
 	end
-	local function on_foot(): boolean
+	local function ready(): boolean
+		if #candidates > 0 then
+			return lands(reach, o.stand)
+		end
 		local to, within = goal()
 		return to ~= nil and Walker.plain_walk(to, within)
 	end
-	local arrived = if stand then Walker.distance(me, stand) == 0 else Walker.distance(me, at) <= near
-	if not arrived and not (aimable(clickbox, what) and on_foot()) then
+	local close = stands_on(candidates, me) or Walker.distance(me, at) <= near
+	local pick_now = if #candidates > 0
+		then (close or aimable(clickbox, what)) and ready()
+		else close or (aimable(clickbox, what) and ready())
+	if not pick_now then
+		stand = stand_goal(candidates, me)
 		local last_try: number? = nil
 		local to, within = goal()
 		local ok = Walker.walk(to or { x = math.floor(at.x), y = math.floor(at.y) }, {
@@ -977,7 +1015,7 @@ function Clickbox.approach(
 					and (last_try == nil or Host.time() - last_try >= Clickbox.EARLY_RETRY_MS)
 					and on_screen(clickbox, what)
 					and aimable(clickbox, what)
-					and on_foot()
+					and ready()
 				then
 					last_try = Host.time()
 					if

@@ -329,45 +329,46 @@ impl<T: Cell> WorldCollision<T> {
     }
 
     fn add_loc(&mut self, plane: i32, x: i32, y: i32, shape: u8, rotation: u8, def: &LocDef) {
-        match shape {
-            22 => {
-                if def.interact_type == 1 {
-                    self.add(plane, x, y, flag::FLOOR_DECORATION);
-                }
-            }
-            0..=3 if def.interact_type != 0 => self.add_wall(plane, x, y, shape, rotation, def),
-            9..=21 if def.interact_type != 0 => {
-                let (w, h) = turned(def.size_x, def.size_y, rotation);
-                let door = if shape == 9 && def.door {
-                    flag::DOOR_OBJECT
-                } else {
-                    0
-                };
-                let projectile = if def.blocks_projectile {
-                    flag::OBJECT_PROJECTILE
-                } else {
-                    0
-                };
-                for dx in 0..w as i32 {
-                    for dy in 0..h as i32 {
-                        self.add(plane, x + dx, y + dy, flag::OBJECT | door | projectile);
-                    }
-                }
-            }
-            _ => {}
+        for (dx, dy, flags) in loc_marks(shape, rotation, def) {
+            self.add(plane, x + dx, y + dy, flags);
         }
     }
+}
 
-    fn add_wall(&mut self, plane: i32, x: i32, y: i32, shape: u8, rotation: u8, def: &LocDef) {
-        for &(dx, dy, wall) in wall_marks(shape, rotation) {
-            let doors = if def.door { flag::doors_of(wall) } else { 0 };
-            let projectile = if def.blocks_projectile {
-                wall << flag::PROJECTILE_SHIFT
+pub fn loc_marks(shape: u8, rotation: u8, def: &LocDef) -> Vec<(i32, i32, u32)> {
+    match shape {
+        22 if def.interact_type == 1 => vec![(0, 0, flag::FLOOR_DECORATION)],
+        0..=3 if def.interact_type != 0 => wall_marks(shape, rotation)
+            .iter()
+            .map(|&(dx, dy, wall)| {
+                let doors = if def.door { flag::doors_of(wall) } else { 0 };
+                let projectile = if def.blocks_projectile {
+                    wall << flag::PROJECTILE_SHIFT
+                } else {
+                    0
+                };
+                (dx, dy, wall | projectile | doors)
+            })
+            .collect(),
+        9..=21 if def.interact_type != 0 => {
+            let (w, h) = turned(def.size_x, def.size_y, rotation);
+            let door = if shape == 9 && def.door {
+                flag::DOOR_OBJECT
             } else {
                 0
             };
-            self.add(plane, x + dx, y + dy, wall | projectile | doors);
+            let projectile = if def.blocks_projectile {
+                flag::OBJECT_PROJECTILE
+            } else {
+                0
+            };
+            (0..w as i32)
+                .flat_map(|dx| {
+                    (0..h as i32).map(move |dy| (dx, dy, flag::OBJECT | door | projectile))
+                })
+                .collect()
         }
+        _ => Vec::new(),
     }
 }
 

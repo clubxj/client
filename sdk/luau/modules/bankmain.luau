@@ -17,6 +17,7 @@ local Mouse = require("@volcren/mouse")
 local Npcs = require("@volcren/npcs")
 local Objects = require("@volcren/objects")
 local Random = require("@volcren/random")
+local SafeSpot = require("@volcren/safespot")
 local Toplevel = require("@volcren/toplevel")
 local Walker = require("@volcren/walker")
 local Widgets = require("@volcren/widgets")
@@ -126,6 +127,12 @@ local OPEN_TIMEOUT_MS = 2400
 local POLL_MS = 50
 local OBJECT_OPTIONS = table.freeze({ "Bank", "Use" })
 local NPC_OPTIONS = table.freeze({ "Bank" })
+local SIDES = table.freeze({
+	{ x = 1, y = 0, wall = SafeSpot.FLAG.WALL_EAST },
+	{ x = -1, y = 0, wall = SafeSpot.FLAG.WALL_WEST },
+	{ x = 0, y = 1, wall = SafeSpot.FLAG.WALL_NORTH },
+	{ x = 0, y = -1, wall = SafeSpot.FLAG.WALL_SOUTH },
+})
 
 export type Button =
 	"ARRANGEMENT"
@@ -327,6 +334,65 @@ local function bank_locs(): { Loc }
 	return banks
 end
 
+local function covers(loc: Loc, x: number, y: number): boolean
+	return x >= loc.x and x < loc.x + loc.size_x and y >= loc.y and y < loc.y + loc.size_y
+end
+
+local function has_tile(tiles: { Tile }, x: number, y: number): boolean
+	for _, t in ipairs(tiles) do
+		if t.x == x and t.y == y then
+			return true
+		end
+	end
+	return false
+end
+
+function Bankmain.counter_tiles(npc: Npc): { Tile }
+	local banker = Npcs.reach(npc)
+	local tiles: { Tile } = {}
+	local grid = Host.collision({ x1 = banker.x, y1 = banker.y, x2 = banker.x, y2 = banker.y })
+	if grid == nil then
+		return tiles
+	end
+	local flags = grid.flags[1]
+	for _, loc in ipairs(bank_locs()) do
+		for _, d in ipairs(SIDES) do
+			local x, y = banker.x + d.x, banker.y + d.y
+			if covers(loc, x, y) and bit32.band(flags, d.wall) == 0 then
+				while covers(loc, x, y) do
+					x, y = x + d.x, y + d.y
+				end
+				if has_tile(Objects.stand_tiles(loc) or {}, x, y) then
+					table.insert(tiles, { x = x, y = y })
+				end
+			end
+		end
+	end
+	return tiles
+end
+
+local function banker_cost(npc: Npc): number?
+	local me = Walker.position()
+	if me == nil then
+		return nil
+	end
+	local tiles: { Tile } = Bankmain.counter_tiles(npc)
+	for _, t in ipairs(Host.reach_tiles(Npcs.reach(npc)) or {}) do
+		table.insert(tiles, t)
+	end
+	table.sort(tiles, function(a: Tile, b: Tile): boolean
+		return Walker.distance(me, a) < Walker.distance(me, b)
+	end)
+	local best: number? = nil
+	for i = 1, math.min(#tiles, Clickbox.STAND_CANDIDATES) do
+		local plan = Walker.plan(tiles[i], nil, { near = 0 })
+		if plan and plan.reached and (best == nil or #plan.tiles < best) then
+			best = #plan.tiles
+		end
+	end
+	return best
+end
+
 function Bankmain.nearest(): Source?
 	local me = Walker.position()
 	if me == nil then
@@ -355,8 +421,7 @@ function Bankmain.nearest(): Source?
 	local best_cost = math.huge
 	for i = 1, math.min(#candidates, Bankmain.PLAN_CANDIDATES) do
 		local c = candidates[i]
-		local at: Tile = (c.source.loc or c.source.npc) :: Tile
-		local cost = walk_cost(at, c.plane)
+		local cost = if c.source.npc then banker_cost(c.source.npc) else walk_cost(c.source.loc :: Tile, c.plane)
 		if cost and cost < best_cost then
 			best, best_cost = c.source, cost
 		end
@@ -418,7 +483,7 @@ function Bankmain.open(source: Source?, walk: boolean?): boolean
 	else
 		local npc = target.npc :: Npc
 		if walk ~= false then
-			picked = Npcs.approach(npc, NPC_OPTIONS)
+			picked = Npcs.approach(npc, NPC_OPTIONS, { stand = Bankmain.counter_tiles(npc) })
 		else
 			picked = Npcs.interact(npc, NPC_OPTIONS)
 		end

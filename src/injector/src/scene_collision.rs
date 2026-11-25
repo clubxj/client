@@ -27,6 +27,13 @@ impl SceneCollision {
             .then(|| self.flags[(mx * self.height + my) as usize])
     }
 
+    pub fn block(&mut self, x: i32, y: i32, bits: u32) {
+        let (mx, my) = (x - self.base_x + BORDER, y - self.base_y + BORDER);
+        if (0..self.width).contains(&mx) && (0..self.height).contains(&my) {
+            self.flags[(mx * self.height + my) as usize] |= bits;
+        }
+    }
+
     pub fn bounds(&self) -> (i32, i32, i32, i32) {
         let (x1, y1) = (self.base_x - BORDER, self.base_y - BORDER);
         (x1, y1, x1 + self.width - 1, y1 + self.height - 1)

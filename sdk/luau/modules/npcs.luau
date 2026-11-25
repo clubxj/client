@@ -12,6 +12,7 @@ type Point = Geometry.Point
 local Clickbox = require("@volcren/clickbox")
 local Mouse = require("@volcren/mouse")
 local Projection = require("@volcren/projection")
+local SafeSpot = require("@volcren/safespot")
 type Clickbox = Clickbox.Clickbox
 local Npcs = {}
 
@@ -285,7 +286,14 @@ function Npcs.interact(
 	)
 end
 
+function Npcs.reach(npc: Npc, size: number?): Host.ReachTarget
+	local n = size or SafeSpot.size(npc)
+	local at = SafeSpot.chaser(npc, n)
+	return { kind = "npc", x = at.x, y = at.y, size = n }
+end
+
 function Npcs.approach(npc: Npc, options: string | { string }, opts: Clickbox.Approach?): boolean
+	local size = SafeSpot.size(npc)
 	return Clickbox.approach(
 		clickbox_of(npc),
 		hovered_by(npc),
@@ -293,6 +301,10 @@ function Npcs.approach(npc: Npc, options: string | { string }, opts: Clickbox.Ap
 		options,
 		owned_by(npc),
 		tile_of(npc),
+		function()
+			local now = Npcs.refresh(npc)
+			return if now then Npcs.reach(now, size) else nil
+		end,
 		opts,
 		act_of(npc)
 	)

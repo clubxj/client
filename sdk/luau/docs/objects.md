@@ -233,6 +233,24 @@ Example:
 local box = Objects.projected(loc, { x = loc.x, y = loc.y })
 ```
 
+## Objects.reach
+
+Definition:
+
+```luau
+function Objects.reach(loc: Loc): Host.ReachTarget
+```
+
+The object as a `Host.reach_route` target.
+
+Example:
+
+```luau
+local me = assert(Walker.position())
+local route = Host.reach_route(me, Objects.reach(loc))
+print(route and route.reached)
+```
+
 ## Objects.stand_tiles
 
 Definition:
@@ -241,7 +259,7 @@ Definition:
 function Objects.stand_tiles(loc: Loc): { Tile }?
 ```
 
-The walkable tiles beside an object's footprint (north, south, east and west of it) with no wall between them and the object, read from live collision: where a player can stand to use it. A ground decoration (a trapdoor, say) also counts its own tiles when they are walkable. Nil for walls and wall decorations, whose reach works differently, and for an object on another plane.
+The walkable tiles the object is used from (`Host.reach_tiles`): beside its footprint with no wall between, on it for a walkable ground decoration such as a trapdoor, and the faced sides of walls and wall decorations. Nil for an object on another plane.
 
 Example:
 
@@ -277,7 +295,7 @@ Definition:
 function Objects.approach(loc: Loc, options: string | { string }, opts: Clickbox.Approach?): boolean
 ```
 
-Walks towards the object and picks the first available of `options`, clicking early once close (see `Clickbox.approach`). Unless `opts.stand` is given, it passes `Objects.stand_tiles(loc)`, so a game object or ground decoration behind a wall or a counter is walked round to, through doors.
+Walks towards the object and picks the first available of `options` once the pick would reach it, so an object behind a wall or a counter is walked round to, through doors (see `Clickbox.approach`).
 
 Example:
 

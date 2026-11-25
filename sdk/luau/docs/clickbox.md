@@ -219,7 +219,7 @@ local soon = aim(300)
 
 Definition:
 ```luau
-function Clickbox.approach(clickbox: Aim, hovered: () -> boolean, what: string, option: string | { string }, target: Minimenu.Target?, tile: () -> Tile?, opts: Approach?): boolean
+function Clickbox.approach(clickbox: Aim, hovered: () -> boolean, what: string, option: string | { string }, target: Minimenu.Target?, tile: () -> Tile?, reach: () -> Host.ReachTarget?, opts: Approach?): boolean
 
 export type Approach = {
 	near: number?,
@@ -232,7 +232,7 @@ export type Approach = {
 	stand: { Tile }?,
 }
 ```
-Walks to within `near` tiles (`APPROACH_NEAR`) and picks `option` as `interact` does. `stand` lists the tiles the thing can be used from: then the goal is the nearest of them the planner reaches (trying `STAND_CANDIDATES`), with `near` 0, so being a tile away across a wall doesn't count as close and a closed door on the way is opened; standing on any of them counts as arrived. When none is reached, `near` applies as before. When the thing is on screen now and at the lead, and `Walker.plain_walk` reports no door, climb or shortcut left, it picks without walking, or early during the walk every `EARLY_RETRY_MS`; `settle` instead waits for the walk to stop. On failure, `closer` walks to that many tiles and picks once more. Returns after arriving (`arrive_ms`, false returns right after the pick). `walk.on_step` or `walk.before_click` returning false stops it with false; `timeout_ms` defaults to `APPROACH_TIMEOUT_MS`.
+Picks `option` as `interact` does once the pick would get the thing used: the route the server walks to `reach` from here (`Host.reach_route`) reaches it, or ends on one of `stand`, the tiles it can also be used from that the reach rules don't cover (a banker's counter). Then it picks without walking when the thing is within `near` tiles (`APPROACH_NEAR`) or on screen at the lead. Otherwise it walks to the nearest tile of `Host.reach_tiles` and `stand` that the planner reaches (trying `STAND_CANDIDATES`), through doors, and picks early every `EARLY_RETRY_MS` once that holds, so a thing a tile away across a wall is walked round to rather than picked from where the server stops short. A thing with no such tiles (an item on a table) is walked to within `near`, picking early once `Walker.plain_walk` reports no door, climb or shortcut left. `settle` instead waits for the walk to stop. On failure, `closer` walks to that many tiles and picks once more. Returns after arriving (`arrive_ms`, false returns right after the pick). `walk.on_step` or `walk.before_click` returning false stops it with false; `timeout_ms` defaults to `APPROACH_TIMEOUT_MS`.
 
 Example:
 ```luau

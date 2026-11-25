@@ -79,7 +79,7 @@ Bankmain.PLAN_CANDIDATES = 6
 function Bankmain.nearest(): Source?
 ```
 
-The bank that is the fewest steps to walk to, as a `Source` holding either a `loc` or an `npc`. It looks at every loaded object whose menu, as shown now (`Host.loc_shown`), offers "Bank", or "Use" together with "Collect" (bank chests), and every NPC that `is_banker`, plans a walk (`Walker.plan`, through doors, stairs and ladders, to within `Clickbox.APPROACH_NEAR` tiles) to the `PLAN_CANDIDATES` closest by straight distance, and takes the shortest plan; a plan that stops short counts the straight distance left. Objects are told apart by their options rather than their names because multi-state booths have no name in the cache (Varrock West's first booth, 34810) and banks come as booths, chests, tables and counters; a bare "Use" is too common to count on its own. This costs one plan per candidate. When none can be planned it returns the closest by straight distance. `nil` when none is loaded or the position is unknown.
+The bank that is the fewest steps to walk to, as a `Source` holding either a `loc` or an `npc`. It looks at every loaded object whose menu, as shown now (`Host.loc_shown`), offers "Bank", or "Use" together with "Collect" (bank chests), and every NPC that `is_banker`, plans a walk (`Walker.plan`, through doors, stairs and ladders) to the `PLAN_CANDIDATES` closest by straight distance, and takes the shortest plan. An object is planned to within `Clickbox.APPROACH_NEAR` tiles, and a plan that stops short counts the straight distance left. A banker is planned to the nearest `Clickbox.STAND_CANDIDATES` tiles it is used from (`Host.reach_tiles` and `counter_tiles`) and counts only when a plan gets there, so a banker behind a wall isn't taken for near. Objects are told apart by their options rather than their names because multi-state booths have no name in the cache (Varrock West's first booth, 34810) and banks come as booths, chests, tables and counters; a bare "Use" is too common to count on its own. This costs one plan per candidate. When none can be planned it returns the closest by straight distance. `nil` when none is loaded or the position is unknown.
 
 ## Bankmain.is_banker
 
@@ -103,6 +103,27 @@ for _, npc in ipairs(Npcs.find() or {}) do
 end
 ```
 
+## Bankmain.counter_tiles
+
+Definition:
+
+```luau
+function Bankmain.counter_tiles(npc: Npc): { Tile }
+```
+
+The tiles across a bank object from the banker: past a booth or counter beside it, when neither the banker nor that tile has a wall between it and the object. The server lets a banker be used from there, though `Host.reach_route` counts only tiles beside it.
+
+Example:
+
+```luau
+local Npcs = require("@volcren/npcs")
+
+local banker = Npcs.nearest("Banker", Walker.position())
+for _, tile in ipairs(banker and Bankmain.counter_tiles(banker) or {}) do
+	print(tile.x, tile.y)
+end
+```
+
 ## Bankmain.hover
 
 Definition:
@@ -121,7 +142,7 @@ Definition:
 function Bankmain.open(source: Source?, walk: boolean?): boolean
 ```
 
-Opens the closest bank (or `source`) with "Bank" (or "Use" on objects) and waits for it. Walks closer first unless `walk` is `false`. Another interface in the way is closed with Escape first. If the keypad shows up, `is_open` has the injector enter the PIN. `true` when the bank ends up open.
+Opens the closest bank (or `source`) with "Bank" (or "Use" on objects) and waits for it. Walks closer first unless `walk` is `false`; a banker is approached with its `counter_tiles` as `stand`, so from outside the wall behind it the walk goes round to the counter instead of clicking where the server answers "I can't reach that". Another interface in the way is closed with Escape first. If the keypad shows up, `is_open` has the injector enter the PIN. `true` when the bank ends up open.
 
 Example:
 

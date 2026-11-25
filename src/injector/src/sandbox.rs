@@ -33,10 +33,10 @@ use crate::{
     loc_model, loc_shown, locs, map_regions, menu, menu_click, menu_layout, menu_open, movement,
     nav_plan, npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npcs,
     player_hitsplats, player_model, player_overhead_text, player_plane, players, project_from,
-    projectiles, raw_packet_layouts,
-    scene_collision, scene_route, selected_widget, send_input, send_input_with, server_tile, spot_anims,
-    sub_interfaces, varbit, varc, varp_value, varps, wait_watchers, widget, widget_children,
-    widget_model, world_route, world_select,
+    projectiles, raw_packet_layouts, reach_route, reach_tiles, scene_collision, scene_route,
+    selected_widget, send_input, send_input_with, server_tile, spot_anims, sub_interfaces, varbit,
+    varc, varp_value, varps, wait_watchers, widget, widget_children, widget_model, world_route,
+    world_select,
 };
 #[cfg(not(windows))]
 use offline::*;
@@ -156,6 +156,8 @@ mod offline {
         fn scene_collision(u32) -> (i32, i32, i32, Vec<Vec<u32>>);
         fn scene_route(u32, [i32; 2], [i32; 2], Option<crate::scene_graph::Options>)
             -> crate::pathfinding::Route;
+        fn reach_route(u32, [i32; 2], crate::pathfinding::Target) -> crate::pathfinding::Route;
+        fn reach_tiles(u32, crate::pathfinding::Target) -> Vec<crate::pathfinding::Tile>;
         fn nav_plan(u32, crate::nav::Point, crate::nav::Point, &crate::nav::Request)
             -> crate::nav::NavPlan;
         fn npc_type_model(u32, i32, i32, i32, (i32, i32), i32) -> Option<EntityModel>;
@@ -297,6 +299,24 @@ fn get<T: mlua::FromLua>(table: &mlua::Table, key: &str) -> Result<T, String> {
 
 fn tile_arg(table: &mlua::Table) -> Result<[i32; 2], String> {
     Ok([get(table, "x")?, get(table, "y")?])
+}
+
+fn target_arg(table: &mlua::Table) -> Result<crate::pathfinding::Target, String> {
+    use crate::pathfinding::Target;
+    let at = (get(table, "x")?, get(table, "y")?);
+    let size =
+        |key: &str| -> Result<i32, String> { Ok(get::<Option<i32>>(table, key)?.unwrap_or(1)) };
+    match get::<String>(table, "kind")?.as_str() {
+        "tile" => Ok(Target::tile(at)),
+        "npc" => Ok(Target::npc(at, size("size")?)),
+        "loc" => Ok(Target::loc(
+            at,
+            (size("size_x")?, size("size_y")?),
+            get(table, "shape")?,
+            get::<Option<u8>>(table, "rotation")?.unwrap_or(0),
+        )),
+        other => Err(format!("unknown target kind {other:?}: use tile, npc or loc")),
+    }
 }
 
 fn area_arg(table: &mlua::Table) -> Result<[i32; 4], String> {
@@ -1764,6 +1784,23 @@ pub fn run_with_modules(
             })
         },
     )?;
+    s.query("reach_route", |pid, (from, to): (mlua::Table, mlua::Table)| {
+        let route = reach_route(pid, tile_arg(&from)?, target_arg(&to)?)?;
+        Ok(SceneRoute {
+            tiles: route
+                .tiles
+                .into_iter()
+                .map(|(x, y)| PathTile { x, y })
+                .collect(),
+            reached: route.reached,
+        })
+    })?;
+    s.query("reach_tiles", |pid, to: mlua::Table| {
+        Ok(reach_tiles(pid, target_arg(&to)?)?
+            .into_iter()
+            .map(|(x, y)| PathTile { x, y })
+            .collect::<Vec<_>>())
+    })?;
     s.query(
         "nav_plan",
         |pid, (from, to, options): (mlua::Table, mlua::Table, Option<mlua::Table>)| {

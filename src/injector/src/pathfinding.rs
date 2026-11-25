@@ -237,6 +237,7 @@ mod route_mask {
     pub const SOUTH_EAST: u32 = 0x4024_0183;
     pub const NORTH_WEST: u32 = 0x4024_0138;
     pub const NORTH_EAST: u32 = 0x4024_01e0;
+    pub const STAND: u32 = 0x4024_0100;
 }
 
 pub fn step_open(
@@ -291,7 +292,151 @@ pub struct Route {
     pub reached: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Tile,
+    Beside,
+    Rectangle,
+    Wall { shape: u8, rotation: u8 },
+    WallDecoration { shape: u8, rotation: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub length: i32,
+    pub reach: Reach,
+}
+
+impl Target {
+    pub fn tile((x, y): Tile) -> Self {
+        Target {
+            x,
+            y,
+            width: 1,
+            length: 1,
+            reach: Reach::Tile,
+        }
+    }
+
+    pub fn npc((x, y): Tile, size: i32) -> Self {
+        Target {
+            x,
+            y,
+            width: size.max(1),
+            length: size.max(1),
+            reach: Reach::Beside,
+        }
+    }
+
+    pub fn loc((x, y): Tile, (width, length): (i32, i32), shape: Option<u8>, rotation: u8) -> Self {
+        let rotation = rotation & 3;
+        let reach = match shape {
+            Some(shape @ (0..=3 | 9)) => Reach::Wall { shape, rotation },
+            Some(shape @ 4..=8) => Reach::WallDecoration { shape, rotation },
+            Some(10 | 11 | 22) | None => Reach::Rectangle,
+            Some(_) => Reach::Tile,
+        };
+        Target {
+            x,
+            y,
+            width: width.max(1),
+            length: length.max(1),
+            reach,
+        }
+    }
+
+    fn covers(&self, x: i32, y: i32) -> bool {
+        (self.x..self.x + self.width).contains(&x) && (self.y..self.y + self.length).contains(&y)
+    }
+
+    fn distance_squared(&self, x: i32, y: i32) -> i32 {
+        let gap = |v: i32, low: i32, size: i32| (low - v).max(v - (low + size - 1)).max(0);
+        let (dx, dy) = (gap(x, self.x, self.width), gap(y, self.y, self.length));
+        dx * dx + dy * dy
+    }
+
+    fn beside(&self, flags: &impl Fn(i32, i32) -> Option<u32>, x: i32, y: i32) -> bool {
+        let (east, north) = (self.x + self.width - 1, self.y + self.length - 1);
+        let open = |wall: u32| flags(x, y).is_some_and(|f| f & wall == 0);
+        let along_x = (self.x..=east).contains(&x);
+        let along_y = (self.y..=north).contains(&y);
+        (x == self.x - 1 && along_y && open(flag::WALL_EAST))
+            || (x == east + 1 && along_y && open(flag::WALL_WEST))
+            || (y == self.y - 1 && along_x && open(flag::WALL_NORTH))
+            || (y == north + 1 && along_x && open(flag::WALL_SOUTH))
+    }
+
+    pub fn reached(&self, flags: &impl Fn(i32, i32) -> Option<u32>, (x, y): Tile) -> bool {
+        if self.reach != Reach::Beside && (x, y) == (self.x, self.y) {
+            return true;
+        }
+        let free = |mask: u32| flags(x, y).is_some_and(|f| f & mask == 0);
+        let west = x == self.x - 1 && y == self.y;
+        let east = x == self.x + 1 && y == self.y;
+        let south = x == self.x && y == self.y - 1;
+        let north = x == self.x && y == self.y + 1;
+        use route_mask::{EAST, NORTH, SOUTH, WEST};
+        match self.reach {
+            Reach::Tile => false,
+            Reach::Beside => !self.covers(x, y) && self.beside(flags, x, y),
+            Reach::Rectangle => self.covers(x, y) || self.beside(flags, x, y),
+            Reach::Wall { shape, rotation } => match (shape, rotation) {
+                (0, 0) => west || (north && free(NORTH)) || (south && free(SOUTH)),
+                (0, 1) => north || (west && free(WEST)) || (east && free(EAST)),
+                (0, 2) => east || (north && free(NORTH)) || (south && free(SOUTH)),
+                (0, 3) => south || (west && free(WEST)) || (east && free(EAST)),
+                (2, 0) => west || north || (east && free(EAST)) || (south && free(SOUTH)),
+                (2, 1) => (west && free(WEST)) || north || east || (south && free(SOUTH)),
+                (2, 2) => (west && free(WEST)) || (north && free(NORTH)) || east || south,
+                (2, 3) => west || (north && free(NORTH)) || (east && free(EAST)) || south,
+                (9, _) => any_side_open(&free, west, east, south, north),
+                _ => false,
+            },
+            Reach::WallDecoration { shape, rotation } => {
+                let facing = if shape == 7 {
+                    (rotation + 2) & 3
+                } else {
+                    rotation
+                };
+                let open = |w: bool, e: bool, s: bool, n: bool| any_side_open(&free, w, e, s, n);
+                match (shape, facing) {
+                    (6 | 7, 0) => open(false, east, south, false),
+                    (6 | 7, 1) => open(west, false, south, false),
+                    (6 | 7, 2) => open(west, false, false, north),
+                    (6 | 7, 3) => open(false, east, false, north),
+                    (8, _) => open(west, east, south, north),
+                    _ => false,
+                }
+            }
+        }
+    }
+}
+
+fn any_side_open(
+    free: &impl Fn(u32) -> bool,
+    west: bool,
+    east: bool,
+    south: bool,
+    north: bool,
+) -> bool {
+    (north && free(flag::WALL_SOUTH))
+        || (south && free(flag::WALL_NORTH))
+        || (west && free(flag::WALL_EAST))
+        || (east && free(flag::WALL_WEST))
+}
+
 pub fn game_route(flags: impl Fn(i32, i32) -> Option<u32>, from: Tile, to: Tile) -> Option<Route> {
+    target_route(flags, from, &Target::tile(to))
+}
+
+pub fn target_route(
+    flags: impl Fn(i32, i32) -> Option<u32>,
+    from: Tile,
+    target: &Target,
+) -> Option<Route> {
     let (ox, oy) = (from.0 - GRAPH / 2, from.1 - GRAPH / 2);
     let on_graph =
         |x: i32, y: i32| (0..GRAPH).contains(&(x - ox)) && (0..GRAPH).contains(&(y - oy));
@@ -302,10 +447,10 @@ pub fn game_route(flags: impl Fn(i32, i32) -> Option<u32>, from: Tile, to: Tile)
     via[index(from.0, from.1)] = START;
     steps[index(from.0, from.1)] = 0;
     let mut queue = VecDeque::from([from]);
-    let mut reached = false;
+    let mut end = None;
     while let Some((x, y)) = queue.pop_front() {
-        if (x, y) == to {
-            reached = true;
+        if target.reached(&flags, (x, y)) {
+            end = Some((x, y));
             break;
         }
         let next = steps[index(x, y)] + 1;
@@ -322,24 +467,25 @@ pub fn game_route(flags: impl Fn(i32, i32) -> Option<u32>, from: Tile, to: Tile)
             }
         }
     }
-    let mut end = to;
-    if !reached {
-        let mut best: Option<(i32, u32)> = None;
-        for x in to.0 - ALTERNATIVE_RADIUS..=to.0 + ALTERNATIVE_RADIUS {
-            for y in to.1 - ALTERNATIVE_RADIUS..=to.1 + ALTERNATIVE_RADIUS {
-                if !on_graph(x, y) || steps[index(x, y)] >= ALTERNATIVE_MAX_STEPS {
-                    continue;
-                }
-                let (dx, dy) = ((x - to.0).abs(), (y - to.1).abs());
-                let score = (dx * dx + dy * dy, steps[index(x, y)]);
-                if best.is_none_or(|b| score < b) {
-                    best = Some(score);
-                    end = (x, y);
+    let reached = end.is_some();
+    let end = match end {
+        Some(end) => end,
+        None => {
+            let mut best: Option<((i32, u32), Tile)> = None;
+            for x in target.x - ALTERNATIVE_RADIUS..=target.x + ALTERNATIVE_RADIUS {
+                for y in target.y - ALTERNATIVE_RADIUS..=target.y + ALTERNATIVE_RADIUS {
+                    if !on_graph(x, y) || steps[index(x, y)] >= ALTERNATIVE_MAX_STEPS {
+                        continue;
+                    }
+                    let score = (target.distance_squared(x, y), steps[index(x, y)]);
+                    if best.is_none_or(|(b, _)| score < b) {
+                        best = Some((score, (x, y)));
+                    }
                 }
             }
+            best?.1
         }
-        best?;
-    }
+    };
     let mut tiles = vec![end];
     let (mut x, mut y) = end;
     while (x, y) != from {
@@ -358,6 +504,19 @@ pub fn game_route(flags: impl Fn(i32, i32) -> Option<u32>, from: Tile, to: Tile)
     }
     tiles.reverse();
     Some(Route { tiles, reached })
+}
+
+pub fn stand_tiles(flags: impl Fn(i32, i32) -> Option<u32>, target: &Target) -> Vec<Tile> {
+    let standable = |x: i32, y: i32| flags(x, y).is_some_and(|f| f & route_mask::STAND == 0);
+    let mut tiles = Vec::new();
+    for x in target.x - 1..=target.x + target.width {
+        for y in target.y - 1..=target.y + target.length {
+            if standable(x, y) && target.reached(&flags, (x, y)) {
+                tiles.push((x, y));
+            }
+        }
+    }
+    tiles
 }
 
 #[cfg(test)]
@@ -463,6 +622,105 @@ mod tests {
         assert_eq!(r.tiles.last(), Some(&(0, 2)));
         let r = route(&rows, (0, 2), (1, 2)).unwrap();
         assert_eq!(r.tiles, vec![(0, 2)]);
+    }
+
+    fn walled(rows: &[&str], walls: &[(Tile, u32)]) -> impl Fn(i32, i32) -> Option<u32> + use<> {
+        let scene = crate::scene_collision::from_rows(0, 0, rows);
+        let walls = walls.to_vec();
+        move |x, y| {
+            let extra = walls
+                .iter()
+                .filter(|(at, _)| *at == (x, y))
+                .fold(0, |f, (_, wall)| f | wall);
+            scene.flags(x, y).map(|f| f | extra)
+        }
+    }
+
+    fn wall_across(y: i32, width: i32, gap: Option<i32>) -> Vec<(Tile, u32)> {
+        (0..width)
+            .filter(|&x| Some(x) != gap)
+            .flat_map(|x| [((x, y), flag::WALL_NORTH), ((x, y + 1), flag::WALL_SOUTH)])
+            .collect()
+    }
+
+    #[test]
+    fn an_npc_behind_a_wall_is_not_reached_from_across_it() {
+        let open = [".....", ".....", ".....", ".....", "....."];
+        let banker = Target::npc((2, 3), 1);
+        let flags = walled(&open, &wall_across(1, 5, None));
+        let r = target_route(&flags, (2, 1), &banker).unwrap();
+        assert!(!r.reached);
+        assert_eq!(r.tiles, vec![(2, 1)]);
+        let flags = walled(&open, &wall_across(1, 5, Some(4)));
+        let r = target_route(&flags, (2, 1), &banker).unwrap();
+        assert!(r.reached);
+        assert!(banker.reached(&flags, *r.tiles.last().unwrap()));
+    }
+
+    #[test]
+    fn an_npc_is_used_from_beside_it_never_under_it() {
+        let open = [".....", ".....", ".....", ".....", "....."];
+        let flags = walled(&open, &[]);
+        let npc = Target::npc((2, 2), 1);
+        let r = target_route(&flags, (2, 2), &npc).unwrap();
+        assert!(r.reached);
+        assert_eq!(r.tiles, vec![(2, 2), (1, 2)]);
+        assert!(!npc.reached(&flags, (1, 1)));
+        let big = Target::npc((1, 1), 2);
+        assert_eq!(
+            stand_tiles(&flags, &big),
+            vec![
+                (0, 1),
+                (0, 2),
+                (1, 0),
+                (1, 3),
+                (2, 0),
+                (2, 3),
+                (3, 1),
+                (3, 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_item_on_a_table_is_never_reached() {
+        let rows = [".....", ".....", "..#..", ".....", "....."];
+        let flags = walled(&rows, &[]);
+        let item = Target::tile((2, 2));
+        let r = target_route(&flags, (0, 2), &item).unwrap();
+        assert!(!r.reached);
+        assert_eq!(r.tiles.last(), Some(&(1, 2)));
+        assert!(stand_tiles(&flags, &item).is_empty());
+    }
+
+    #[test]
+    fn an_object_is_used_from_its_sides_but_not_through_a_wall() {
+        let rows = [".....", ".##..", ".##..", ".....", "....."];
+        let walls = [((0, 2), flag::WALL_EAST), ((1, 2), flag::WALL_WEST)];
+        let flags = walled(&rows, &walls);
+        let table = Target::loc((1, 2), (2, 2), Some(10), 0);
+        assert_eq!(
+            stand_tiles(&flags, &table),
+            vec![(0, 3), (1, 1), (1, 4), (2, 1), (2, 4), (3, 2), (3, 3)]
+        );
+    }
+
+    #[test]
+    fn walls_and_wall_decorations_are_used_from_their_own_sides() {
+        let open = [".....", ".....", ".....", ".....", "....."];
+        let walls = [((2, 2), flag::WALL_WEST), ((1, 2), flag::WALL_EAST)];
+        let flags = walled(&open, &walls);
+        let door = Target::loc((2, 2), (1, 1), Some(0), 0);
+        assert_eq!(
+            stand_tiles(&flags, &door),
+            vec![(1, 2), (2, 1), (2, 2), (2, 3)]
+        );
+        let lever = Target::loc((2, 2), (1, 1), Some(4), 0);
+        assert_eq!(stand_tiles(&flags, &lever), vec![(2, 2)]);
+        let corner = Target::loc((2, 2), (1, 1), Some(6), 1);
+        assert_eq!(stand_tiles(&flags, &corner), vec![(2, 1), (2, 2)]);
+        let flags = walled(&open, &[]);
+        assert_eq!(stand_tiles(&flags, &corner), vec![(1, 2), (2, 1), (2, 2)]);
     }
 
     #[test]

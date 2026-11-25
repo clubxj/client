@@ -733,6 +733,17 @@ export type SceneRoute = {
 	reached: boolean,
 }
 
+export type ReachTarget = {
+	kind: "tile" | "npc" | "loc",
+	x: number,
+	y: number,
+	size: number?,
+	size_x: number?,
+	size_y: number?,
+	shape: number?,
+	rotation: number?,
+}
+
 export type Collision = {
 	x: number,
 	y: number,
@@ -935,6 +946,8 @@ return {
 	find_path = g.find_path :: (from: Tile, to: Tile, plane: number?, max_tiles: number?) -> { Tile }?,
 	collision = g.collision :: (area: Corners?) -> (Collision?, string?),
 	scene_route = g.scene_route :: (from: Tile, to: Tile, options: SceneRouteOptions?) -> SceneRoute?,
+	reach_route = g.reach_route :: (from: Tile, to: ReachTarget) -> (SceneRoute?, string?),
+	reach_tiles = g.reach_tiles :: (to: ReachTarget) -> ({ Tile }?, string?),
 	transport_settings = g.transport_settings :: () -> { off: { string } },
 	world_route = g.world_route :: (from: NavTile, to: NavTile, allow_climbs: { string }?) -> WorldRoute?,
 	nav_plan = g.nav_plan :: (from: Tile | NavTile, to: Tile | NavTile, options: NavOptions?) -> (NavPlan?, string?),

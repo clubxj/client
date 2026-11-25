@@ -286,6 +286,10 @@ function GroundItems.take_pile(tile: Tile): (number, string?)
 	end
 end
 
+function GroundItems.reach(item: GroundItem): Host.ReachTarget
+	return { kind = "tile", x = item.x, y = item.y }
+end
+
 function GroundItems.approach(item: GroundItem, options: string | { string }, opts: Clickbox.Approach?): boolean
 	return Clickbox.approach(
 		clickbox_of(item),
@@ -294,6 +298,9 @@ function GroundItems.approach(item: GroundItem, options: string | { string }, op
 		options,
 		owned_by(item),
 		tile_of(item),
+		function()
+			return GroundItems.reach(item)
+		end,
 		opts,
 		act_of(item)
 	)

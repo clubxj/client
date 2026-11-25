@@ -10,6 +10,7 @@ pub struct LocDef {
     pub blocks_projectile: bool,
     pub door: bool,
     pub decoration_height: u8,
+    pub hollow: bool,
 }
 
 impl Default for LocDef {
@@ -21,6 +22,7 @@ impl Default for LocDef {
             blocks_projectile: true,
             door: false,
             decoration_height: 0,
+            hollow: false,
         }
     }
 }
@@ -180,7 +182,8 @@ fn decode_loc_with(data: &[u8], mut text: Option<&mut LocText>) -> Option<LocDef
             19 => int1 = Some(r.u8()?),
             28 | 29 | 39 | 69 | 75 | 81 | 91 | 95 => r.skip(1)?,
             96 => def.decoration_height = r.u8()?,
-            21 | 22 | 23 | 62 | 64 | 73 | 74 | 89 | 90 | 94 => {}
+            21 | 22 | 23 | 62 | 64 | 73 | 89 | 90 | 94 => {}
+            74 => def.hollow = true,
             24 | 61 | 65 | 66 | 67 | 68 | 70 | 71 | 72 | 82 => r.skip(2)?,
             27 => def.interact_type = 1,
             op @ 30..=34 => {
@@ -315,7 +318,8 @@ mod tests {
                 interact_type: 2,
                 blocks_projectile: false,
                 door: true,
-                decoration_height: 0
+                decoration_height: 0,
+                hollow: false
             })
         );
         let (_, text) = decode_loc_text(&data).unwrap();
@@ -341,7 +345,16 @@ mod tests {
                 interact_type: 0,
                 blocks_projectile: false,
                 door: false,
-                decoration_height: 0
+                decoration_height: 0,
+                hollow: false
+            })
+        );
+        assert_eq!(
+            decode_loc(&[27, 74, 0]),
+            Some(LocDef {
+                interact_type: 1,
+                hollow: true,
+                ..LocDef::default()
             })
         );
         assert_eq!(decode_loc(&[200, 0]), None);

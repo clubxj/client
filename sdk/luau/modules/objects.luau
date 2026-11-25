@@ -12,11 +12,8 @@ type Point = Geometry.Point
 local Clickbox = require("@volcren/clickbox")
 local Mouse = require("@volcren/mouse")
 local Projection = require("@volcren/projection")
-local SafeSpot = require("@volcren/safespot")
 local Walker = require("@volcren/walker")
 type Clickbox = Clickbox.Clickbox
-
-local band, bor = bit32.band, bit32.bor
 
 local Objects = {}
 
@@ -190,44 +187,24 @@ function Objects.interact(
 	)
 end
 
+function Objects.reach(loc: Loc): Host.ReachTarget
+	return {
+		kind = "loc",
+		x = loc.x,
+		y = loc.y,
+		size_x = loc.size_x,
+		size_y = loc.size_y,
+		shape = loc.shape,
+		rotation = loc.rotation,
+	}
+end
+
 function Objects.stand_tiles(loc: Loc): { Tile }?
 	local me = Host.game_state().position
-	local ground = loc.kind == Objects.GROUND_DECORATION
-	if (loc.kind ~= Objects.GAME_OBJECT and not ground) or me == nil or (me.plane or 0) ~= loc.plane then
+	if me == nil or (me.plane or 0) ~= loc.plane then
 		return nil
 	end
-	local x1, y1 = loc.x, loc.y
-	local x2, y2 = loc.x + loc.size_x - 1, loc.y + loc.size_y - 1
-	local grid = SafeSpot.grid({ x1 = x1 - 1, y1 = y1 - 1, x2 = x2 + 1, y2 = y2 + 1 })
-	if grid == nil then
-		return nil
-	end
-	local F = SafeSpot.FLAG
-	local tiles: { Tile } = {}
-	local function side(x: number, y: number, edge_x: number, edge_y: number, outer: number, inner: number)
-		local open = band(SafeSpot.flags(grid, x, y), bor(F.BLOCKED, outer)) == 0
-		if open and band(SafeSpot.flags(grid, edge_x, edge_y), inner) == 0 then
-			table.insert(tiles, { x = x, y = y })
-		end
-	end
-	if ground then
-		for x = x1, x2 do
-			for y = y1, y2 do
-				if band(SafeSpot.flags(grid, x, y), F.BLOCKED) == 0 then
-					table.insert(tiles, { x = x, y = y })
-				end
-			end
-		end
-	end
-	for x = x1, x2 do
-		side(x, y1 - 1, x, y1, F.WALL_NORTH, F.WALL_SOUTH)
-		side(x, y2 + 1, x, y2, F.WALL_SOUTH, F.WALL_NORTH)
-	end
-	for y = y1, y2 do
-		side(x1 - 1, y, x1, y, F.WALL_EAST, F.WALL_WEST)
-		side(x2 + 1, y, x2, y, F.WALL_WEST, F.WALL_EAST)
-	end
-	return tiles
+	return (Host.reach_tiles(Objects.reach(loc)))
 end
 
 function Objects.plain_walk(loc: Loc): boolean
@@ -251,10 +228,7 @@ function Objects.plain_walk(loc: Loc): boolean
 end
 
 function Objects.approach(loc: Loc, options: string | { string }, opts: Clickbox.Approach?): boolean
-	local o: Clickbox.Approach = if opts then table.clone(opts) else {}
-	if o.stand == nil then
-		o.stand = Objects.stand_tiles(loc)
-	end
+	local reach = Objects.reach(loc)
 	return Clickbox.approach(
 		clickbox_of(loc),
 		hovered_by(loc),
@@ -262,7 +236,10 @@ function Objects.approach(loc: Loc, options: string | { string }, opts: Clickbox
 		options,
 		owned_by(loc),
 		tile_of(loc),
-		o,
+		function()
+			return reach
+		end,
+		opts,
 		act_of(loc)
 	)
 end

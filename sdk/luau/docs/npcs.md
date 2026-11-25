@@ -306,6 +306,23 @@ Example:
 local box = Npcs.projected(npc, { x = npc.x, y = npc.y })
 ```
 
+## Npcs.reach
+
+Definition:
+
+```luau
+function Npcs.reach(npc: Npc, size: number?): Host.ReachTarget
+```
+
+The NPC as a `Host.reach_route` target: its south-west tile and size (`SafeSpot.size` unless given).
+
+Example:
+
+```luau
+local tiles = Host.reach_tiles(Npcs.reach(npc))
+print(tiles and #tiles)
+```
+
 ## Npcs.approach
 
 Definition:
@@ -314,7 +331,7 @@ Definition:
 function Npcs.approach(npc: Npc, options: string | { string }, opts: Clickbox.Approach?): boolean
 ```
 
-Walks towards the NPC and picks the first available of `options`, clicking early once close (see `Clickbox.approach`).
+Walks towards the NPC and picks the first available of `options` once the pick would reach it, so an NPC behind a wall or fence is walked round to (see `Clickbox.approach`).
 
 Example:
 
