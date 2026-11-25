@@ -137,3 +137,18 @@ if SpecialAttack.enable() then
 	print("special queued")
 end
 ```
+
+## SpecialAttack.use
+
+Definition:
+```luau
+function SpecialAttack.use(): boolean
+```
+Fires a special that acts at once instead of arming for the next attack, such as a skilling tool's (axes, pickaxes, harpoons), when energy covers `cost()`. These never show as enabled, so it waits up to `TOGGLE_TIMEOUT_MS` for the energy to drop instead. `false` without clicking when energy is short or the weapon has no special.
+
+Example:
+```luau
+if SpecialAttack.use() then
+	print("boosted")
+end
+```

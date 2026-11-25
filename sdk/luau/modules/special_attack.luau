@@ -111,16 +111,23 @@ local function click_bar(): boolean
 	return true
 end
 
-function SpecialAttack.set(enabled: boolean): boolean
-	if SpecialAttack.is_enabled() == enabled then
-		return true
-	end
+local function click_special(): boolean
 	local first, second = click_orb, click_bar
 	if Biometrics.random_boolean(SpecialAttack.BAR_CHANCE) then
 		first, second = click_bar, click_orb
 	end
 	if not first() and not second() then
 		Log.log("SpecialAttack", "the weapon has no special attack")
+		return false
+	end
+	return true
+end
+
+function SpecialAttack.set(enabled: boolean): boolean
+	if SpecialAttack.is_enabled() == enabled then
+		return true
+	end
+	if not click_special() then
 		return false
 	end
 	if
@@ -140,6 +147,20 @@ function SpecialAttack.enable(cost: number?): boolean
 		return false
 	end
 	return SpecialAttack.set(true)
+end
+
+function SpecialAttack.use(): boolean
+	local energy, need = SpecialAttack.energy(), SpecialAttack.cost()
+	if energy == nil or need == nil or energy < need then
+		return false
+	end
+	if not click_special() then
+		return false
+	end
+	return Widgets.wait_within(function(): boolean
+		local now = SpecialAttack.energy()
+		return now ~= nil and now < energy
+	end, SpecialAttack.TOGGLE_TIMEOUT_MS, 50)
 end
 
 return SpecialAttack
