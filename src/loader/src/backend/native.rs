@@ -130,6 +130,22 @@ pub fn set_hider(target: &Target, _settings: &Settings, mask: u64) -> Result<u64
     injector::set_hider(target.client.pid, mask)
 }
 
+pub fn proxy(target: &Target, _settings: &Settings) -> Result<injector::ProxyStatus, String> {
+    injector::proxy(target.client.pid)
+}
+
+pub fn set_proxy(
+    target: &Target,
+    _settings: &Settings,
+    proxy: Option<&injector::Proxy>,
+) -> Result<injector::ProxyStatus, String> {
+    injector::set_proxy(target.client.pid, proxy)
+}
+
+pub fn proxy_version(_target: &Target, settings: &Settings) -> Result<u32, String> {
+    helper_call(settings, &["proxy-version"])
+}
+
 pub fn varps(target: &Target, _settings: &Settings) -> Result<Option<Vec<i32>>, String> {
     injector::varps(target.client.pid)
 }

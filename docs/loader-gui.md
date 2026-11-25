@@ -23,6 +23,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 | `layouts.rs` | Equipment/inventory/prayer layouts, rules, picker |
 | `breaks.rs`, `xp.rs`, `counters.rs` | Break/sleep editors, run trackers |
 | `hider.rs` | Entity hider categories and the client page's poll state |
+| `proxies.rs` | Saved proxies (Settings section, sealed `proxies.bin`) and each client's chosen proxy |
 | `form.rs` | Form spec rendering |
 | `queue.rs`, `app/queue_page.rs` | Queue model and pure rules (when an entry ends, what follows an exit, break carry-over); Queue page, start checks and the per-client runner |
 | `http.rs`, `whitelist.rs` | Script HTTP requests, whitelist |
@@ -54,7 +55,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 ## Sign-in and storage
 
 - Discord via Supabase, PKCE; listener on `127.0.0.1:5217`, redirect URL `http://localhost:5217/`. Login times out after 5 min.
-- Keyring service `volcren-loader`: `refresh-token` (sign-in, shared with `loader mcp`, see [mcp.md](mcp.md)), `accounts-key` (32-byte AES-256-GCM key for `accounts.bin` and run records). Never in `app.ron`.
+- Keyring service `volcren-loader`: `refresh-token` (sign-in, shared with `loader mcp`, see [mcp.md](mcp.md)), `accounts-key` (32-byte AES-256-GCM key for `accounts.bin`, `proxies.bin` and run records). Never in `app.ron`.
 - `app.ron` (`storage.rs`) is the file eframe wrote, kept so installs keep their data: in the data dir of app id `Loader` (`~/.local/share/loader`, `%APPDATA%\Loader\data`), a RON map of RON-encoded values. Keys: `app` (`Settings`), `script`, `last_script`, `forms`, `queues`, `layouts`, `cursor`, `ui_font`, `community_confirmed`, `http_whitelist`. Keys it doesn't know (eframe's `egui`, `window`) are kept. Written every 30 s and on exit, through a temporary file and a rename.
 - `accounts.bin` (data dir) is `nonce || ciphertext || tag`. If it can't be opened (no keyring, wrong key) the page refuses to save so it isn't overwritten. Only `hash_name` of the account name is kept, normalised like the client (lowercase, spaces/hyphens to `_`).
 - `layouts`: if unreadable (written by a newer loader) it is copied to `layouts-unreadable-<unix>.ron` and never saved over. Two open loaders still overwrite each other's storage.
@@ -155,6 +156,13 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 
 - The client page's Hide boxes show the agent's applied mask, not what was asked: the loader reads it every 2 s while that page is open (`hider::POLL_EVERY`), so a box the agent turned off because a script reached for a hidden thing turns off here too, with a log line. A read asked before the latest change is dropped, so a poll can't undo a click.
 - Nothing is saved: a new agent starts with nothing hidden. The boxes are greyed out unless this loader's own agent is loaded, since an older one speaks another protocol.
+
+## Proxies
+
+- Saved in `proxies.bin` (data dir), sealed like `accounts.bin` with its own AAD; it holds proxy passwords, so never in `app.ron`. If it can't be opened the section refuses to save. A proxy a client uses can't be deleted; editing one sets it again on every client that uses it.
+- A client's choice is kept in memory by pid only, since pids change each launch, and dropped when a clean scan no longer lists the pid. The agent keeps applying it after the loader exits (see [agent-dll.md](agent-dll.md)).
+- The setting is written before every load the loader starts. A pinned release's agent replaces this one for a run, so the quote job asks that release's `injector.exe proxy-version`; a release without proxy support (no answer or another version) gets the start prompt's warning, and the queue prompt lists such entries. Allowed after the warning: the loader loads its own agent back when the run ends, which shuts down the connections made meanwhile.
+- Status is polled every 2 s on the client page; a failed poll keeps the last answer, a failed change is logged.
 
 ## Development inspectors
 

@@ -65,6 +65,7 @@ use ipc::{
     item_log::{self, item_log_memory_name, item_wake_event_name},
     overlay_mode, overlay_offset,
     packets::{self as packet_log, LOG_SIZE, Log, direction, packets_memory_name},
+    proxy::{self as proxy_memory, Request as ProxyRequest},
     read::short_string_text,
     request_mutex_name,
     script_runs::{
@@ -73,12 +74,11 @@ use ipc::{
     shared_memory_name,
     state::{
         ActRequest, ActState, CACHE_BATCH, CACHE_FILE_MISSING, CACHE_FILE_NO_ROOM, CacheReply,
-        CacheRequest, ITEM_ICON_HEIGHT, ITEM_ICON_SHOW_COUNT, ITEM_ICON_WIDTH, LAYOUT_SIZE, Layout,
-        HiderRequest, HiderStatus, LayoutView, ModelRequest, ReadError, Shared, TotalXpRequest,
-        WorkerRequest, WorldLayout,
-        cache_status, game_state::LOGGED_IN, hider_status, model_target, name_status, part,
-        state_memory_name,
-        total_xp_status, worker_kind, worker_status,
+        CacheRequest, HiderRequest, HiderStatus, ITEM_ICON_HEIGHT, ITEM_ICON_SHOW_COUNT,
+        ITEM_ICON_WIDTH, LAYOUT_SIZE, Layout, LayoutView, ModelRequest, ReadError, Shared,
+        TotalXpRequest, WorkerRequest, WorldLayout, cache_status, game_state::LOGGED_IN,
+        hider_status, model_target, name_status, part, state_memory_name, total_xp_status,
+        worker_kind, worker_status,
     },
     unload_event_name,
     varc_log::{self, varc_log_memory_name},
@@ -87,7 +87,7 @@ use ipc::{
 
 use crate::{
     Client, Connection, DisplayName, GameState, Image, ItemIconRequest, Layer, LoadReport, Overlay,
-    Position, Rgba, TotalXp, Widget, dll_version,
+    Position, Proxy, ProxyStatus, Rgba, TotalXp, Widget, dll_version,
     memory::Memory,
     projection::{self, Terrain},
     state,
@@ -416,6 +416,7 @@ fn seed_cursor(pid: u32, cursor: &crate::Cursor) -> Option<View> {
 
 pub fn load(pid: u32, agent: &[u8], cursor: Option<&crate::Cursor>) -> Result<LoadReport, String> {
     forget(pid);
+    let _proxy = open_mapping(proxy_memory::memory_name(pid), FILE_MAP_READ);
     let version = dll_version(agent);
     let dll = versioned_copy(agent, &version)?;
     let dll_name = dll
@@ -875,9 +876,9 @@ pub fn set_total_xp(pid: u32, offset: Option<i64>) -> Result<TotalXp, String> {
 
 fn hider_mask(status: Option<HiderStatus>) -> Result<u64, String> {
     match status {
-        Some(status) if status.status == hider_status::NOT_FOUND => Err(
-            "agent didn't find the client's render switches, so it can't hide entities".into(),
-        ),
+        Some(status) if status.status == hider_status::NOT_FOUND => {
+            Err("agent didn't find the client's render switches, so it can't hide entities".into())
+        }
         Some(status) => Ok(status.mask),
         None => Err("cannot read the entity hider's state".into()),
     }
@@ -901,6 +902,78 @@ pub fn set_hider(pid: u32, mask: u64) -> Result<u64, String> {
             _ => sleep(REQUEST_POLL),
         }
     }
+}
+
+static PROXIES: Mutex<Vec<(u32, View)>> = Mutex::new(Vec::new());
+
+fn proxy_view(pid: u32) -> Result<View, String> {
+    let name = wide(proxy_memory::memory_name(pid));
+    let mapping = Handle::new(unsafe {
+        CreateFileMappingW(
+            INVALID_HANDLE_VALUE,
+            null(),
+            PAGE_READWRITE,
+            0,
+            proxy_memory::MEMORY_SIZE as u32,
+            name.as_ptr(),
+        )
+    })
+    .ok_or_else(|| {
+        format!(
+            "Cannot open client {pid}'s proxy setting: {}",
+            io::Error::last_os_error()
+        )
+    })?;
+    View::new(
+        mapping,
+        FILE_MAP_READ | FILE_MAP_WRITE,
+        proxy_memory::MEMORY_SIZE,
+    )
+    .map_err(|e| format!("Cannot map client {pid}'s proxy setting: {e}"))
+}
+
+fn with_proxy<T>(pid: u32, use_it: impl FnOnce(proxy_memory::Shared) -> T) -> Result<T, String> {
+    let mut proxies = lock(&PROXIES);
+    let index = match proxies.iter().position(|(held, _)| *held == pid) {
+        Some(index) => index,
+        None => {
+            proxies.push((pid, proxy_view(pid)?));
+            proxies.len() - 1
+        }
+    };
+    Ok(use_it(unsafe {
+        proxy_memory::Shared::attach(proxies[index].1.ptr())
+    }))
+}
+
+fn proxy_status(shared: proxy_memory::Shared) -> ProxyStatus {
+    let status = shared.status().view();
+    ProxyStatus {
+        written: shared.read().0,
+        adopted: status.adopted,
+        state: status.state,
+        proxied: status.proxied,
+        failed: status.failed,
+        dropped: status.dropped,
+        last_error: status.last_error,
+    }
+}
+
+pub fn proxy(pid: u32) -> Result<ProxyStatus, String> {
+    with_proxy(pid, proxy_status)
+}
+
+pub fn set_proxy(pid: u32, proxy: Option<&Proxy>) -> Result<ProxyStatus, String> {
+    let request = match proxy {
+        Some(proxy) => {
+            ProxyRequest::new(&proxy.host, proxy.port, &proxy.username, &proxy.password)?
+        }
+        None => ProxyRequest::OFF,
+    };
+    with_proxy(pid, |shared| {
+        shared.write(&request);
+        proxy_status(shared)
+    })
 }
 
 pub fn item_names(pid: u32, ids: &[i32]) -> Result<Vec<Option<String>>, String> {

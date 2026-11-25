@@ -13,6 +13,7 @@ retour = { version = "=0.4.0-alpha.4", features = ["28-args"] }
 gl = "0.14"
 windows = { version = "0.62", features = [
     "Win32_Security",
+    "Win32_Networking_WinSock",
     "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",

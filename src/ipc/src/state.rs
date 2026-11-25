@@ -1101,7 +1101,7 @@ unsafe fn seqlock_write_with<T>(
     start.wrapping_add(2)
 }
 
-unsafe fn seqlock_write<T: Copy>(sequence: *mut u32, data: *mut T, value: &T) -> u32 {
+pub(crate) unsafe fn seqlock_write<T: Copy>(sequence: *mut u32, data: *mut T, value: &T) -> u32 {
     seqlock_write_with(sequence, data, |data| data.write_volatile(*value))
 }
 
@@ -1126,7 +1126,7 @@ unsafe fn seqlock_read_with<R>(
     None
 }
 
-unsafe fn seqlock_read<T: Copy>(
+pub(crate) unsafe fn seqlock_read<T: Copy>(
     sequence: *const u32,
     data: *const T,
     attempts: usize,

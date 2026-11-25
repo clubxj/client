@@ -10,8 +10,9 @@ pub use decode::{
     world_select,
     world_select::WorldSelect,
 };
-use ipc::{Header, Incompatible};
+pub use ipc::proxy::{VERSION as PROXY_VERSION, error as proxy_error, state as proxy_state};
 pub use ipc::state::hide;
+use ipc::{Header, Incompatible};
 pub use ipc::{PROTOCOL_VERSION, state::varp};
 use serde::{Deserialize, Serialize};
 
@@ -338,12 +339,10 @@ pub use win::{
     item_names, item_params, item_stackable, landmasses, list_clients, load, loc_model, loc_shown,
     locs, map_regions, memory_words, menu, menu_click, menu_layout, menu_open, movement, nav_plan,
     npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npc_words, npcs,
-    packet_layouts,
-    packets, raw_packet_layouts,
-    player_hitsplats, player_model, player_overhead_text, player_plane, player_words, players,
-    project, project_from,
-    projectiles, scene_collision, scene_route, scene_tiles, scene_tiles_next_frame, screenshot,
-    script_runs, selected_widget, server_tile, set_cursor, set_display_name, set_hider, set_total_xp,
+    packet_layouts, packets, player_hitsplats, player_model, player_overhead_text, player_plane,
+    player_words, players, project, project_from, projectiles, proxy, raw_packet_layouts,
+    scene_collision, scene_route, scene_tiles, scene_tiles_next_frame, screenshot, script_runs,
+    selected_widget, server_tile, set_cursor, set_display_name, set_hider, set_proxy, set_total_xp,
     spot_anims, sprites, sub_interfaces, unload, varbit, varbits_of, varc, varc_changes,
     varp_value, varps, wait_watchers, watch_client, widget, widget_children, widget_dump,
     widget_model, widget_tree, widget_words, world_debug, world_entities, world_route,
@@ -394,6 +393,50 @@ pub fn hider_names(mask: u64) -> Vec<&'static str> {
         .filter(|(_, bit)| mask & bit != 0)
         .map(|(name, _)| *name)
         .collect()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Proxy {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+}
+
+impl Proxy {
+    pub fn from_args(args: &[&str]) -> Result<Option<Self>, String> {
+        match args {
+            ["off"] => Ok(None),
+            [host, port, login @ ..] if login.len() <= 2 => Ok(Some(Self {
+                host: (*host).to_owned(),
+                port: port.parse().map_err(|_| format!("Invalid port: {port}"))?,
+                username: login.first().copied().unwrap_or_default().to_owned(),
+                password: login.get(1).copied().unwrap_or_default().to_owned(),
+            })),
+            _ => Err("Expected off or <host> <port> [username [password]]".into()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProxyStatus {
+    pub written: u32,
+    pub adopted: u32,
+    pub state: i32,
+    pub proxied: u32,
+    pub failed: u32,
+    pub dropped: u32,
+    pub last_error: i32,
+}
+
+impl ProxyStatus {
+    pub fn applied(&self) -> bool {
+        self.adopted == self.written
+    }
+
+    pub fn last_error(&self) -> Option<String> {
+        (self.last_error != proxy_error::NONE).then(|| proxy_error::describe(self.last_error))
+    }
 }
 
 pub fn dll_version(dll: &[u8]) -> String {
@@ -723,7 +766,9 @@ impl Layer {
         match name {
             "world" => Ok(Self::World),
             "ui" => Ok(Self::Ui),
-            _ => Err(format!("unknown overlay layer {name:?}, expected \"world\" or \"ui\"")),
+            _ => Err(format!(
+                "unknown overlay layer {name:?}, expected \"world\" or \"ui\""
+            )),
         }
     }
 
@@ -808,7 +853,18 @@ impl Overlay {
 
     fn parse(args: &[&str]) -> Result<Option<Self>, String> {
         Ok(Some(match args {
-            [kind @ ("rect" | "line"), x1, y1, x2, y2, r, g, b, a, layer @ ..] => {
+            [
+                kind @ ("rect" | "line"),
+                x1,
+                y1,
+                x2,
+                y2,
+                r,
+                g,
+                b,
+                a,
+                layer @ ..,
+            ] => {
                 let (x1, y1, x2, y2) = (number(x1)?, number(y1)?, number(x2)?, number(y2)?);
                 let color = Rgba {
                     r: byte(r)?,

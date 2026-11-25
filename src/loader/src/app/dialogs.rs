@@ -85,6 +85,7 @@ fn decision_window(
 }
 
 const GRID_ROW: Pixels = px(20.0);
+const PROXY_LOST: &str = "This script runs on an older client release that can't use proxies. Its agent replaces this client's, so the client's connections skip the proxy and go out on your own IP until the script ends.";
 
 fn strong_credits(text: String, suffix: &str) -> Div {
     widgets::credits(text, suffix, false).font_weight(FontWeight::BOLD)
@@ -128,8 +129,10 @@ impl LoaderApp {
         };
         let title = if prompt.start.replaces.is_some() {
             "Restart session"
-        } else {
+        } else if extra {
             "Extra session"
+        } else {
+            "Run without the proxy"
         };
         let mut rows: Vec<(&str, Div)> = Vec::new();
         if extra {
@@ -176,6 +179,9 @@ impl LoaderApp {
             .gap(theme::LINE_GAP)
             .pb(px(8.0))
             .child(widgets::strong(prompt.start.script.title.clone()).mb(px(6.0)))
+            .when(prompt.start.proxy_lost, |this| {
+                this.child(widgets::error(PROXY_LOST))
+            })
             .when(prompt.old_price.is_some(), |this| {
                 this.child("The price of this script changed since the session started.")
             })
@@ -268,6 +274,7 @@ fn pending(script: StoreScript, replaces: Option<u64>) -> PendingStart {
             version: crate::update::VERSION.into(),
             path: std::path::PathBuf::new(),
         },
+        proxy_lost: false,
     }
 }
 

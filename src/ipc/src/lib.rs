@@ -7,6 +7,7 @@ use alloc::{format, string::String};
 
 pub mod item_log;
 pub mod packets;
+pub mod proxy;
 pub mod read;
 pub mod ring;
 pub mod script_runs;

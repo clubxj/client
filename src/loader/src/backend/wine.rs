@@ -238,7 +238,12 @@ pub fn load(target: &Target, settings: &Settings, cursor: &Cursor) -> Result<Loa
 }
 
 pub fn agent_version(target: &Target, settings: &Settings) -> Result<String, String> {
-    run_on(Lane::Main, &target.location, &helper(settings)?, &["agent-version"])
+    run_on(
+        Lane::Main,
+        &target.location,
+        &helper(settings)?,
+        &["agent-version"],
+    )
 }
 
 pub fn unload(target: &Target, settings: &Settings) -> Result<(), String> {
@@ -292,6 +297,38 @@ pub fn set_hider(target: &Target, settings: &Settings, mask: u64) -> Result<u64,
         names.join(",")
     };
     call(target, settings, "hider", &[&names]).and_then(hider_mask)
+}
+
+pub fn proxy(target: &Target, settings: &Settings) -> Result<injector::ProxyStatus, String> {
+    call(target, settings, "proxy", &[])
+}
+
+pub fn set_proxy(
+    target: &Target,
+    settings: &Settings,
+    proxy: Option<&injector::Proxy>,
+) -> Result<injector::ProxyStatus, String> {
+    match proxy {
+        Some(proxy) => {
+            let port = proxy.port.to_string();
+            call(
+                target,
+                settings,
+                "proxy",
+                &[&proxy.host, &port, &proxy.username, &proxy.password],
+            )
+        }
+        None => call(target, settings, "proxy", &["off"]),
+    }
+}
+
+pub fn proxy_version(target: &Target, settings: &Settings) -> Result<u32, String> {
+    run_on(
+        Lane::Main,
+        &target.location,
+        &helper(settings)?,
+        &["proxy-version"],
+    )
 }
 
 pub fn varps(target: &Target, settings: &Settings) -> Result<Option<Vec<i32>>, String> {

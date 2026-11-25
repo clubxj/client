@@ -18,6 +18,7 @@ pub mod name;
 pub mod offsets;
 pub mod own;
 pub mod packets;
+pub mod proxy;
 pub mod scene;
 pub mod script_runs;
 pub mod state;

@@ -42,6 +42,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
     }
 
     println!("[Agent]: Unloading.\r\n");
+    super::proxy::stop();
     super::hider::stop();
     super::drawn::stop();
     unhook_all();
@@ -51,6 +52,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
         return;
     }
 
+    super::proxy::close();
     super::definitions::stop();
     super::interface_mask::stop();
     super::packets::close();

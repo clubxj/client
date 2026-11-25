@@ -5,7 +5,7 @@
 ## Lifecycle
 
 - **Load:** the DLL ships only inside `injector.exe` (see [injector-and-sandbox.md](injector-and-sandbox.md)). `injector load` writes it to `%TEMP%\agent\agent-<version>.dll`, so a new build can replace a loaded one, then `LoadLibraryW`s it. Only `DllMain` is exported; everything else goes through shared memory, named events and window messages.
-- **Start** (`hooks::start`, own thread): find the `JagRenderView` window, run every offset rule, install `retour` detours, patch `GetFocus` (below), then decode the loc and varbit definitions from the client's disk cache on a thread of its own (`definitions::start`; unload joins it). The cache folder is found once, through the client's open handle to `main_file_cache.dat2`.
+- **Start** (`hooks::start`, own thread): hook the proxy first (below), so no connection slips past it while the rest starts; then find the `JagRenderView` window, run every offset rule, install `retour` detours, patch `GetFocus` (below), then decode the loc and varbit definitions from the client's disk cache on a thread of its own (`definitions::start`; unload joins it). The cache folder is found once, through the client's open handle to `main_file_cache.dat2`.
 - **Per frame, game thread** (`client/frame.rs`, after the client's draw step): publish the models drawn this frame (below); advance the act job (below); copy the finished menu for the worker (`menu::capture`, see [ipc-protocol.md](ipc-protocol.md)).
   - Some renderer modes (1 and 3 of the client's 0 to 3) present from a render thread of their own, so the swap hook isn't on the game thread there. The frame rule (`offsets/frame.rs`, see [reverse-engineering.md](reverse-engineering.md)) finds the game thread's tick. Its detour reads the draw step from the app object's vtable on the first tick and hooks it, so the work runs on the game thread in every mode.
   - Until the draw step is hooked (or if the rule doesn't match a new build), the swap hook does this work as before. Once hooked, the swap hook never takes it back, even while unloading.
@@ -51,6 +51,18 @@ The loader's Hide boxes set a category mask (`ipc::state::hide`); the agent appl
 - A model read (`model.rs`, used by act and the worker) of something hidden clears that category's bit, so the next frame shows it and the loader's box turns off. That read itself finds no model.
 - Unload asks the next frame to show everything again (`hider::stop`); if no frame comes within a second, the flags stay.
 - Identical static locs share one renderable, so hiding a loc kind hides every copy of a loc that also sits in another slot kind.
+
+## Proxy (`client/proxy.rs`)
+
+The loader's per-client SOCKS5 proxy (`ipc::proxy`, see [ipc-protocol.md](ipc-protocol.md)). The client opens every connection, HTTP included, with a plain `ws2_32!connect` and pings the world list with `IcmpSendEcho`/`Icmp6SendEcho2`, so the agent detours the exports themselves, which catches every caller in the process.
+
+- **Connect:** loopback goes straight through. With the proxy on, a TCP connect is sent to the proxy and the SOCKS5 handshake runs synchronously in the caller's thread, then `connect` returns 0, which a non-blocking caller also accepts. The deadline (8 s) stays under unload's 10 s hook drain. A failure shuts the socket down and returns an error; it never falls back to a direct connection.
+- **Fails closed:** a UDP connect and a setting it can't read (another layout version, a torn write, no mapping) block outside connections instead of letting them out directly. If `connect` can't be hooked, nothing can be blocked, so the status says `UNHOOKED` and the loader shows it as a problem. While the proxy is on, pings fail as timed out: ICMP can't go through a SOCKS5 proxy and would show the real address.
+- **Sweep:** the watcher thread adopts each new setting (and the one present at start) by shutting down every connected socket whose peer is neither loopback nor the proxy, so the client reconnects through it; that covers connections from before injection and from the gap of an agent reload. It finds sockets from the process's handle table (`NtQuerySystemInformation` 64) and `getpeername`, plus direct connects still in progress (kept by the hook, waited for up to 5 s). It uses `shutdown`, never `closesocket`, because the client still owns the handle and a reused handle would close someone else's socket.
+- **Switching proxies:** the hook remembers each socket it routed and the proxy address it used, and the sweep also shuts those down when that address is no longer the setting's, including when the proxy is turned off. A peer test alone can't find them because the old proxy may be on loopback. Rewriting the same proxy keeps its connections, because the loader rewrites the setting on every agent load. A reload forgets the routed sockets, so a loopback proxy's connections from before it survive the next switch.
+- **Dropped count:** the client never closes handles of connections that ended, so later sweeps see the same dead sockets; a zero-byte `send` failing with `WSAESHUTDOWN` marks one already shut down, and it isn't counted again.
+- **Races:** a direct connect re-reads the sequence after the real call and refuses if the setting changed meanwhile; a proxied one does the same after its handshake, so no connection opened under the old setting survives the sweep.
+- Unload stops the watcher before unhooking; already proxied connections stay on the proxy.
 
 ## Event logs
 

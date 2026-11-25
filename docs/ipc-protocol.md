@@ -22,6 +22,12 @@ Shared-memory contract between the agent (writer, in the client) and the injecto
 - Overlay layers: every non-transparent overlay pixel carries its layer in alpha's lowest bit (`ipc::tag_alpha`): 1 is UI, 0 is world. Every painter must tag every pixel it writes (a ±1 alpha change is invisible); an untagged painter's pixels would land on a random layer.
 - `frame_serial` is unaligned in the packed `Header`: read it unaligned. Waiters on `AGENT_FRAME_<pid>` re-read `frame_serial` in slices because another waiter may consume the auto-reset wake.
 
+## Proxy setting (`proxy.rs`)
+
+- `AGENT_PROXY_<pid>` is one 4096-byte page in every version, so any release's agent maps whatever another release created. It has its own `proxy::VERSION`, not `PROTOCOL_VERSION`: the loader writes it for agents of older pinned releases too, and asks a pinned injector's `proxy-version` before trusting it. Bump `proxy::VERSION` for any change to it.
+- The loader's side (one writer) stamps the version and writes the request seqlocked; never written (version and sequence 0) means off. The agent never writes the request; it answers in `Status` with atomics (several hook threads update the counters), and `adopted` equal to the written sequence means the sweep for that setting is done.
+- The mapping lives while anyone holds it: the agent from start to unload, the loader process (Windows) or its `serve` helper (Wine) from the first write, and `injector load` across a reload, so the new agent reads the setting before its first connection. The loader writes it again before each load it starts.
+
 ## Requests
 
 - Worker path (preferred): the injector holds mutex `AGENT_WORKER_<pid>` from writing `worker_request` to reading `worker_reply`, so any threads/processes can share the single slot. It sets `AGENT_WORK_<pid>`; the agent's listener thread serves it in-process (no wait for the game thread's next frame, which costs ~17 ms at 60 fps) and sets `AGENT_WORK_DONE_<pid>`. A stale wake shows the wrong `sequence`; the injector waits again.

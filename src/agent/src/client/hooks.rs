@@ -42,16 +42,16 @@ use super::graphics::{
 };
 use super::offsets::{
     find_actor_lists, find_actor_names, find_actor_path, find_actor_position,
-    find_animation_height, find_appearance_decoder, find_camera, find_chat, find_client, find_collision_maps,
-    find_component_fields, find_component_invalidate, find_component_sprite,
+    find_animation_height, find_appearance_decoder, find_camera, find_chat, find_client,
+    find_collision_maps, find_component_fields, find_component_invalidate, find_component_sprite,
     find_decoration_layout, find_destination, find_frame, find_game_object_layout, find_game_state,
-    find_ground_item_ownership, find_ground_items, find_instance_flag, find_interfaces,
+    find_ground_item_ownership, find_ground_items, find_hider, find_instance_flag, find_interfaces,
     find_item_containers, find_item_icon, find_item_pile, find_item_setter, find_loc_configs,
     find_local_player, find_local_projection, find_login_panel, find_login_provider, find_menu,
     find_menu_click, find_menu_layout, find_menu_open, find_menu_order, find_menu_settings,
     find_minimap, find_model_faces, find_model_vertices, find_npc_head_icons, find_npc_model,
     find_packet_layouts, find_packet_names, find_packets, find_projectiles, find_projection,
-    find_hider, find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
+    find_render, find_run_energy, find_scene, find_script_runs, find_selection, find_skills,
     find_spot_anims, find_tick_count, find_varc_setters, find_varcs, find_varps, find_world_select,
     guarded, NamedPacket, PacketAnchors, Pe, ScanError, World,
 };
@@ -388,6 +388,7 @@ unsafe fn unhook_wgl_swap_buffers() {
 }
 
 pub unsafe fn unhook_all() {
+    super::proxy::unhook();
     super::focus::unhook();
     unhook_wndproc();
     unhook_wgl_swap_buffers();
@@ -540,27 +541,31 @@ unsafe fn find_offsets() {
             )
         },
     );
-    let world = client.zip(player).zip(actor).and_then(|((client, player), actor)| {
-        let world = (|| {
-            Ok::<_, (&str, ScanError)>(World {
-                containers: containers.map_err(|e| ("item containers", e))?,
-                varcs: guarded(|| find_varcs(pe, client)).map_err(|e| ("varcs", e))?,
-                run_energy: guarded(|| find_run_energy(pe)).map_err(|e| ("run energy", e))?,
-                lists: guarded(|| find_actor_lists(pe)).map_err(|e| ("NPC and player lists", e))?,
-                names: guarded(|| find_actor_names(pe)).map_err(|e| ("actor names", e))?,
-                client,
-                player,
-                actor,
-            })
-        })();
-        match world {
-            Ok(world) => Some(world),
-            Err((what, error)) => {
-                println!("[Agent]: World not found ({what}): {error:?}.\r\n");
-                None
+    let world = client
+        .zip(player)
+        .zip(actor)
+        .and_then(|((client, player), actor)| {
+            let world = (|| {
+                Ok::<_, (&str, ScanError)>(World {
+                    containers: containers.map_err(|e| ("item containers", e))?,
+                    varcs: guarded(|| find_varcs(pe, client)).map_err(|e| ("varcs", e))?,
+                    run_energy: guarded(|| find_run_energy(pe)).map_err(|e| ("run energy", e))?,
+                    lists: guarded(|| find_actor_lists(pe))
+                        .map_err(|e| ("NPC and player lists", e))?,
+                    names: guarded(|| find_actor_names(pe)).map_err(|e| ("actor names", e))?,
+                    client,
+                    player,
+                    actor,
+                })
+            })();
+            match world {
+                Ok(world) => Some(world),
+                Err((what, error)) => {
+                    println!("[Agent]: World not found ({what}): {error:?}.\r\n");
+                    None
+                }
             }
-        }
-    });
+        });
     if world.is_some() {
         println!("[Agent]: World found.\r\n");
     }
@@ -1024,6 +1029,7 @@ pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
+        super::proxy::start(pid);
         let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::create_map(pid)));
         match LayoutMap::create(pid) {
             Some(layout) => drop(LAYOUT_MAP.set(layout)),

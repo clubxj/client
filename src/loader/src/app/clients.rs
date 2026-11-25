@@ -1,5 +1,5 @@
-use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::{Entity, Focusable, Hsla, Subscription};
@@ -283,7 +283,7 @@ impl LoaderApp {
 
     fn render_client_options(&self, ui: &Ui, window: &Window, cx: &mut Context<Self>) -> Div {
         let pid = ui.pid;
-        let labels = ["Mouse cursor", "Display name"];
+        let labels = ["Mouse cursor", "Display name", "Proxy"];
         let label_width = widgets::widest(window, &labels, theme::BODY).ceil();
         let option = |label: &'static str, control: Div| {
             div()
@@ -382,6 +382,74 @@ impl LoaderApp {
             .gap(px(6.0))
             .child(option(labels[0], cursor))
             .child(option(labels[1], name))
+            .child(option(labels[2], self.render_client_proxy(pid, cx)))
+    }
+
+    fn render_client_proxy(&self, pid: u32, cx: &mut Context<Self>) -> Div {
+        let app = cx.entity().downgrade();
+        let current = self.assigned_proxies.name(pid).map(str::to_owned);
+        let names = std::iter::once(None).chain(
+            self.proxies
+                .saved()
+                .iter()
+                .map(|saved| Some(saved.name.clone())),
+        );
+        let choices = names
+            .map(|name| {
+                let app = app.clone();
+                let label = name.clone().unwrap_or_else(|| "None".into());
+                widgets::Choice::new(label, name == current, move |_, cx| {
+                    app.update(cx, |app, cx| {
+                        if app.assigned_proxies.name(pid) != name.as_deref() {
+                            app.set_client_proxy(pid, name.clone());
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+            })
+            .collect();
+        let loaded = self
+            .target_of(pid)
+            .is_some_and(|t| t.client.loaded.is_some());
+        let status = match self.assigned_proxies.shown(pid, loaded) {
+            crate::proxies::Shown::Off => widgets::weak(if self.proxies.saved().is_empty() {
+                "Add proxies in Settings."
+            } else {
+                "Connections go out directly."
+            }),
+            crate::proxies::Shown::Waiting => widgets::weak("Applying…"),
+            crate::proxies::Shown::NoAgent => {
+                widgets::weak("Applies when the agent is loaded. Load it before you log in.")
+            }
+            crate::proxies::Shown::On(status) => {
+                let mut text = format!(
+                    "On: {} connections through it, {} shut down to reconnect.",
+                    status.proxied, status.dropped
+                );
+                if let Some(error) = status.last_error() {
+                    text.push_str(&format!(" {} failed, last because {error}.", status.failed));
+                }
+                widgets::weak(text)
+            }
+            crate::proxies::Shown::Problem(why) => widgets::error(why),
+        };
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(theme::ITEM_GAP)
+            .child(
+                div()
+                    .id("client-proxy")
+                    .child(widgets::combo(
+                        "client-proxy-choice",
+                        current.clone().unwrap_or_else(|| "None".into()),
+                        choices,
+                    ))
+                    .tooltip(widgets::tooltip(crate::proxies::HINT)),
+            )
+            .child(status)
     }
 
     fn render_client_hider(&self, pid: u32, cx: &mut Context<Self>) -> Div {
@@ -606,6 +674,24 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
                 Some(injector::hide::OTHERS | injector::hide::WALLS | injector::hide::PROJECTILES),
             );
             app.hiders.poll(Instant::now());
+        }),
+        ("client-proxy", |app| {
+            populated(app);
+            app.page = Page::Client(4120);
+            app.proxies = crate::proxies::Proxies::with(super::settings_page::snapshot_proxies());
+            app.assigned_proxies
+                .assign(4120, Some("Residential US".into()));
+            app.assigned_proxies.answered(
+                4120,
+                Ok(injector::ProxyStatus {
+                    written: 2,
+                    adopted: 2,
+                    state: injector::proxy_state::ON,
+                    proxied: 5,
+                    dropped: 2,
+                    ..injector::ProxyStatus::default()
+                }),
+            );
         }),
         ("client-unloaded", |app| {
             populated(app);

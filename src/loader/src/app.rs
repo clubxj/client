@@ -100,6 +100,11 @@ enum Event {
         polled: bool,
         result: Result<u64, String>,
     },
+    Proxy {
+        pid: u32,
+        set: bool,
+        result: Result<injector::ProxyStatus, String>,
+    },
     Tiles {
         pid: u32,
         result: Result<usize, String>,
@@ -166,6 +171,7 @@ enum Event {
         run: Option<u64>,
         values: serde_json::Value,
         result: Result<session::Quoted, ApiError>,
+        proxy_lost: bool,
     },
     ManifestFetched {
         script: Box<StoreScript>,
@@ -184,6 +190,7 @@ enum Event {
     RestartQuoted {
         run: u64,
         result: Result<Option<session::Restart>, ApiError>,
+        proxy_lost: bool,
     },
     Heartbeat {
         session_id: String,
@@ -498,7 +505,27 @@ fn swap_agent(
     }
     backend::load(target, &pinned_settings, cursor)
         .map(|_| ())
-        .map_err(|e| format!("Couldn't load the agent of injector {}: {e}", pinned.version))
+        .map_err(|e| {
+            format!(
+                "Couldn't load the agent of injector {}: {e}",
+                pinned.version
+            )
+        })
+}
+
+fn loses_proxy(target: &Target, settings: &Settings, pinned: &crate::injectors::Pinned) -> bool {
+    !pinned.is_bundled()
+        && backend::proxy_version(target, &settings.with_helper(&pinned.path))
+            != Ok(injector::PROXY_VERSION)
+}
+
+fn quoted_proxy_lost(
+    proxied: Option<&(Target, Settings)>,
+    pinned: Option<&crate::injectors::Pinned>,
+) -> bool {
+    proxied
+        .zip(pinned)
+        .is_some_and(|((target, settings), pinned)| loses_proxy(target, settings, pinned))
 }
 
 const RESTORING_SIGN_IN: &str = "Checking for a saved sign-in…";
@@ -513,6 +540,7 @@ struct PendingStart {
     run: Option<u64>,
     launch: Launch,
     injector: crate::injectors::Pinned,
+    proxy_lost: bool,
 }
 
 struct StartPrompt {
@@ -1193,6 +1221,8 @@ pub struct LoaderApp {
     queue_page: queue_page::Page,
     clients_ui: Option<clients::Ui>,
     hiders: crate::hider::Hiders,
+    proxies: crate::proxies::Proxies,
+    assigned_proxies: crate::proxies::Assigned,
     accounts_ui: Option<crate::accounts::Ui>,
     run_ui: run_page::Ui,
     cursor: Cursor,
@@ -1320,6 +1350,8 @@ impl LoaderApp {
             queue_page: queue_page::Page::default(),
             clients_ui: None,
             hiders: crate::hider::Hiders::default(),
+            proxies: crate::proxies::Proxies::load(),
+            assigned_proxies: crate::proxies::Assigned::default(),
             accounts_ui: None,
             run_ui: run_page::Ui::default(),
             cursor: storage.get(CURSOR_KEY).unwrap_or(DEFAULT_CURSOR),
@@ -1580,28 +1612,50 @@ impl LoaderApp {
             .manifests
             .get(&script_id)
             .map(|(revision, _)| *revision);
+        let proxied = self.proxied_target(run.target.as_ref());
         self.starting = run.target.as_ref().map(|t| t.client.pid);
         self.active_run = Some(id);
         self.log_tab = LogTab::Run(id);
         self.remember_form(id);
         let helper = self.settings.helper.clone();
-        self.api_job(move |api| Event::RestartQuoted {
-            run: id,
-            result: session::restart_quote(
+        self.api_job(move |api| {
+            let result = session::restart_quote(
                 &api,
                 std::path::Path::new(&helper),
                 &session_id,
                 &script_id,
                 community,
                 cached_revision,
-            ),
+            );
+            let pinned = result
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .and_then(|restart| restart.quoted.injector.as_ref().ok());
+            let proxy_lost = quoted_proxy_lost(proxied.as_ref(), pinned);
+            Event::RestartQuoted {
+                run: id,
+                result,
+                proxy_lost,
+            }
         });
     }
 
-    fn restart_quoted(&mut self, id: u64, restart: session::Restart) {
+    fn proxied_target(&self, target: Option<&Target>) -> Option<(Target, Settings)> {
+        target
+            .filter(|target| self.assigned_proxies.name(target.client.pid).is_some())
+            .map(|target| (target.clone(), self.settings.clone()))
+    }
+
+    fn restart_quoted(&mut self, id: u64, restart: session::Restart, proxy_lost: bool) {
         let session::Restart {
             mut script,
-            quoted: session::Quoted { me, quote, injector },
+            quoted:
+                session::Quoted {
+                    me,
+                    quote,
+                    injector,
+                },
             manifest,
         } = restart;
         self.refresh_me(me);
@@ -1649,6 +1703,7 @@ impl LoaderApp {
             run: None,
             launch: Launch::with(values),
             injector,
+            proxy_lost,
         };
         self.start_at_quote(start, Some(old_price), quote);
     }
@@ -1672,12 +1727,22 @@ impl LoaderApp {
     ) {
         self.starting = Some(target.client.pid);
         let helper = self.settings.helper.clone();
-        self.api_job(move |api| Event::RunQuoted {
-            result: session::quote(&api, std::path::Path::new(&helper), &script.id),
-            script: Box::new(script),
-            target: Box::new(target),
-            run,
-            values,
+        let proxied = self.proxied_target(Some(&target));
+        self.api_job(move |api| {
+            let result = session::quote(&api, std::path::Path::new(&helper), &script.id);
+            let pinned = result
+                .as_ref()
+                .ok()
+                .and_then(|quoted| quoted.injector.as_ref().ok());
+            let proxy_lost = quoted_proxy_lost(proxied.as_ref(), pinned);
+            Event::RunQuoted {
+                result,
+                script: Box::new(script),
+                target: Box::new(target),
+                run,
+                values,
+                proxy_lost,
+            }
         });
     }
 
@@ -1764,7 +1829,7 @@ impl LoaderApp {
             self.script_error(format!("Couldn't start {}: {why}", start.script.title));
             return;
         };
-        let asks = session::asks_first(old_price, &quote);
+        let asks = session::asks_first(old_price, &quote) || start.proxy_lost;
         let start = PendingStart { target, ..start };
         if asks {
             self.start_prompt = Some(StartPrompt {
@@ -1787,6 +1852,7 @@ impl LoaderApp {
             run,
             launch,
             injector,
+            proxy_lost: _,
         } = start;
         let pid = target.client.pid;
         self.starting = Some(pid);
@@ -1795,9 +1861,8 @@ impl LoaderApp {
         let (settings, cursor) = (self.settings.clone(), self.cursor);
         self.api_job(move |api| {
             let bundled = std::path::PathBuf::from(&settings.helper);
-            let swap = |pinned: &crate::injectors::Pinned| {
-                swap_agent(&target, &settings, &cursor, pinned)
-            };
+            let swap =
+                |pinned: &crate::injectors::Pinned| swap_agent(&target, &settings, &cursor, pinned);
             let result = session::prepare(
                 &api,
                 &script,
@@ -2580,9 +2645,7 @@ impl LoaderApp {
     fn scan(&mut self) {
         self.scanning = true;
         self.last_scan = Instant::now();
-        self.background(|settings| {
-            Event::Scanned(backend::scan(&settings))
-        });
+        self.background(|settings| Event::Scanned(backend::scan(&settings)));
     }
 
     fn rescan_when_due(&mut self) {
@@ -2628,9 +2691,14 @@ impl LoaderApp {
         let pid = target.client.pid;
         self.info(format!("Loading into {pid}…"));
         let cursor = self.cursor;
+        let proxy = self.client_proxy(pid);
         self.spawn(move |settings| Event::Loaded {
             pid,
-            result: backend::load(&target, &settings, &cursor),
+            result: proxy
+                .map_or(Ok(()), |proxy| {
+                    backend::set_proxy(&target, &settings, Some(&proxy)).map(drop)
+                })
+                .and_then(|()| backend::load(&target, &settings, &cursor)),
         });
     }
 
@@ -2711,6 +2779,64 @@ impl LoaderApp {
         });
     }
 
+    fn poll_proxy(&mut self) {
+        let Page::Client(pid) = self.page else {
+            return;
+        };
+        if self.assigned_proxies.name(pid).is_none() {
+            return;
+        }
+        let Some(target) = self.target_of(pid).cloned() else {
+            return;
+        };
+        if let Some(wait) = self.assigned_proxies.due(Instant::now()) {
+            self.wake.wake_after(wait);
+            return;
+        }
+        self.wake.wake_after(crate::proxies::POLL_EVERY);
+        self.background(move |settings| Event::Proxy {
+            pid,
+            set: false,
+            result: backend::proxy(&target, &settings),
+        });
+    }
+
+    fn client_proxy(&self, pid: u32) -> Option<injector::Proxy> {
+        self.assigned_proxies
+            .name(pid)
+            .and_then(|name| self.proxies.named(name))
+            .map(crate::proxies::Saved::proxy)
+    }
+
+    fn set_client_proxy(&mut self, pid: u32, name: Option<String>) {
+        let Some(target) = self.target_of(pid).cloned() else {
+            return;
+        };
+        let proxy = name
+            .as_deref()
+            .and_then(|name| self.proxies.named(name))
+            .map(crate::proxies::Saved::proxy);
+        if name.is_some() && proxy.is_none() {
+            return;
+        }
+        self.assigned_proxies.assign(pid, name);
+        self.background(move |settings| Event::Proxy {
+            pid,
+            set: true,
+            result: backend::set_proxy(&target, &settings, proxy.as_ref()),
+        });
+    }
+
+    fn proxies_changed(&mut self, change: crate::proxies::Change) {
+        let crate::proxies::Change::Saved { was, saved } = change;
+        if let Some(was) = was {
+            self.assigned_proxies.rename(&was, &saved.name);
+        }
+        for pid in self.assigned_proxies.users_of(&saved.name) {
+            self.set_client_proxy(pid, Some(saved.name.clone()));
+        }
+    }
+
     fn set_display_name(&mut self, target: Target) {
         let pid = target.client.pid;
         let name = self.display_name.trim().to_owned();
@@ -2738,6 +2864,7 @@ impl LoaderApp {
                     | Event::WidgetMouse { .. }
                     | Event::Scanned(_)
                     | Event::Hider { .. }
+                    | Event::Proxy { .. }
             ) {
                 self.busy = false;
             }
@@ -2745,6 +2872,10 @@ impl LoaderApp {
                 Event::Scanned(scan) => {
                     self.scanning = false;
                     self.targets = scan.targets;
+                    if scan.errors.is_empty() {
+                        let alive: Vec<u32> = self.targets.iter().map(|t| t.client.pid).collect();
+                        self.assigned_proxies.retain(|pid| alive.contains(&pid));
+                    }
                     self.agent_version = scan.agent_version;
                     for error in &scan.errors {
                         if !self.scan_errors.contains(error) {
@@ -2878,14 +3009,14 @@ impl LoaderApp {
                         Err(error) => self.start_failed(&script.title, error),
                     }
                 }
-                Event::RunQuoted { script, target, run, values, result } => {
+                Event::RunQuoted { script, target, run, values, result, proxy_lost } => {
                     self.starting = None;
                     match result {
                         Ok(session::Quoted { me, quote, injector }) => {
                             self.refresh_me(me);
                             match injector {
                                 Ok(injector) => {
-                                    let start = PendingStart { script: *script, target: *target, replaces: None, run, launch: Launch::with(values), injector };
+                                    let start = PendingStart { script: *script, target: *target, replaces: None, run, launch: Launch::with(values), injector, proxy_lost };
                                     self.start_at_quote(start, None, quote);
                                 }
                                 Err(error) => self.start_failed(&script.title, error),
@@ -2895,10 +3026,10 @@ impl LoaderApp {
                         Err(error) => self.start_failed(&script.title, error),
                     }
                 }
-                Event::RestartQuoted { run, result } => {
+                Event::RestartQuoted { run, result, proxy_lost } => {
                     self.starting = None;
                     match result {
-                        Ok(Some(restart)) => self.restart_quoted(run, restart),
+                        Ok(Some(restart)) => self.restart_quoted(run, restart, proxy_lost),
                         Ok(None) => self.script_error("Couldn't restart: the script is no longer available to this account."),
                         Err(ApiError::SignedOut(why)) => self.sign_out(Some(why)),
                         Err(error) => self.script_error(format!("Couldn't restart: {error}")),
@@ -2932,6 +3063,14 @@ impl LoaderApp {
                     }
                     Err(error) => self.script_error(format!("Couldn't end the session: {error}. The server will end it within 5 minutes.")),
                 },
+                Event::Proxy { pid, set, result } => {
+                    if set && let Err(error) = &result {
+                        self.error(format!("Setting the proxy of {pid} failed: {error}"));
+                    }
+                    if self.assigned_proxies.name(pid).is_some() && (set || result.is_ok()) {
+                        self.assigned_proxies.answered(pid, result);
+                    }
+                }
                 Event::Hider {
                     pid,
                     asked_at,
@@ -3284,7 +3423,9 @@ impl LoaderApp {
                     self.runs[index].ended = Some(Instant::now());
                     self.keep_run_record(index);
                     let pid = self.runs[index].pid();
-                    if let Some(pid) = pid.filter(|pid| !self.queue_runners.iter().any(|r| r.pid == *pid)) {
+                    if let Some(pid) =
+                        pid.filter(|pid| !self.queue_runners.iter().any(|r| r.pid == *pid))
+                    {
                         self.load_current_agent_back(pid);
                     }
                 }
@@ -3835,7 +3976,9 @@ impl LoaderApp {
         let sdk = match crate::sdk::custom(&self.settings) {
             Ok(sdk) => sdk,
             Err(error) => {
-                self.script_error(format!("Couldn't start the script: {error} Fix it in the settings."));
+                self.script_error(format!(
+                    "Couldn't start the script: {error} Fix it in the settings."
+                ));
                 return;
             }
         };
@@ -4077,6 +4220,7 @@ impl LoaderApp {
         self.poll_icons();
         self.poll_widget_mouse();
         self.poll_hider();
+        self.poll_proxy();
     }
 
     pub fn save(&mut self) {

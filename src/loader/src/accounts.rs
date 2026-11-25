@@ -69,6 +69,10 @@ pub struct Entry {
 }
 
 pub(crate) fn seal(key: &[u8; 32], plain: &[u8]) -> Result<Vec<u8>, String> {
+    seal_with(key, AAD, plain)
+}
+
+pub(crate) fn seal_with(key: &[u8; 32], aad: &[u8], plain: &[u8]) -> Result<Vec<u8>, String> {
     let sealing = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, key).map_err(|e| e.to_string())?);
     let mut nonce = [0u8; NONCE_LEN];
     SystemRandom::new()
@@ -78,7 +82,7 @@ pub(crate) fn seal(key: &[u8; 32], plain: &[u8]) -> Result<Vec<u8>, String> {
     sealing
         .seal_in_place_append_tag(
             Nonce::assume_unique_for_key(nonce),
-            Aad::from(AAD),
+            Aad::from(aad),
             &mut data,
         )
         .map_err(|e| e.to_string())?;

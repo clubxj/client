@@ -110,6 +110,12 @@ fn dispatch(args: &[&str]) -> String {
     match args {
         ["list"] => json(Ok(injector::list_clients())),
         ["agent-version"] => json(Ok(injector::dll_version(AGENT))),
+        ["proxy-version"] => json(Ok(injector::PROXY_VERSION)),
+        ["proxy", pid] => with_pid(pid, injector::proxy),
+        ["proxy", pid, rest @ ..] => with_pid(pid, |pid| {
+            injector::Proxy::from_args(rest)
+                .and_then(|proxy| injector::set_proxy(pid, proxy.as_ref()))
+        }),
         ["load", pid, cursor @ ..] => with_pid(pid, |pid| {
             let cursor = match cursor {
                 [] => Ok(None),
@@ -473,6 +479,9 @@ fn run() -> ExitCode {
         );
         eprintln!(
             "       injector varp <pid> <id> | varps <pid> | varbit <pid> <id> | enum <pid> <id> | item-params <pid> <ids...> | name <pid> <display name>"
+        );
+        eprintln!(
+            "       injector proxy <pid> [off | <host> <port> [username [password]]] | proxy-version"
         );
         eprintln!(
             "       injector hider <pid> [off | <category>,...] (categories: {})",

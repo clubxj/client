@@ -75,6 +75,7 @@ struct Inputs {
     helper: Entity<InputState>,
     log_lines: Entity<InputState>,
     whitelist: Entity<InputState>,
+    proxy: [Entity<InputState>; 5],
 }
 
 impl Inputs {
@@ -160,11 +161,34 @@ impl LoaderApp {
             },
         )
         .detach();
+        let proxy = crate::proxies::Field::ALL.map(|field| {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(field.placeholder()));
+            if field == crate::proxies::Field::Password {
+                input.update(cx, |state, cx| state.set_masked(true, window, cx));
+            }
+            cx.subscribe_in(
+                &input,
+                window,
+                move |app, input, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => {
+                        let value = input.read(cx).value().to_string();
+                        app.proxies.set_draft_value(field, value);
+                    }
+                    InputEvent::PressEnter { .. } => {
+                        app.proxies_click(crate::proxies::Click::Save, window, cx);
+                    }
+                    InputEvent::Focus | InputEvent::Blur => {}
+                },
+            )
+            .detach();
+            input
+        });
         let inputs = Inputs {
             sdk_dir,
             helper,
             log_lines,
             whitelist,
+            proxy,
         };
         self.settings_page.inputs = Some(inputs.clone());
         inputs
@@ -196,6 +220,33 @@ impl LoaderApp {
         cx.notify();
     }
 
+    fn proxies_click(
+        &mut self,
+        click: crate::proxies::Click,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let opening = matches!(
+            click,
+            crate::proxies::Click::Add | crate::proxies::Click::Edit(_)
+        );
+        let assigned = &self.assigned_proxies;
+        let change = self
+            .proxies
+            .click(click, &|name: &str| assigned.user_of(name));
+        if let Some(change) = change {
+            self.proxies_changed(change);
+        }
+        if opening && let Some(inputs) = &self.settings_page.inputs {
+            for (field, input) in crate::proxies::Field::ALL.iter().zip(&inputs.proxy) {
+                let value = self.proxies.draft_value(*field).unwrap_or_default();
+                sync_input(input, value, window, cx);
+            }
+            inputs.proxy[0].update(cx, |state, cx| state.focus(window, cx));
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_settings(
         &mut self,
         window: &mut Window,
@@ -222,6 +273,11 @@ impl LoaderApp {
         }
         if let Some(text) = self.whitelist_page.draft_input().map(str::to_owned) {
             sync_input(&inputs.whitelist, &text, window, cx);
+        }
+        for (field, input) in crate::proxies::Field::ALL.iter().zip(&inputs.proxy) {
+            if let Some(value) = self.proxies.draft_value(*field) {
+                sync_input(input, value, window, cx);
+            }
         }
         let label = |id: &'static str, text: &'static str, tooltip: Option<&'static str>| {
             grid_cell().child(
@@ -325,6 +381,16 @@ impl LoaderApp {
                     .ok();
             }),
         );
+        let on_proxies = cx.entity().downgrade();
+        let (proxies, proxy_dialog) = self.proxies.render(
+            &inputs.proxy,
+            window,
+            std::rc::Rc::new(move |click, window, cx| {
+                on_proxies
+                    .update(cx, |app, cx| app.proxies_click(click, window, cx))
+                    .ok();
+            }),
+        );
         let transports = self.render_transport_settings(cx);
         div()
             .id("settings-page")
@@ -337,9 +403,11 @@ impl LoaderApp {
                     .pr(px(12.0))
                     .child(grid)
                     .child(whitelist)
+                    .child(proxies)
                     .child(transports),
             )
             .children(dialog)
+            .children(proxy_dialog)
             .into_any_element()
     }
 
@@ -451,6 +519,18 @@ fn grid_cell() -> Div {
 pub(super) fn snapshots() -> Vec<super::snapshots::State> {
     vec![
         ("settings", |app| app.page = Page::Settings),
+        ("settings-proxies", |app| {
+            app.page = Page::Settings;
+            app.proxies = crate::proxies::Proxies::with(snapshot_proxies());
+        }),
+        ("settings-proxy-dialog", |app| {
+            app.page = Page::Settings;
+            app.proxies = crate::proxies::Proxies::with(snapshot_proxies());
+            app.proxies.click(
+                crate::proxies::Click::Edit("Residential US".into()),
+                &|_| None,
+            );
+        }),
         ("settings-whitelist", |app| {
             app.page = Page::Settings;
             let mut list = crate::script::write(&app.http_whitelist);
@@ -471,5 +551,25 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             app.whitelist_page
                 .click(crate::whitelist::Click::Save, &mut list);
         }),
+    ]
+}
+
+#[cfg(test)]
+pub(super) fn snapshot_proxies() -> Vec<crate::proxies::Saved> {
+    vec![
+        crate::proxies::Saved {
+            name: "Residential US".into(),
+            host: "us.proxy.example.com".into(),
+            port: 1080,
+            username: "alt-one".into(),
+            password: "secret".into(),
+        },
+        crate::proxies::Saved {
+            name: "Home server".into(),
+            host: "203.0.113.7".into(),
+            port: 9050,
+            username: String::new(),
+            password: String::new(),
+        },
     ]
 }

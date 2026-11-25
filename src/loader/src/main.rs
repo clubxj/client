@@ -28,6 +28,7 @@ mod packet_defs;
 mod packets;
 mod paths;
 mod pipe;
+mod proxies;
 mod queue;
 mod script;
 mod script_log;

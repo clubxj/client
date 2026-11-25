@@ -25,9 +25,15 @@ pub(super) struct Check {
     manifests: HashMap<String, Result<ScriptManifest, String>>,
     quotes: HashMap<String, Result<crate::api::models::Quote, String>>,
     injectors: HashMap<String, Result<crate::injectors::Pinned, String>>,
+    proxy_lost: Vec<String>,
 }
 
-fn check(api: &Api, bundled: &std::path::Path, ids: &[String]) -> Result<Box<Check>, ApiError> {
+fn check(
+    api: &Api,
+    bundled: &std::path::Path,
+    ids: &[String],
+    proxied: Option<&(Target, Settings)>,
+) -> Result<Box<Check>, ApiError> {
     let me = api.me()?;
     let mut scripts = api.scripts("", "", false)?;
     if me.can_browse_community() && ids.iter().any(|id| scripts.iter().all(|s| &s.id != id)) {
@@ -42,12 +48,17 @@ fn check(api: &Api, bundled: &std::path::Path, ids: &[String]) -> Result<Box<Che
         manifests.insert(id.clone(), api.manifest(id).map_err(|e| e.to_string()));
         quotes.insert(id.clone(), api.quote(id).map_err(|e| e.to_string()));
     }
-    let injectors = quotes
+    let injectors: HashMap<_, _> = quotes
         .iter()
         .filter_map(|(id, quote)| {
             let version = quote.as_ref().ok()?.injector.as_deref()?;
             Some((id.clone(), crate::injectors::pinned(api, bundled, version)))
         })
+        .collect();
+    let proxy_lost = injectors
+        .iter()
+        .filter(|(_, pinned)| quoted_proxy_lost(proxied, pinned.as_ref().ok()))
+        .map(|(id, _)| id.clone())
         .collect();
     Ok(Box::new(Check {
         me,
@@ -55,6 +66,7 @@ fn check(api: &Api, bundled: &std::path::Path, ids: &[String]) -> Result<Box<Che
         manifests,
         quotes,
         injectors,
+        proxy_lost,
     }))
 }
 
@@ -127,6 +139,7 @@ pub(super) struct Prompt {
     queue: queue::Queue,
     rows: Vec<(String, i64, Option<i64>)>,
     approved: HashMap<String, i64>,
+    proxy_lost: Vec<String>,
 }
 
 #[derive(Default)]
@@ -248,10 +261,11 @@ impl LoaderApp {
             .map(|e| e.script_id.clone())
             .collect();
         let helper = self.settings.helper.clone();
+        let proxied = self.proxied_target(self.target_of(pid));
         self.api_job(move |api| Event::QueueChecked {
             pid,
             entry: false,
-            result: check(&api, std::path::Path::new(&helper), &ids),
+            result: check(&api, std::path::Path::new(&helper), &ids, proxied.as_ref()),
         });
     }
 
@@ -311,8 +325,15 @@ impl LoaderApp {
         if !problems.is_empty() {
             return self.script_error(format!("Couldn't start the queue: {}", problems.join(" ")));
         }
+        let mut proxy_lost: Vec<String> = Vec::new();
+        for entry in &queue.entries {
+            if check.proxy_lost.contains(&entry.script_id) && !proxy_lost.contains(&entry.title) {
+                proxy_lost.push(entry.title.clone());
+            }
+        }
         self.queue_page.prompt = Some(Prompt {
             pid,
+            proxy_lost,
             queue,
             rows,
             approved,
@@ -332,7 +353,7 @@ impl LoaderApp {
         self.api_job(move |api| Event::QueueChecked {
             pid,
             entry: true,
-            result: check(&api, std::path::Path::new(&helper), &ids),
+            result: check(&api, std::path::Path::new(&helper), &ids, None),
         });
     }
 
@@ -415,6 +436,7 @@ impl LoaderApp {
             run: None,
             launch: Launch { values, resume },
             injector,
+            proxy_lost: false,
         });
     }
 
@@ -1577,6 +1599,13 @@ impl LoaderApp {
                 if prompt.queue.repeat { ", repeating" } else { "" }
             ))
             .child(grid)
+            .when(!prompt.proxy_lost.is_empty(), |this| {
+                this.child(widgets::error(format!(
+                    "{} run on an older client release that can't use proxies, so client {}'s connections skip its proxy and go out on your own IP while they run.",
+                    prompt.proxy_lost.join(", "),
+                    prompt.pid
+                )))
+            })
             .when(unlimited, |this| {
                 this.child(widgets::weak(
                     "Entries without a maximum time are billed for as long as they run.",
@@ -1727,6 +1756,7 @@ pub(super) fn snapshots() -> Vec<super::snapshots::State> {
             app.queues.current = queue.clone();
             app.queue_page.prompt = Some(Prompt {
                 pid: 4242,
+                proxy_lost: Vec::new(),
                 rows: vec![
                     (
                         "Bosses".into(),
@@ -1771,6 +1801,7 @@ mod tests {
                 Ok(crate::api::models::Quote { price, rank: 0, fee: 0, required: 0, injector: Some(crate::update::VERSION.into()) }),
             )]),
             injectors: HashMap::new(),
+            proxy_lost: Vec::new(),
         }
     }
 
