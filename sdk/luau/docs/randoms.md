@@ -8,7 +8,7 @@ local Randoms = require("@volcren/randoms")
 
 Handled events:
 
-- **Genie**: `Talk-to`, continue any dialogue, wait for the lamp, then `use_lamps`.
+- **Genie** and **Count Check** (on land or underwater): `Talk-to`, continue any dialogue, wait for the lamp, then `use_lamps`.
 - **Certers** (Niles, Miles, Giles): open the quiz and answer it with `Certer.solve`; if no answer fits, it is closed unanswered and logged.
 - **Dunce**: accept the exam (`SurpriseExam.accept`); `handle` finishes an exam already under way first (`SurpriseExam.complete`), then `use_lamps` on the Book of Knowledge.
 - **Flippa** (pinball): accept the game (`Pinball.accept`), tag the lit post until the score is 10, then leave by the cave exit; `handle` finishes a game already under way first (`Pinball.complete`).
@@ -26,6 +26,8 @@ Randoms.GENIE_OPTION = "Talk-to"
 Randoms.NILES = 5436
 Randoms.MILES = 5437
 Randoms.GILES = 5438
+Randoms.COUNT_CHECK = 12551
+Randoms.COUNT_CHECK_UNDERWATER = 12552
 Randoms.GENIE_TIMEOUT_MS = 8000
 Randoms.GENIE_SETTLE_MS = 600
 Randoms.POLL_MS = 100
@@ -33,7 +35,7 @@ Randoms.LAMP_WAIT_MS = 3000
 Randoms.LAMP_ATTEMPTS = 3
 ```
 
-NPC and item ids; the genie's lamp timeout and settle time after it arrives; the poll interval; the wait for a lamp to appear or leave the inventory; and consecutive failed tries before a lamp is kept.
+NPC and item ids; the lamp timeout and settle time after it arrives, for the genie and Count Check alike; the poll interval; the wait for a lamp to appear or leave the inventory; and consecutive failed tries before a lamp is kept.
 
 Example:
 
@@ -68,7 +70,7 @@ Definition:
 Randoms.LAMP_EVENTS: { [number]: boolean }
 ```
 
-NPC ids whose reward is a lamp (genie, Dunce). `handle` runs `use_lamps` after one is dealt with.
+NPC ids whose reward is a lamp (genie, Count Check, Dunce). `handle` runs `use_lamps` after one is dealt with.
 
 Example:
 

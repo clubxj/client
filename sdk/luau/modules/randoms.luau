@@ -23,6 +23,8 @@ Randoms.GENIE_OPTION = "Talk-to"
 Randoms.NILES = 5436
 Randoms.MILES = 5437
 Randoms.GILES = 5438
+Randoms.COUNT_CHECK = 12551
+Randoms.COUNT_CHECK_UNDERWATER = 12552
 Randoms.GENIE_TIMEOUT_MS = 8000
 Randoms.GENIE_SETTLE_MS = 600
 Randoms.POLL_MS = 100
@@ -112,9 +114,9 @@ function Randoms.use_lamps(): boolean
 	end
 end
 
-local function handle_genie(genie: Npc): boolean
+local function talk_for_lamp(npc: Npc): boolean
 	local before = lamps_held()
-	if not Npcs.interact(genie, Randoms.GENIE_OPTION) then
+	if not Npcs.interact(npc, Randoms.GENIE_OPTION) then
 		return false
 	end
 	local deadline = time() + Randoms.GENIE_TIMEOUT_MS
@@ -131,7 +133,7 @@ local function handle_genie(genie: Npc): boolean
 		sleep(Randoms.POLL_MS)
 	end
 	if got_at == nil then
-		Log.log("Randoms", "the genie gave no lamp")
+		Log.log("Randoms", `{npc.name} gave no lamp`)
 		return false
 	end
 	return true
@@ -151,7 +153,9 @@ local function handle_certer(npc: Npc): boolean
 end
 
 Randoms.HANDLERS = {
-	[Randoms.GENIE] = handle_genie,
+	[Randoms.GENIE] = talk_for_lamp,
+	[Randoms.COUNT_CHECK] = talk_for_lamp,
+	[Randoms.COUNT_CHECK_UNDERWATER] = talk_for_lamp,
 	[SurpriseExam.DUNCE] = SurpriseExam.accept,
 	[Pinball.FLIPPA] = Pinball.accept,
 	[Randoms.NILES] = handle_certer,
@@ -161,6 +165,8 @@ Randoms.HANDLERS = {
 
 Randoms.LAMP_EVENTS = {
 	[Randoms.GENIE] = true,
+	[Randoms.COUNT_CHECK] = true,
+	[Randoms.COUNT_CHECK_UNDERWATER] = true,
 	[SurpriseExam.DUNCE] = true,
 } :: { [number]: boolean }
 
