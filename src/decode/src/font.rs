@@ -1,12 +1,15 @@
+use serde::{Deserialize, Serialize};
+
 pub const FONTS_INDEX: u32 = 13;
 pub const SPRITES_INDEX: u32 = 8;
 pub const P12_FULL: i32 = 495;
+pub const B12_FULL: i32 = 496;
 
 const METRICS_LEN: usize = 257;
 const FLAG_VERTICAL: u8 = 1;
 const FLAG_ALPHA: u8 = 2;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Glyph {
     pub offset_x: i32,
     pub offset_y: i32,
@@ -22,7 +25,44 @@ pub struct Font {
     pub glyphs: Vec<Glyph>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct Wire {
+    advances: Vec<u8>,
+    max_height: i32,
+    glyphs: Vec<Glyph>,
+}
+
 impl Font {
+    pub fn encode_all(fonts: &[&Font]) -> Vec<u8> {
+        let wires: Vec<Wire> = fonts
+            .iter()
+            .map(|font| Wire {
+                advances: font.advances.to_vec(),
+                max_height: font.max_height,
+                glyphs: font.glyphs.clone(),
+            })
+            .collect();
+        postcard::to_allocvec(&wires).unwrap_or_default()
+    }
+
+    pub fn decode_all(bytes: &[u8]) -> Option<Vec<Self>> {
+        let wires: Vec<Wire> = postcard::from_bytes(bytes).ok()?;
+        let whole = |g: &Glyph| {
+            g.width >= 0 && g.height >= 0 && g.alpha.len() == (g.width * g.height) as usize
+        };
+        wires
+            .into_iter()
+            .map(|wire| {
+                (wire.glyphs.len() == 256 && wire.glyphs.iter().all(whole)).then_some(())?;
+                Some(Self {
+                    advances: wire.advances.try_into().ok()?,
+                    max_height: wire.max_height,
+                    glyphs: wire.glyphs,
+                })
+            })
+            .collect()
+    }
+
     pub fn decode(metrics: &[u8], sprites: &[u8]) -> Result<Self, String> {
         if metrics.len() != METRICS_LEN {
             return Err(format!(
@@ -195,6 +235,34 @@ mod tests {
         let mut m = vec![advance; 256];
         m.push(9);
         m
+    }
+
+    #[test]
+    fn a_font_survives_its_wire_form() {
+        let glyph = |c: i32| Glyph {
+            offset_x: c % 3,
+            offset_y: 1,
+            width: 2,
+            height: 1,
+            alpha: vec![c as u8, 255],
+        };
+        let mut advances = [0u8; 256];
+        advances[65] = 7;
+        let font = Font {
+            advances,
+            max_height: 12,
+            glyphs: (0..256).map(glyph).collect(),
+        };
+        let mut bold = font.clone();
+        bold.max_height = 13;
+        assert_eq!(
+            Font::decode_all(&Font::encode_all(&[&font, &bold])),
+            Some(vec![font.clone(), bold])
+        );
+        let mut broken = font;
+        broken.glyphs[3].alpha.pop();
+        assert_eq!(Font::decode_all(&Font::encode_all(&[&broken])), None);
+        assert_eq!(Font::decode_all(&[1, 2, 3]), None);
     }
 
     #[test]

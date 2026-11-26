@@ -17,7 +17,7 @@ Inventory.LOCKED_SLOTS_VARBIT = 5422
 Inventory.IGNORE_LOCKS_VARBIT = 5450
 Inventory.shift_enabled = true
 ```
-Container, size and interface. `LOCKED_SLOTS_VARBIT` holds one bit per slot locked in the bank or deposit box (slot 0 is bit 0); `IGNORE_LOCKS_VARBIT` is the bank setting that makes "Deposit inventory" ignore them. `shift_enabled` is cleared by `shift_drop_slots` once it finds Shift doesn't make "Drop" the left-click option.
+Container, size and interface. `LOCKED_SLOTS_VARBIT` holds one bit per slot locked in the bank or deposit box (slot 0 is bit 0); `IGNORE_LOCKS_VARBIT` is the bank setting that makes "Deposit inventory" ignore them. `shift_enabled` is cleared by `shift_drop_slots` once it finds Shift doesn't make the drop option the left-click option.
 
 ## Inventory.PATTERN_HABIT
 
@@ -240,12 +240,14 @@ export type DropOptions = {
 	shift_ms: { number }?,
 	gap_ms: { number }?,
 	confirm: boolean?,
+	option: string?,
 }
 Inventory.DROP_ATTEMPTS = 5
+Inventory.DROP_OPTION = "Drop"
 Inventory.DROP_SHIFT_MS = { 95, 170 }
 Inventory.DROP_GAP_MS = { 0, 250 }
 ```
-Options for `drop_slots` and `shift_drop_slots`; each falls back to the constant below it. `attempts` is the number of passes, `shift_ms` the `{ lo, hi }` pause after pressing Shift and `gap_ms` the pause after each drop click. Shorter pauses drop faster but look less like a person. `confirm = false` makes one pass and returns true once the clicks are made, without waiting for the server to empty the slots, so for about a tick the inventory still shows the dropped items; a caller that reads the inventory right after must allow for that.
+Options for `drop_slots` and `shift_drop_slots`; each falls back to the constant below it. `attempts` is the number of passes, `shift_ms` the `{ lo, hi }` pause after pressing Shift and `gap_ms` the pause after each drop click. Shorter pauses drop faster but look less like a person. `confirm = false` makes one pass and returns true once the clicks are made, without waiting for the server to empty the slots, so for about a tick the inventory still shows the dropped items; a caller that reads the inventory right after must allow for that. `option` is the item's drop option when the game names it otherwise, such as "Release" for caught creatures; Shift-click uses it the same way.
 
 ## Inventory.drop_slots
 
@@ -253,7 +255,7 @@ Definition:
 ```luau
 function Inventory.drop_slots(slots: { number }, opts: DropOptions?): boolean
 ```
-Drops `slots` in order with "Drop", cancelling a selection first, then waits and retries slots still holding their item, up to `opts.attempts` passes. True when all are gone.
+Drops `slots` in order with the drop option (`opts.option`, default "Drop"), cancelling a selection first, then waits and retries slots still holding their item, up to `opts.attempts` passes. True when all are gone.
 
 Example:
 ```luau
@@ -283,7 +285,7 @@ Definition:
 ```luau
 function Inventory.shift_drop_slots(slots: { number }, opts: DropOptions?): boolean
 ```
-Drops `slots` in order by Shift-clicking, checking before each click that "Drop" is the left-click option. If it isn't (the game's shift-drop setting is off), clears `shift_enabled` and finishes with `drop_slots` and the same `opts`, as do later calls. Shift is always released.
+Drops `slots` in order by Shift-clicking, checking before each click that the drop option (`opts.option`, default "Drop") is the left-click option. If it isn't (the game's shift-drop setting is off), clears `shift_enabled` and finishes with `drop_slots` and the same `opts`, as do later calls. Shift is always released.
 
 Example:
 ```luau

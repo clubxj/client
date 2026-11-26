@@ -512,9 +512,11 @@ export type DropOptions = {
 	shift_ms: { number }?,
 	gap_ms: { number }?,
 	confirm: boolean?,
+	option: string?,
 }
 
 Inventory.DROP_ATTEMPTS = 5
+Inventory.DROP_OPTION = "Drop"
 Inventory.DROP_SHIFT_MS = { 95, 170 }
 Inventory.DROP_GAP_MS = { 0, 250 }
 
@@ -538,7 +540,7 @@ function Inventory.drop_slots(slots: { number }, opts: DropOptions?): boolean
 			break
 		end
 		for _, slot in ipairs(left) do
-			Inventory.interact_slot(slot, "Drop")
+			Inventory.interact_slot(slot, o.option or Inventory.DROP_OPTION)
 			pause(o.gap_ms, Inventory.DROP_GAP_MS)
 		end
 		left = if o.confirm == false then {} else wait_dropped(targets, slots)
@@ -561,12 +563,12 @@ function Inventory.drop(items: Item | { Item }, pattern: { number }?): boolean
 	return Inventory.drop_slots(if pattern then in_order(slots, pattern) else (Inventory.pattern(slots)))
 end
 
-local function shift_drops(slot: number): boolean
+local function shift_drops(slot: number, option: string): boolean
 	local matches = owns(slot)
 	return Widgets.wait_until(function()
 		local entries = Minimenu.entries()
 		local top = entries and entries[1]
-		return top ~= nil and matches(top) and top.option == "Drop"
+		return top ~= nil and matches(top) and top.option == option
 	end, SHIFT_DROP_HOVER_MS)
 end
 
@@ -599,7 +601,7 @@ function Inventory.shift_drop_slots(slots: { number }, opts: DropOptions?): bool
 				local w = boxes[slot]
 				if w then
 					Mouse.move(w)
-					if not shift_drops(slot) then
+					if not shift_drops(slot, o.option or Inventory.DROP_OPTION) then
 						fallback = true
 						return
 					end

@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use decode::camera::{Camera, NEAR_PLANE, Window, truncate};
+use crate::camera::{Camera, NEAR_PLANE, Window, truncate};
 use ipc::{
     read::{self, Memory},
     state::{Layout, part},
@@ -18,7 +18,7 @@ const NEEDS: u64 = part::PROJECTION | part::CAMERA | part::INTERFACES;
 
 const TILE_SHIFT: i32 = 7;
 const TILE: i32 = 1 << TILE_SHIFT;
-const PLANES: i32 = crate::collision::PLANES as i32;
+const PLANES: i32 = 4;
 const BRIDGE: u8 = 2;
 const TILE_ENTRY_SIZE: usize = 16;
 const DECORATION_RETRY: Duration = Duration::from_millis(600);
@@ -367,6 +367,19 @@ fn barycentric(px: i32, py: i32, [a, b, c]: &Triangle) -> i32 {
 
 pub type Decoration = ((i32, i32, i32), i32);
 
+pub fn decorations(locs: &crate::locs::Locs) -> Vec<Decoration> {
+    locs.locs
+        .iter()
+        .filter(|l| l.kind == GROUND_DECORATION && l.decoration_height != 0)
+        .map(|l| {
+            (
+                (locs.plane, l.x as i32, l.y as i32),
+                l.decoration_height as i32,
+            )
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Point {
     pub x: i32,
@@ -536,20 +549,54 @@ pub fn project(
     }
     Ok(points
         .iter()
+        .map(|p| on_screen(memory, layout, terrain, key.plane, &camera, p, clip))
+        .collect())
+}
+
+pub fn project_world(
+    memory: &impl Memory,
+    layout: &Layout,
+    terrain: &mut Option<Terrain>,
+    points: &[crate::shapes::Point],
+    decorations: impl FnOnce() -> Option<Vec<Decoration>>,
+) -> Result<Vec<[f32; 2]>, String> {
+    let client = client(memory, layout)?;
+    let (key, trig, terrain) = scene_terrain(memory, layout, client, terrain, decorations)?;
+    let camera = Camera::read(memory, layout, client, trig).ok_or_else(|| unavailable("camera"))?;
+    Ok(points
+        .iter()
         .map(|p| {
-            let ground = if p.heightmap {
-                terrain.flat_ground(p.x, p.y, key.plane)
-            } else {
-                terrain.ground_on(memory, layout, p.x, p.y, key.plane, p.tile)
-            };
-            let (screen, distance) = camera.project(p.x, p.y, ground.wrapping_add(p.z));
-            if !clip || distance >= NEAR_PLANE {
-                screen
-            } else {
-                [f32::NAN; 2]
-            }
+            let local = p.local(key.base);
+            on_screen(memory, layout, terrain, key.plane, &camera, &local, true)
         })
         .collect())
+}
+
+pub fn scene_base(memory: &impl Memory, layout: &Layout) -> Option<[i32; 2]> {
+    let client = client(memory, layout).ok()?;
+    scene_and_trig(memory, layout, client).map(|(key, _)| key.base)
+}
+
+fn on_screen(
+    memory: &impl Memory,
+    layout: &Layout,
+    terrain: &mut Terrain,
+    plane: i32,
+    camera: &Camera,
+    p: &Point,
+    clip: bool,
+) -> [f32; 2] {
+    let ground = if p.heightmap {
+        terrain.flat_ground(p.x, p.y, plane)
+    } else {
+        terrain.ground_on(memory, layout, p.x, p.y, plane, p.tile)
+    };
+    let (screen, distance) = camera.project(p.x, p.y, ground.wrapping_add(p.z));
+    if !clip || distance >= NEAR_PLANE {
+        screen
+    } else {
+        [f32::NAN; 2]
+    }
 }
 
 #[cfg(test)]
@@ -827,6 +874,28 @@ mod tests {
             asked, 1,
             "terrain and decorations are kept while the scene stays"
         );
+    }
+
+    #[test]
+    fn world_points_project_from_the_scene_base() {
+        let (mut m, mut layout) = world();
+        layout.found |= part::PLAYER;
+        layout.player.base_x = 0x40;
+        m.put_i32(WORLD_VIEW + 0x40, 3200);
+        m.put_i32(WORLD_VIEW + 0x44, 3136);
+        let local = [[0, 0, 0], [100, 0, 0], [128, 256, -88]].map(|[x, y, z]| Point::new(x, y, z));
+        let world = local.map(|p| crate::shapes::Point::from_local(p, [3200, 3136]));
+        let mut terrain = None;
+        let expected = project(&m, &layout, &mut terrain, &local, Viewpoint::default(), true, || {
+            Some(Vec::new())
+        })
+        .unwrap();
+        let screen = project_world(&m, &layout, &mut terrain, &world, || Some(Vec::new())).unwrap();
+        assert_eq!(screen, expected);
+        let elsewhere = [crate::shapes::Point::from_local(local[0], [0, 0])];
+        let far = project_world(&m, &layout, &mut terrain, &elsewhere, || Some(Vec::new())).unwrap();
+        assert_ne!(far, expected[..1]);
+        assert_eq!(scene_base(&m, &layout), Some([3200, 3136]));
     }
 
     #[test]
