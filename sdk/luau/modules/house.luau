@@ -125,6 +125,15 @@ House.MOUNTED_PLACES = {
 	digsite = { "Digsite", "Fossil Island", "Lithkren" },
 } :: { [string]: { string } }
 House.POOL_OPTION = "Drink"
+House.POOL_RUN_BELOW = 80
+House.POOLS = {
+	{ name = "ornate", restores = { "special", "run", "prayer", "stats", "hitpoints", "poison" } },
+	{ name = "trailblazer", restores = { "special", "run", "prayer", "stats", "hitpoints", "poison" } },
+	{ name = "fancy", restores = { "special", "run", "prayer", "stats" } },
+	{ name = "rejuvenation", restores = { "special", "run", "prayer" } },
+	{ name = "revitalisation", restores = { "special", "run" } },
+	{ name = "restoration", restores = { "special" } },
+} :: { { name: string, restores: { string } } }
 House.FURNITURE = {
 	nexus = { "Portal Nexus" },
 	box = { "Jewellery Box" },
@@ -137,6 +146,7 @@ House.FURNITURE = {
 	pool = { "Pool of" },
 	occult_altar = { "Altar of the Occult" },
 } :: { [string]: { string } }
+House.SAVED = { "box", "glory", "cape", "talisman", "digsite", "fairy_ring", "spirit_tree", "pool", "occult_altar" }
 
 export type Furniture = "nexus" | "box" | "glory" | "cape" | "talisman" | "digsite"
 
@@ -278,10 +288,17 @@ function House.survey()
 end
 
 function House.seen(kind: string): boolean?
-	if surveyed == nil then
+	if surveyed ~= nil then
+		return surveyed[kind] ~= nil
+	end
+	if table.find(House.SAVED, kind) == nil then
 		return nil
 	end
-	return surveyed[kind] ~= nil
+	local account = Host.account_settings()
+	if account == nil then
+		return nil
+	end
+	return table.find(account.house, kind) ~= nil
 end
 
 function House.furniture(kind: string): string?
@@ -433,7 +450,10 @@ function House.box_tier(): BoxTier?
 		return nil
 	end
 	local value = Host.varbit(House.BOX_VARBIT) or 0
-	return if value > 0 then House.BOX_TIERS[value + 1] else nil
+	if value > 0 then
+		return House.BOX_TIERS[value + 1]
+	end
+	return if House.seen("box") then "basic" else nil
 end
 
 function House.box_places(tier: BoxTier?): { string }
@@ -551,6 +571,78 @@ function House.restore(): (boolean, string?)
 	return Player.restore_with(function(): boolean
 		return Objects.approach(pool, House.POOL_OPTION)
 	end, House.RESTORE_TIMEOUT_MS)
+end
+
+function House.pool_restores(name: string): { string }
+	local lower = string.lower(name)
+	for _, pool in ipairs(House.POOLS) do
+		if string.find(lower, pool.name, 1, true) ~= nil then
+			return pool.restores
+		end
+	end
+	return {}
+end
+
+local function drained(): boolean
+	for _, skill in ipairs(Host.game_state().skills or {}) do
+		if skill.name ~= "Hitpoints" and skill.name ~= "Prayer" and skill.level < skill.real_level then
+			return true
+		end
+	end
+	return false
+end
+
+local function lacking(effect: string): boolean
+	if effect == "special" then
+		return (Player.special_attack() or 100) < 100
+	elseif effect == "run" then
+		return (Player.run_energy() or 100) < House.POOL_RUN_BELOW
+	elseif effect == "prayer" then
+		local points, max = Player.prayer()
+		return points ~= nil and max ~= nil and points < max
+	elseif effect == "stats" then
+		return drained()
+	elseif effect == "hitpoints" then
+		local hp, max = Player.hitpoints()
+		return hp ~= nil and max ~= nil and hp < max
+	elseif effect == "poison" then
+		local state = Player.poison()
+		return state == "poisoned" or state == "envenomed"
+	end
+	return false
+end
+
+function House.pool_needed(name: string): { string }
+	local needed: { string } = {}
+	for _, effect in ipairs(House.pool_restores(name)) do
+		if lacking(effect) then
+			table.insert(needed, effect)
+		end
+	end
+	return needed
+end
+
+function House.refresh(): (boolean, string?)
+	local pool = House.find(House.FURNITURE.pool)
+	if pool == nil or pool.name == nil then
+		return false, nil
+	end
+	local name = pool.name :: string
+	local needed = House.pool_needed(name)
+	if #needed == 0 then
+		return false, nil
+	end
+	pool = House.reach(House.FURNITURE.pool)
+	if pool == nil or not Objects.approach(pool, House.POOL_OPTION) then
+		return false, "couldn't drink from the pool"
+	end
+	local restored = Widgets.wait_for(function(): boolean
+		return #House.pool_needed(name) == 0
+	end, House.RESTORE_TIMEOUT_MS, House.POLL_MS)
+	if not restored then
+		return false, `the pool didn't restore {table.concat(needed, ", ")}`
+	end
+	return true, nil
 end
 
 function House.leave(): boolean

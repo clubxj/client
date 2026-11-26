@@ -198,9 +198,14 @@ Map.HOVER_TIMEOUT_MS = 800
 Map.POLL_MS = 50
 Map.SETTLE_MS = 150
 Map.GRID = 3
+Map.DECOY_CHANCE = 0.3
+Map.SECOND_DECOY_CHANCE = 0.5
+Map.DECOY_NEARBY = 3
+Map.DECOY_PAUSE_MS = { 150, 450 }
 
 export type Marker = {
 	index: number,
+	name: string?,
 	picture: Widget,
 	spot: Point,
 	here: boolean,
@@ -267,6 +272,7 @@ function Map.markers(): { Marker }?
 			if #pool > 0 then
 				table.insert(found, {
 					index = picture.index,
+					name = square.action,
 					picture = picture,
 					spot = pool[Random.int(1, #pool)],
 					here = picture.sprite == Map.HERE_SPRITE,
@@ -292,39 +298,6 @@ local function menu_name(): string?
 	end
 end
 
-function Map.hover_name(marker: Marker): string?
-	if marker.here then
-		return nil
-	end
-	Mouse.move(marker.spot)
-	sleep(Map.SETTLE_MS)
-	return menu_name()
-end
-
-local known: { [number]: string } = {}
-
-local function learn(marker: Marker): string?
-	for _ = 1, 2 do
-		local name = Map.hover_name(marker)
-		if name == nil then
-			return nil
-		end
-		local taken = false
-		for index, other in pairs(known) do
-			if other == name and index ~= marker.index then
-				taken = true
-				break
-			end
-		end
-		if not taken then
-			known[marker.index] = name
-			return name
-		end
-		sleep(Map.SETTLE_MS)
-	end
-	return nil
-end
-
 function Map.names(): { [number]: string }?
 	local markers = Map.markers()
 	if markers == nil then
@@ -332,65 +305,57 @@ function Map.names(): { [number]: string }?
 	end
 	local names: { [number]: string } = {}
 	for _, marker in ipairs(markers) do
-		if not marker.here then
-			local name = known[marker.index]
-			if name == nil then
-				name = learn(marker)
-				Random.sleep(40, 160)
-			end
-			if name ~= nil then
-				names[marker.index] = name
-			end
+		if not marker.here and marker.name ~= nil then
+			names[marker.index] = marker.name
 		end
 	end
 	return names
 end
 
 function Map.find(name: string): Marker?
-	local markers = Map.markers()
-	if markers == nil then
-		return nil
-	end
 	local wanted = string.lower(name)
 	local loose: Marker? = nil
 	local loose_count = 0
-	local function check(marker: Marker, have: string): Marker?
-		have = string.lower(have)
-		if have == wanted then
-			return marker
-		elseif string.find(have, wanted, 1, true) or string.find(wanted, have, 1, true) then
-			loose = marker
-			loose_count += 1
-		end
-		return nil
-	end
-	local unread: { Marker } = {}
-	for _, marker in ipairs(markers) do
-		if not marker.here then
-			local have = known[marker.index]
-			if have == nil then
-				table.insert(unread, marker)
-			else
-				local exact = check(marker, have)
-				if exact then
-					return exact
-				end
+	for _, marker in ipairs(Map.markers() or {}) do
+		local have = if marker.here then nil else marker.name
+		if have ~= nil then
+			have = string.lower(have)
+			if have == wanted then
+				return marker
+			elseif string.find(have, wanted, 1, true) or string.find(wanted, have, 1, true) then
+				loose = marker
+				loose_count += 1
 			end
-		end
-	end
-	if loose_count == 0 or #unread > 0 then
-		for _, marker in ipairs(unread) do
-			local have = learn(marker)
-			if have ~= nil then
-				local exact = check(marker, have)
-				if exact then
-					return exact
-				end
-			end
-			Random.sleep(40, 160)
 		end
 	end
 	return if loose_count == 1 then loose else nil
+end
+
+local function decoys(target: Marker): { Marker }
+	local nearby: { Marker } = {}
+	for _, marker in ipairs(Map.markers() or {}) do
+		if not marker.here and marker.index ~= target.index then
+			table.insert(nearby, marker)
+		end
+	end
+	local function gap(marker: Marker): number
+		return math.abs(marker.spot.x - target.spot.x) + math.abs(marker.spot.y - target.spot.y)
+	end
+	table.sort(nearby, function(a: Marker, b: Marker)
+		return gap(a) < gap(b)
+	end)
+	local picked: { Marker } = {}
+	if #nearby == 0 or not Biometrics.random_boolean(Map.DECOY_CHANCE) then
+		return picked
+	end
+	local pool = math.min(Map.DECOY_NEARBY, #nearby)
+	local first = Random.int(1, pool)
+	table.insert(picked, nearby[first])
+	if pool > 1 and Random.chance(Map.SECOND_DECOY_CHANCE) then
+		local second = Random.int(1, pool - 1)
+		table.insert(picked, nearby[if second >= first then second + 1 else second])
+	end
+	return picked
 end
 
 function Map.select(name: string): boolean
@@ -398,10 +363,13 @@ function Map.select(name: string): boolean
 	if marker == nil then
 		return false
 	end
-	local expected = known[marker.index]
+	for _, decoy in ipairs(decoys(marker)) do
+		Mouse.move(decoy.spot)
+		Random.sleep(Map.DECOY_PAUSE_MS[1], Map.DECOY_PAUSE_MS[2])
+	end
 	Mouse.move(marker.spot)
 	sleep(Map.SETTLE_MS)
-	if expected == nil or menu_name() ~= expected then
+	if menu_name() ~= marker.name then
 		return false
 	end
 	Mouse.click()
@@ -422,8 +390,6 @@ Chartering.CONFIRM_TIMEOUT_MS = 4000
 Chartering.POLL_MS = 100
 
 Chartering.TRADER_RANGE = 12
-Chartering.TRADER_ASK_LIMIT = 8
-Chartering.TRADER_HOVER_MS = 350
 Chartering.SETTLE_MS = { 250, 500 }
 
 export type Port =
@@ -586,18 +552,9 @@ function Chartering.find_trader(option: string, near: Tile, range: number?): Hos
 		return a.distance < b.distance
 	end)
 	local Npcs = (require :: any)("@volcren/npcs")
-	local Minimenu = (require :: any)("@volcren/minimenu")
-	for i, c in ipairs(candidates) do
-		if i > Chartering.TRADER_ASK_LIMIT then
-			break
-		end
-		if Npcs.hover(c.npc) then
-			sleep(Chartering.TRADER_HOVER_MS)
-			for _, entry in ipairs((Minimenu.entries() :: { Host.MenuEntry }?) or {}) do
-				if entry.option == option then
-					return c.npc
-				end
-			end
+	for _, c in ipairs(candidates) do
+		if table.find(Npcs.options(c.npc.id) or {}, option) ~= nil then
+			return c.npc
 		end
 	end
 	return nil

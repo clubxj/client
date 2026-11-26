@@ -1,7 +1,6 @@
 use super::*;
 
 use gpui_kit::component::Sizable;
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::{Entity, Focusable};
@@ -271,7 +270,7 @@ impl LoaderApp {
                 let (body, dialogs) = match section {
                     SettingsSection::Network => self.render_network_settings(&inputs, window, cx),
                     SettingsSection::Transportation => {
-                        (self.render_transport_settings(cx), Vec::new())
+                        (self.render_transport_settings(), Vec::new())
                     }
                 };
                 let page = div()
@@ -460,33 +459,7 @@ impl LoaderApp {
         )
     }
 
-    fn render_transport_settings(&mut self, cx: &mut Context<Self>) -> Div {
-        let toggles = injector::transports::TYPES.iter().map(|&(name, label)| {
-            let on = !self.settings.transports.off.iter().any(|off| off == name);
-            Checkbox::new(name)
-                .label(label)
-                .checked(on)
-                .on_click(cx.listener(move |app, on: &bool, _, cx| {
-                    app.set_transport(name, *on);
-                    cx.notify();
-                }))
-        });
-        let toggles: Vec<_> = toggles.collect();
-        let mut grid = div().flex().flex_col().gap(theme::LINE_GAP);
-        let mut toggles = toggles.into_iter();
-        while let Some(first) = toggles.next() {
-            grid = grid.child(
-                div()
-                    .flex()
-                    .gap(theme::ITEM_GAP)
-                    .child(div().w(TRANSPORT_COLUMN).child(first))
-                    .children(
-                        toggles
-                            .next()
-                            .map(|second| div().w(TRANSPORT_COLUMN).child(second)),
-                    ),
-            );
-        }
+    fn render_transport_settings(&mut self) -> Div {
         let data = crate::transports::status();
         if data.busy {
             self.wake.wake_after(Duration::from_millis(250));
@@ -499,9 +472,8 @@ impl LoaderApp {
             .gap(theme::LINE_GAP)
             .child(widgets::heading("Transportation"))
             .child(widgets::weak(
-                "What scripts may use to get around. A script that needs one that is off stops with an error saying so.",
+                "The data scripts use to get around. Which types each account may use is on its page under accounts/.",
             ))
-            .child(grid)
             .child(div().pt(px(6.0)).child(format!("Data: {}", data.version)))
             .child(
                 div()
@@ -540,24 +512,8 @@ impl LoaderApp {
                 this.child(widgets::weak(data.message.clone()))
             })
     }
-
-    fn set_transport(&mut self, name: &str, on: bool) {
-        let off = &mut self.settings.transports.off;
-        if on {
-            off.retain(|o| o != name);
-        } else if !off.iter().any(|o| o == name) {
-            off.push(name.to_owned());
-        }
-        let settings = self.settings.transports.clone();
-        for run in self.runs.iter_mut().filter(|r| r.is_running()) {
-            if let Err(error) = run.send(|s| s.push_transport_settings(&settings)) {
-                run.error(error);
-            }
-        }
-    }
 }
 
-const TRANSPORT_COLUMN: Pixels = px(220.0);
 const SECTION_GAP: Pixels = px(44.0);
 const FIELD_GAP: Pixels = px(16.0);
 const SECTION_BUTTON_WIDTH: Pixels = px(200.0);

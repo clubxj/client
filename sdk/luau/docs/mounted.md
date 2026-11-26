@@ -1,6 +1,6 @@
 # Mounted
 
-Teleports from house-mounted pieces, named by `Kind`: `"glory"`, `"cape"` (mythical cape), `"talisman"` (Xeric's) and `"digsite"` (pendant). Trips are free. The glory offers places as options and the cape's "Teleport" has one place; the talisman and pendant list theirs under "Teleport menu" (group 947, the generic `menu_new` list). Configurable first options and "Remove" are never used. `Transports.house` builds on this, and `Transports.use_item` reads the same list when a teleport item opens it (Xeric's talisman's "Rub", the Construction cape's "Teleport").
+Teleports from house-mounted pieces, named by `Kind`: `"glory"`, `"cape"` (mythical cape), `"talisman"` (Xeric's) and `"digsite"` (pendant). Trips are free. The glory offers places as options and the cape's "Teleport" has one place; the talisman and pendant list theirs under "Teleport menu". The mounted pieces open group 187 (the generic numbered `menu`), while 947 (`menu_new`) is kept for items that may still open it; `Mounted.LISTS` holds both, each with its row layer and close button. Configurable first options and "Remove" are never used. `Transports.house` builds on this, and `Transports.use_item` reads the same list when a teleport item opens it (Xeric's talisman's "Rub", the Construction cape's "Teleport").
 
 ```luau
 local Mounted = require("@volcren/mounted")
@@ -12,7 +12,7 @@ Definition:
 ```luau
 function Mounted.is_open(): boolean
 ```
-Whether group 947 is open. Other lists share it, so this is only meaningful after opening one of these.
+Whether either list in `LISTS` is open. Other menus share them, so this is only meaningful after opening one of these.
 
 Example:
 ```luau

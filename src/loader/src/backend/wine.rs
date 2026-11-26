@@ -335,6 +335,10 @@ pub fn varps(target: &Target, settings: &Settings) -> Result<Option<Vec<i32>>, S
     call(target, settings, "varps", &[])
 }
 
+pub fn house(target: &Target, settings: &Settings) -> Result<injector::house::Survey, String> {
+    call(target, settings, "house", &[])
+}
+
 pub fn varbit(target: &Target, settings: &Settings, id: i32) -> Result<Option<i32>, String> {
     call(target, settings, "varbit", &[&id.to_string()])
 }

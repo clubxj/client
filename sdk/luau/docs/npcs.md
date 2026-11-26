@@ -78,12 +78,10 @@ print(Npcs.distance({ x = 3200, y = 3200 }, { x = 3203, y = 3201 })) -- 3
 Definition:
 
 ```luau
-Npcs.CONFIG_INDEX = 2
-Npcs.CONFIG_ARCHIVE = 9
 function Npcs.options(id: number): { string }?
 ```
 
-The menu options an NPC type offers ("Talk-to", "Bank", "Collect"), read from its cache definition (`Host.cache_file(2, 9, id)`, opcodes 30 to 34) and kept per id. The definition's fields come in no fixed order, so the reader skips the other known fields; on a field it doesn't know it stops and returns the options found so far. Nil when the cache can't be read. Options a varbit changes at run time, and those of a transformed NPC, aren't seen.
+The menu options an NPC type offers ("Talk-to", "Bank", "Collect"), read from the cache by `Host.npc_actions`. A type whose variable decides what it shows (charter crew, many bankers) gives the options of what it shows now. Empty when it shows nothing; nil when the cache can't be read.
 
 Example:
 

@@ -13,10 +13,12 @@ local Widgets = require("@volcren/widgets")
 
 local Mounted = {}
 
-Mounted.GROUP = 947
-Mounted.LIST = 9
-Mounted.CLOSE = 3
-Mounted.CLOSE_INDEX = 4
+export type List = { group: number, list: number, close: number, close_index: number? }
+
+Mounted.LISTS = {
+	{ group = 187, list = 3, close = 4 },
+	{ group = 947, list = 9, close = 3, close_index = 4 },
+} :: { List }
 Mounted.LOCKED_COLOUR = "5f5f5f"
 Mounted.MENU_OPTION = "Teleport menu"
 Mounted.CAPE_OPTION = "Teleport"
@@ -33,16 +35,26 @@ export type Destination = {
 	row: Widget,
 }
 
+local function open_list(): List?
+	for _, list in ipairs(Mounted.LISTS) do
+		if Toplevel.is_open(list.group) then
+			return list
+		end
+	end
+	return nil
+end
+
 function Mounted.is_open(): boolean
-	return Toplevel.is_open(Mounted.GROUP)
+	return open_list() ~= nil
 end
 
 function Mounted.destinations(): { Destination }?
-	if not Mounted.is_open() then
+	local list = open_list()
+	if list == nil then
 		return nil
 	end
 	local found: { Destination } = {}
-	for _, row in ipairs(widget_children(Mounted.GROUP, Mounted.LIST) or {}) do
+	for _, row in ipairs(widget_children(list.group, list.list) or {}) do
 		if row.kind == 4 and not row.hidden and row.text ~= nil then
 			local name = string.match(Chat.clean(row.text), "^%w+:%s*(.+)$")
 			if name ~= nil then
@@ -80,9 +92,17 @@ function Mounted.select(name: string): boolean
 end
 
 function Mounted.close(): boolean
-	return Toplevel.close(Mounted.GROUP, function(): Widget?
-		for _, child in ipairs(widget_children(Mounted.GROUP, Mounted.CLOSE) or {}) do
-			if child.index == Mounted.CLOSE_INDEX and not child.hidden then
+	local list = open_list()
+	if list == nil then
+		return true
+	end
+	return Toplevel.close(list.group, function(): Widget?
+		if list.close_index == nil then
+			local button = Host.widget(list.group, list.close)
+			return if button ~= nil and not button.hidden then button else nil
+		end
+		for _, child in ipairs(widget_children(list.group, list.close) or {}) do
+			if child.index == list.close_index and not child.hidden then
 				return child
 			end
 		end

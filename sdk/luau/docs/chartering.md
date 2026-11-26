@@ -15,13 +15,11 @@ Chartering.MAP_CHANCE = 0.4
 Chartering.CONFIRM_TIMEOUT_MS = 4000
 Chartering.POLL_MS = 100
 Chartering.TRADER_RANGE = 12
-Chartering.TRADER_ASK_LIMIT = 8
-Chartering.TRADER_HOVER_MS = 350
 Chartering.SETTLE_MS = { 250, 500 }
 ```
 - `KEY_CHANCE`, `MAP_CHANCE`: biometric centres for choosing the key, or the map over the list.
 - `CONFIRM_TIMEOUT_MS`, `POLL_MS`: how long a choice may leave the interface open before the next way is tried, and the poll rate.
-- `TRADER_RANGE`, `TRADER_ASK_LIMIT`, `TRADER_HOVER_MS`: trader search radius in tiles, max NPCs hovered, wait for each menu.
+- `TRADER_RANGE`: trader search radius in tiles.
 - `SETTLE_MS`: min/max pause after `open`; the game ignores keys pressed right after the list appears.
 
 ## Chartering.is_open
@@ -46,7 +44,7 @@ Definition:
 ```luau
 function Chartering.find_trader(option: string, near: Tile, range: number?): Npc?
 ```
-The NPC within `range` tiles (default `TRADER_RANGE`) of `near` whose menu offers `option`. Hovers the nearest NPCs, up to `TRADER_ASK_LIMIT`, and reads each menu, since traders differ by port. Nil when none matched.
+The NPC within `range` tiles (default `TRADER_RANGE`) of `near` whose menu offers `option`. Nearest first, by each NPC's options from the cache (`Npcs.options`), since traders differ by port. Nil when none matched.
 
 ## Chartering.open
 
@@ -207,9 +205,9 @@ assert(Chartering.Tab.press("Catherby"), "Catherby isn't offered here")
 
 ## Chartering.Map (the map)
 
-The sea chart (group 72, cache name `sailing_menu`) shown while a charter menu is open, with a marker per port. Markers carry no text: names are read by hovering each (about a second per marker on first read) and cached for the rest of the script. Map order differs from the list's.
+The sea chart (group 72, cache name `sailing_menu`) shown while a charter menu is open, with a marker per port. Each marker's click square holds its port as its menu option (`action`), so names are read without hovering. Map order differs from the list's.
 
-Click squares overlap and are bigger than their pictures, so each marker's `spot` is a random point that really belongs to it. A `Marker` has `index` (child index), `picture`, `spot` and `here` (your current port; can't be sailed to).
+Click squares overlap and are bigger than their pictures, so each marker's `spot` is a random point that really belongs to it. A `Marker` has `index` (child index), `name` (nil only if the square has no option), `picture`, `spot` and `here` (your current port; can't be sailed to).
 
 ### Constants
 
@@ -225,8 +223,12 @@ Map.HOVER_TIMEOUT_MS = 800
 Map.POLL_MS = 50
 Map.SETTLE_MS = 150
 Map.GRID = 3
+Map.DECOY_CHANCE = 0.3
+Map.SECOND_DECOY_CHANCE = 0.5
+Map.DECOY_NEARBY = 3
+Map.DECOY_PAUSE_MS = { 150, 450 }
 ```
-Widget ids, marker and current-port sprites, `wait_open` timeout, hover wait for the menu, menu poll rate, settle after moving, and the pixel step when searching for a `spot`.
+Widget ids, marker and current-port sprites, `wait_open` timeout, wait for the menu when `select` checks it, menu poll rate, settle after moving, and the pixel step when searching for a `spot`. `DECOY_*`: before the real port, `select` may hover one of the `DECOY_NEARBY` ports nearest it (biometric chance centred on `DECOY_CHANCE`), then after that a second one (`SECOND_DECOY_CHANCE`), pausing `DECOY_PAUSE_MS` on each.
 
 ## Map.is_open
 
@@ -259,21 +261,13 @@ for _, m in ipairs(Chartering.Map.markers() or {}) do
 end
 ```
 
-## Map.hover_name
-
-Definition:
-```luau
-function Map.hover_name(marker: Marker): string?
-```
-Hovers the marker and returns the port its menu offers. Nil for `here` or when no name showed within `HOVER_TIMEOUT_MS`.
-
 ## Map.names
 
 Definition:
 ```luau
 function Map.names(): { [number]: string }?
 ```
-Names of every sailable port by marker `index`, hovering unread markers. A name already held by another marker is re-read once and dropped if it repeats. Nil when the map isn't open.
+Names of every sailable port by marker `index`. Nil when the map isn't open.
 
 Example:
 ```luau
@@ -288,7 +282,7 @@ Definition:
 ```luau
 function Map.find(name: string): Marker?
 ```
-The marker for `name`, matched like `Tab.find`, hovering unread markers as needed. Nil when nothing fits.
+The marker for `name`, matched like `Tab.find`. Nil when nothing fits.
 
 ## Map.select
 
@@ -296,7 +290,7 @@ Definition:
 ```luau
 function Map.select(name: string): boolean
 ```
-Hovers the port's marker and clicks only if the menu offers that port (sends the boat, costs the fare). False when not found or the menu shows something else. Does not wait for the sailing.
+Sometimes hovers nearby ports first (see the `DECOY_*` constants), then hovers the port's marker and clicks only if the menu offers that port (sends the boat, costs the fare). False when not found or the menu shows something else. Does not wait for the sailing.
 
 ## Map.close
 

@@ -19,8 +19,8 @@ Library and CLI for everything outside the client: find clients, inject the agen
 | `cache.rs`, `collision.rs`, `pathfinding.rs` | Cache collision maps, `find_path`, the game's own walk-click router (`game_route`, `target_route`) |
 | `scene_collision.rs`, `scene_graph.rs`     | Live scene collision; randomized `scene_route` lattice                                          |
 | `nav.rs`, `landmass.rs`, `transports.rs`   | `nav_plan` planner, world landmasses/`world_route`, transport rows                              |
-| `projection.rs`                            | World to screen                                                                                 |
-| `config.rs`, `font.rs`                     | Cache config definitions; bitmap fonts and sprites                                              |
+| `config.rs`                                | Cache config definitions                                                                        |
+| `debug_shapes.rs`                          | The run's world drawings (`debug_shapes`), shown only while Script debugging is on              |
 | `form.rs`                                  | Settings form spec/validation and all `\u{1e}` line prefixes shared with the loader             |
 | `manifest.rs`                              | `manifest.json`: settings spec, `queueable`, goals, finish grace; shared with the loader        |
 | `bank_pin.rs`, `bank_pin_overlay.rs`, `lamp.rs` | PIN entry and lamp skill lookups by account-name hash                                      |
@@ -51,7 +51,8 @@ Library and CLI for everything outside the client: find clients, inject the agen
 - **`movement()`** reads the agent's `Movement` block, filled before each packet, so it is exact across ticks a busy script missed; tick callbacks can't give that.
 - **Entry swaps**: the account folder is found by duplicating client handles (up to `HANDLE_SCAN_LIMIT`) until one is a file under `users\<digits>` below a drive-root profile folder, so a numeric Windows user name doesn't match. Fails while logged out.
 
-- **Overlay layers**: world drawings hide under interfaces through the agent's interface mask ([agent-dll.md](agent-dll.md)). `draw_batch` shapes and `draw_rect`/`draw_line`/`draw_lines` take `layer = "world" | "ui"` (default world, anything else is an error); the bank PIN cover and the loader's dev overlay readouts (widget inspector boxes, the info panel and the cursor tooltip) are UI; tile paths, arrows and tile labels are world.
+- **Overlay layers**: world drawings hide under interfaces through the agent's interface mask ([agent-dll.md](agent-dll.md)). `draw_batch` shapes and `draw_rect`/`draw_line`/`draw_lines` take `layer = "world" | "ui"` (default world, anything else is an error); the bank PIN cover and the loader's dev overlay readouts (widget inspector boxes, the info panel and the cursor tooltip) are UI pixels.
+- **World shapes** (`publish_world`, [ipc-protocol.md](ipc-protocol.md)): anything drawn on tiles is sent as world shapes the agent projects each frame, never as projected pixels, which would stay put while the camera moves and the script is busy. The loader's tile paths, arrows and tile labels go to the `VIEW` channel; `scene_tiles` with no layers clears it, so the loader calls that when its dev overlay stops. The CLI `tiles` exits at once, so its world layers vanish with it. A run's `debug_shapes` go to `SCRIPT`: `debug_shapes.rs` keeps the last list and publishes it only while `script_debugging()` is on, and the `DEBUG` line republishes it, so the toggle hides and restores them while the script is busy. `publish_world` skips a list identical to the channel's current one.
 
 ## Sandbox boundary
 
@@ -67,10 +68,10 @@ Library and CLI for everything outside the client: find clients, inject the agen
 
 Usage: `injector run [--script <path>] [--sdk <dir>] [pid]`. Lines are `\u{1e}`-prefixed (constants in `form.rs`, `http.rs`, `prices.rs`, `antiban.rs`, `transports.rs`); stdout entries end with `form::ENTRY_END` (`\0`).
 
-- Header lines before the script, any order: `PINS` (enables PIN and lamp lookups), `HTTP` (enables the HTTP handler; otherwise "HTTP requests aren't available"), `ANTIBAN`, `PRICES <url>`, `TRANSPORT_SETTINGS`, `DEBUG <0|1>`, `TRANSPORTS`, `SETTINGS <json>` (the values `settings()` returns), `RESUME <break plan>` (the previous queue entry's last `BREAKS` plan, read once by `antiban_resume()`).
+- Header lines before the script, any order: `PINS` (enables PIN and lamp lookups), `HTTP` (enables the HTTP handler; otherwise "HTTP requests aren't available"), `ANTIBAN`, `PRICES <url>`, `ACCOUNTS <json>` (name hash → transport types off and house pieces; `account_settings()` returns the logged-in account's), `DEBUG <0|1>`, `TRANSPORTS`, `SETTINGS <json>` (the values `settings()` returns), `RESUME <break plan>` (the previous queue entry's last `BREAKS` plan, read once by `antiban_resume()`).
 - Settings are fixed before the script starts: there is no form request. Without a `SETTINGS` line, `run` uses the defaults of `manifest.json` beside `--script` (an empty table without one); an invalid manifest stops the run before the script starts.
 - Then optional `MODULES <len>` + JSON `{path: source}` block (the decrypted store files, served from memory relative to the script dir), then `SCRIPT <len>` + source. Without `SCRIPT`, all of stdin is the source and nothing after it is read (hand runs).
-- After the script, a stdin thread applies `ANTIBAN`/`PRICES`/`TRANSPORT_SETTINGS`/`DEBUG` (the dev tab's Script debugging, read by `script_debugging()`), `SKIP`, `UPDATE` (live settings changes, `form_update()`), `FINISH` (the queue wants the script to wrap up: `finish_requested()` turns true and stays true); any other line is the reply to the pending request (`ask`).
+- After the script, a stdin thread applies `ANTIBAN`/`PRICES`/`ACCOUNTS`/`DEBUG` (the dev tab's Script debugging, read by `script_debugging()`), `SKIP`, `UPDATE` (live settings changes, `form_update()`), `FINISH` (the queue wants the script to wrap up: `finish_requested()` turns true and stays true); any other line is the reply to the pending request (`ask`).
 - `report_exit("done" | "blocked", reason?)` writes an `EXIT` line before the script returns. The loader treats a clean exit without one as done, and an error or a kill as failed.
 
 ## `require`

@@ -104,6 +104,7 @@ impl LoaderApp {
             Page::Run(sub) => self
                 .run()
                 .is_some_and(|run| sub != RunPage::Feedback || run.store.is_some()),
+            Page::Account(index, _) => index < crate::script::read(&self.accounts).names().len(),
             Page::Sessions
             | Page::Editor(None)
             | Page::Terminal

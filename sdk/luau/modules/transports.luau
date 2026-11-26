@@ -109,6 +109,8 @@ Transports.ITEM_NOT_TELEPORT = {
 	"Spellbook",
 }
 Transports.UNDERGROUND = 6400
+Transports.PREFER_HOUSE_NEAR = 20
+Transports.NOT_REPLACED_BY_HOUSE = { passages = true, gates = true, levers = true, house = true }
 
 export type Options = {
 	exclude: { [string]: boolean }?,
@@ -116,6 +118,7 @@ export type Options = {
 	on_step: ((Tile) -> boolean)?,
 	shortcuts: boolean?,
 	wilderness: boolean?,
+	prefer_house: boolean?,
 }
 
 export type Choice = {
@@ -524,7 +527,8 @@ local gated_rows: { [boolean]: Gated } = {}
 
 local function turned_off(): { [string]: boolean }
 	local off: { [string]: boolean } = {}
-	for _, name in ipairs(Host.transport_settings().off) do
+	local account = Host.account_settings()
+	for _, name in ipairs(if account then account.off else {}) do
 		off[name] = true
 	end
 	return off
@@ -536,7 +540,9 @@ end
 
 function Transports.require_enabled(name: string)
 	if not Transports.is_enabled(name) then
-		error(`this script needs the transport type "{name}", which is turned off in the loader's Settings`)
+		error(
+			`this script needs the transport type "{name}", which is turned off for this account in the loader's Accounts`
+		)
 	end
 end
 
@@ -1567,6 +1573,55 @@ local function add_hub_edges(
 	end
 end
 
+local function replaced_by_house(edge: Edge): boolean
+	local route = edge.route
+	if route == nil then
+		return true
+	end
+	return not Transports.NOT_REPLACED_BY_HOUSE[route.group] and route.kind ~= "house_exit"
+end
+
+local function prefer_house(nodes: { Node }, out: { [number]: { Edge } }, house: number?, inside: boolean)
+	if house == nil then
+		return
+	end
+	local reachable = inside
+	for from, edges in pairs(out) do
+		for _, edge in ipairs(edges) do
+			reachable = reachable or (from ~= house and edge.to == house)
+		end
+	end
+	if not reachable then
+		return
+	end
+	local landings: { Node } = {}
+	for _, edge in ipairs(out[house] or {}) do
+		if edge.route == nil or edge.route.kind == "house" then
+			table.insert(landings, nodes[edge.to])
+		end
+	end
+	local function lands_near_house_trip(edge: Edge): boolean
+		local at = nodes[edge.to]
+		for _, landing in ipairs(landings) do
+			if landing.plane == at.plane and gap(landing, at) <= Transports.PREFER_HOUSE_NEAR then
+				return true
+			end
+		end
+		return false
+	end
+	for from, edges in pairs(out) do
+		if from ~= house then
+			local kept: { Edge } = {}
+			for _, edge in ipairs(edges) do
+				if not (replaced_by_house(edge) and lands_near_house_trip(edge)) then
+					table.insert(kept, edge)
+				end
+			end
+			out[from] = kept
+		end
+	end
+end
+
 local function endpoints(from: Tile, goal: Tile)
 	local a = { x = from.x, y = from.y, plane = from.plane or 0 }
 	local b = { x = goal.x, y = goal.y, plane = goal.plane or from.plane or 0 }
@@ -1615,21 +1670,14 @@ function Transports.walkable(from: Tile, goal: Tile, options: Options?): boolean
 	return foot_route(from, goal, opts) or planner_reaches(from, goal, opts)
 end
 
-function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
-	local opts: Options = options or {}
+type Graph = { nodes: { Node }, out: { [number]: { Edge } } }
+
+local function build_graph(from: Tile, goals: { Tile }, opts: Options, inside: boolean): Graph
 	local House = lib("@volcren/house")
-	local inside = House.inside()
-	if inside then
-		House.survey()
-		if gap(from, goal) <= House.SIZE then
-			return nil
-		end
-		from = House.TILE
-	end
-	local plane = goal.plane or from.plane or 0
+	local plane = from.plane or 0
 	local into_wild = if opts.wilderness ~= nil then opts.wilderness else Transports.WILDERNESS
 	local check = new_check(from, into_wild)
-	check.goal_in_ferox = Ferox.contains(goal.x, goal.y)
+	check.goal_in_ferox = #goals == 1 and Ferox.contains(goals[1].x, goals[1].y)
 	local off = turned_off()
 
 	local nodes: { Node } = {}
@@ -1644,8 +1692,11 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 		end
 		return n
 	end
-	nodes[1] = { x = from.x, y = from.y, plane = from.plane or plane, folded_y = from.y, under = false, mass = 0 }
-	nodes[2] = { x = goal.x, y = goal.y, plane = plane, folded_y = goal.y, under = false, mass = 0 }
+	nodes[1] = { x = from.x, y = from.y, plane = plane, folded_y = from.y, under = false, mass = 0 }
+	for i, goal in ipairs(goals) do
+		nodes[1 + i] =
+			{ x = goal.x, y = goal.y, plane = goal.plane or plane, folded_y = goal.y, under = false, mass = 0 }
+	end
 
 	local out: { [number]: { Edge } } = { [1] = {} }
 	local function add(from_node: number?, edge: Edge)
@@ -1675,6 +1726,9 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 		end
 	end
 	add_hub_edges(off, opts, check, node, add)
+	if opts.prefer_house then
+		prefer_house(nodes, out, at[tile_key(House.TILE.x, House.TILE.y, House.TILE.plane)], inside)
+	end
 
 	local ways = gated(opts.shortcuts).across
 	local points: { Tile } = table.clone(nodes) :: any
@@ -1701,31 +1755,31 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 		n.folded_y = if n.under then n.y - Transports.UNDERGROUND else n.y
 		n.mass = root_of(landmass(n))
 	end
-	local per_tile = Transports.WALK_TICKS_PER_TILE
-	local climb = Transports.PLANE_CHANGE_TICKS
-	local origin, target = nodes[1], nodes[2]
-	local planned: number? = nil
-	local on_foot = origin.mass ~= 0
-		and target.mass ~= 0
-		and origin.mass ~= target.mass
-		and foot_route(from, goal, opts)
-	local function walk_cost(a: Node, b: Node): number
-		if (a.x == House.TILE.x and a.y == House.TILE.y) ~= (b.x == House.TILE.x and b.y == House.TILE.y) then
-			return math.huge
-		end
-		if a.mass ~= 0 and b.mass ~= 0 and a.mass ~= b.mass and not (on_foot and a == origin and b == target) then
-			return math.huge
-		end
-		if planned ~= nil and a == origin and b == target then
-			return planned
-		end
-		local ticks = math.max(math.abs(a.x - b.x), math.abs(a.folded_y - b.folded_y)) * per_tile
-		return if a.under ~= b.under or a.plane ~= b.plane then ticks + climb else ticks
-	end
-	if not inside and walk_cost(origin, target) ~= math.huge then
-		planned = planned_walk_ticks(from, goal, opts)
-	end
+	return { nodes = nodes, out = out }
+end
 
+local function in_house(n: Node): boolean
+	local House = lib("@volcren/house")
+	return n.x == House.TILE.x and n.y == House.TILE.y
+end
+
+local function straight_ticks(a: Node, b: Node): number
+	local ticks = math.max(math.abs(a.x - b.x), math.abs(a.folded_y - b.folded_y)) * Transports.WALK_TICKS_PER_TILE
+	return if a.under ~= b.under or a.plane ~= b.plane then ticks + Transports.PLANE_CHANGE_TICKS else ticks
+end
+
+local function walk_ticks(a: Node, b: Node): number
+	if in_house(a) ~= in_house(b) then
+		return math.huge
+	end
+	if a.mass ~= 0 and b.mass ~= 0 and a.mass ~= b.mass then
+		return math.huge
+	end
+	return straight_ticks(a, b)
+end
+
+local function shortest(g: Graph, walk: (a: Node, b: Node) -> number): ({ number }, { number }, { Edge | false })
+	local nodes = g.nodes
 	local count = #nodes
 	local dist: { number } = table.create(count, math.huge)
 	local back: { number } = table.create(count, 0)
@@ -1746,19 +1800,74 @@ function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
 		local a = nodes[u]
 		for v = 1, count do
 			if not done[v] then
-				local cost = best + walk_cost(a, nodes[v])
+				local cost = best + walk(a, nodes[v])
 				if cost < dist[v] then
 					dist[v], back[v], via[v] = cost, u, false
 				end
 			end
 		end
-		for _, edge in ipairs(out[u] or {}) do
+		for _, edge in ipairs(g.out[u] or {}) do
 			local cost = best + edge.cost
 			if cost < dist[edge.to] then
 				dist[edge.to], back[edge.to], via[edge.to] = cost, u, edge
 			end
 		end
 	end
+	return dist, back, via
+end
+
+function Transports.costs(from: Tile, goals: { Tile }, options: Options?): { number }
+	local House = lib("@volcren/house")
+	local inside = House.inside()
+	if inside then
+		House.survey()
+		from = House.TILE
+	end
+	local g = build_graph(from, goals, options or {}, inside)
+	local dist = shortest(g, walk_ticks)
+	local costs: { number } = {}
+	for i = 1, #goals do
+		costs[i] = if g.nodes[1 + i].mass == 0 then math.huge else dist[1 + i]
+	end
+	return costs
+end
+
+function Transports.choose(from: Tile, goal: Tile, options: Options?): Choice?
+	local opts: Options = options or {}
+	local House = lib("@volcren/house")
+	local inside = House.inside()
+	if inside then
+		House.survey()
+		if gap(from, goal) <= House.SIZE then
+			return nil
+		end
+		from = House.TILE
+	end
+	local plane = goal.plane or from.plane or 0
+	local g = build_graph(from, { { x = goal.x, y = goal.y, plane = plane } }, opts, inside)
+	local nodes = g.nodes
+	local origin, target = nodes[1], nodes[2]
+	local planned: number? = nil
+	local on_foot = origin.mass ~= 0
+		and target.mass ~= 0
+		and origin.mass ~= target.mass
+		and foot_route(from, goal, opts)
+	local function walk_cost(a: Node, b: Node): number
+		if a == origin and b == target and in_house(a) == in_house(b) then
+			if planned ~= nil then
+				return planned
+			end
+			if on_foot then
+				return straight_ticks(a, b)
+			end
+		end
+		return walk_ticks(a, b)
+	end
+	if not inside and walk_cost(origin, target) ~= math.huge then
+		planned = planned_walk_ticks(from, goal, opts)
+	end
+
+	local dist, back, via = shortest(g, walk_cost)
 
 	if dist[2] == math.huge then
 		return nil
@@ -1945,6 +2054,15 @@ function Transports.disembark(to: Tile): boolean
 	return true
 end
 
+local function use_pool()
+	local drank, why = lib("@volcren/house").refresh()
+	if drank then
+		Log.log("Transports", "drank from the house pool")
+	elseif why ~= nil then
+		Log.log("Transports", why)
+	end
+end
+
 function Transports.hub(choice: Choice): (boolean, boolean?)
 	local t = choice.transport :: any
 	local hub = HUB_BY_KIND[choice.kind]
@@ -1958,6 +2076,7 @@ function Transports.hub(choice: Choice): (boolean, boolean?)
 		if not House.inside() then
 			return fail(id, "not in the house"), nil
 		end
+		use_pool()
 		at = House.reach(House.FURNITURE[hub.furniture :: string])
 		if at == nil then
 			fail(id, "can't get to it in this house")
@@ -2871,6 +2990,7 @@ function Transports.house(choice: Choice): (boolean, boolean?)
 	if not House.inside() then
 		return fail(id, "not in the house"), nil
 	end
+	use_pool()
 	log_saving(`house {furniture} to {label}`, choice)
 	local started, why, pointless = House.start_teleport(furniture, label)
 	if started then
@@ -2885,6 +3005,7 @@ function Transports.house(choice: Choice): (boolean, boolean?)
 end
 
 function Transports.house_exit(choice: Choice): boolean
+	use_pool()
 	Log.log("Transports", "leaving the house")
 	if not lib("@volcren/house").leave() then
 		return fail(choice.id or "house exit", "couldn't leave")

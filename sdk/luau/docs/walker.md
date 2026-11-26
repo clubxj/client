@@ -82,7 +82,7 @@ Definition:
 ```luau
 function Walker.show_route()
 ```
-While `Host.script_debugging()` is on, draws `Walker.route` from you to the tile of the last walk click: path tiles yellow, tiles a run jumps over faded, the end green (or red when the route stops short). The route is taken once, when the walker clicks, and stays fixed (tiles and which ones are faded) while you walk it; later calls only reproject it and drop the tiles up to where you stand, and a new destination takes a new one. Walker calls it after each click and on every step of its waits, and `Walker.walk` and `Walker.wait_arrival` clear the drawing when they return; with debugging off or no walk flag it clears what it drew. It draws as the `walker route` layer of [DebugDraw](debug_draw.md), so a script's own debug layers stay on screen with it. Call it from your own wait loops to keep the drawing current.
+While `Host.script_debugging()` is on, draws `Walker.route` from you to the tile of the last walk click: path tiles yellow, tiles a run jumps over faded, the end green (or red when the route stops short). The route is taken once, when the walker clicks, and stays fixed (tiles and which ones are faded) while you walk it; later calls only drop the tiles up to where you stand (the drawing follows the camera by itself), and a new destination takes a new one. Walker calls it after each click and on every step of its waits, and `Walker.walk` and `Walker.wait_arrival` clear the drawing when they return; with debugging off or no walk flag it clears what it drew. It draws as the `walker route` layer of [DebugDraw](debug_draw.md), so a script's own debug layers stay on screen with it. Call it from your own wait loops to keep trimming the walked tiles.
 
 Example:
 ```luau
@@ -255,7 +255,7 @@ How it walks (all tunable via the `Walker.*` constants in the source):
 - **Fidgets.** While waiting for the flag, random small yaw, pitch, zoom or mouse moves (`FIDGET_*`), with a chance that drops each roll.
 - **Doors and climbs.** Clicked once within `ACTION_RANGE` and on screen. A door is done when the plan no longer goes through it; a "seems to be stuck" door (`DOOR_STUCK`) is planned round. A climb is done when the plane changes (a shortcut: near its landing tile). Pauses `CLIMB_PAUSE_MIN_MS`..`CLIMB_PAUSE_MAX_MS` after a plane change, `SHORTCUT_PAUSE_MS` after a same-plane obstacle. One idle for `ACTION_IDLE_MS` is retried `ACTION_ATTEMPTS` times, then avoided.
 - **Wrong plane.** If the walk ends off the goal's plane, `climb_toward` and walk again, up to `CLIMB_TRIES`.
-- **Debug drawing.** While `Host.script_debugging()` is on, besides `show_route` it draws the `walker camera` layer: the camera target's tile labelled "Camera target" (`CAMERA_TARGET_COLOR`) with a line to it from your tile (`CAMERA_LINE_COLOR`), and every tile this walk clicked labelled "Step N" in click order (`STEP_COLOR`); labels are `LABEL_SIZE` tall with a `LABEL_SHADOW_COLOR` shadow. The target is worked out on every step, so the line follows you between turns. The layer is cleared when the walk returns.
+- **Debug drawing.** While `Host.script_debugging()` is on, besides `show_route` it draws the `walker camera` layer: the camera target's tile labelled "Camera target" (`CAMERA_TARGET_COLOR`) with a line to it from your tile (`CAMERA_LINE_COLOR`), and every tile this walk clicked labelled "Step N" in click order (`STEP_COLOR`). The target is worked out on every step, so the line follows you between turns. The layer is cleared when the walk returns.
 
 `options`:
 - `near`: done within this many tiles on `plane` (default 2).
@@ -268,6 +268,7 @@ How it walks (all tunable via the `Walker.*` constants in the source):
 - `plane`: the goal's plane (default yours at the start).
 - `doors`, `climbs`, `shortcuts`: allow each (default true). Shortcuts are those your Agility level allows outside the Wilderness that save `Transports.SHORTCUT_MIN_SAVING_TILES`; needed gear in the inventory is equipped and left on.
 - `transports`: `false` to walk only, or `{ exclude, min_saving_ticks }` for `Transports.travel`.
+- `prefer_house`: go through the player's house instead of a regular trip that lands near where the house can take you (`Transports.choose`'s `prefer_house`). Default `Walker.PREFER_HOUSE` (false).
 - `nav`: extra `Host.NavOptions`.
 
 Example:

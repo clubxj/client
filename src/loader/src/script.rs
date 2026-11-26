@@ -284,7 +284,7 @@ impl Script {
             injector::http::CAPABILITY_PREFIX,
             injector::prices::line(&host.prices_url),
             injector::antiban::line(&settings.antiban),
-            injector::transports::settings_line(&settings.transports),
+            read(&host.accounts).settings_line(),
             injector::form::debug_line(settings.script_debugging),
             crate::transports::line()
         ) + &launch.header();
@@ -409,14 +409,8 @@ impl Script {
         self.reply(&injector::antiban::line(config), "breaks update")
     }
 
-    pub fn push_transport_settings(
-        &self,
-        settings: &injector::transports::Settings,
-    ) -> Result<(), String> {
-        self.reply(
-            &injector::transports::settings_line(settings),
-            "transports update",
-        )
+    pub fn push_accounts(&self, line: &str) -> Result<(), String> {
+        self.reply(line, "accounts update")
     }
 
     pub fn push_debugging(&self, on: bool) -> Result<(), String> {
@@ -680,6 +674,7 @@ mod tests {
             hash: "abc".into(),
             pin: "1234".into(),
             lamp_skill: "Slayer".into(),
+            ..crate::accounts::Entry::default()
         };
         let host = host(Vec::new(), vec![entry]);
         let lookup = |line: String| host.lookup(&line).unwrap();

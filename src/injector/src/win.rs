@@ -59,6 +59,8 @@ use windows_sys::{
     s, w,
 };
 
+use decode::shapes::Shape;
+use ipc::world_shapes::{self, Channel, World};
 use ipc::{
     HEADER_SIZE, Header, IMAGE_DATA_SIZE, INITIAL_CURSOR_SIZE, Incompatible, frame_event_name,
     image_fits, initial_cursor_name,
@@ -694,6 +696,7 @@ struct Session {
     reply: OnceLock<Option<Handle>>,
     frame: OnceLock<Option<Handle>>,
     shared: OnceLock<View>,
+    world: OnceLock<View>,
     requests: Mutex<HashMap<u32, Arc<Handle>>>,
 }
 
@@ -708,6 +711,17 @@ impl Session {
         }
         let view = shared_view(pid, overlay_offset(ipc::OVERLAY_SLOTS), unmapped)?;
         Ok(self.shared.get_or_init(|| view))
+    }
+
+    fn world(&self, pid: u32) -> Result<*mut World, String> {
+        if let Some(view) = self.world.get() {
+            return Ok(view.ptr::<World>().as_ptr());
+        }
+        let mapping = open_mapping(world_shapes::mapping_name(pid), FILE_MAP_WRITE)
+            .ok_or_else(|| format!("agent in client {pid} has no world drawings; reload it"))?;
+        let view = View::new(mapping, FILE_MAP_WRITE, world_shapes::SIZE)
+            .map_err(|e| format!("Cannot map client {pid}'s world drawings: {e}"))?;
+        Ok(self.world.get_or_init(|| view).ptr::<World>().as_ptr())
     }
 
     fn request_mutex(&self, pid: u32, message: u32) -> Option<Arc<Handle>> {
@@ -743,6 +757,7 @@ fn session(pid: u32) -> Result<Arc<Session>, String> {
         reply: OnceLock::new(),
         frame: OnceLock::new(),
         shared: OnceLock::new(),
+        world: OnceLock::new(),
         requests: Mutex::new(HashMap::new()),
     });
     sessions.push((pid, session.clone()));
@@ -1023,11 +1038,6 @@ pub fn project(pid: u32, points: &[projection::Point]) -> Result<Vec<[f32; 2]>, 
     project_from(pid, points, projection::Viewpoint::default())
 }
 
-fn project_clipped(pid: u32, points: &[projection::Point]) -> Result<Vec<[f32; 2]>, String> {
-    project_locally(pid, points, projection::Viewpoint::default(), true)
-        .map_err(|why| format!("local projection: {why}"))
-}
-
 pub fn project_from(
     pid: u32,
     points: &[projection::Point],
@@ -1038,19 +1048,7 @@ pub fn project_from(
 
 fn decorations(pid: u32) -> Option<Vec<projection::Decoration>> {
     let reply = locs_state(pid, decode::locs::request::PLAYER_PLANE).ok()?;
-    Some(
-        reply
-            .locs
-            .iter()
-            .filter(|l| l.kind == projection::GROUND_DECORATION && l.decoration_height != 0)
-            .map(|l| {
-                (
-                    (reply.plane, l.x as i32, l.y as i32),
-                    l.decoration_height as i32,
-                )
-            })
-            .collect(),
-    )
+    Some(projection::decorations(&reply))
 }
 
 fn no_frame(what: &str) -> String {
@@ -1173,6 +1171,17 @@ fn animated(
     let frame = decode::model_data::decode_frame(data, &map).ok_or_else(bad)?;
     model.animate(&map, &frame);
     Ok(sequence.frame_ids.len() as u32)
+}
+
+pub fn npc_actions(pid: u32, ids: &[i32]) -> Result<BTreeMap<i32, Vec<String>>, String> {
+    let disk = disk(pid)?;
+    let mut actions = BTreeMap::new();
+    for &id in ids {
+        if let Some(npc) = npc_type(pid, &disk, id)? {
+            actions.insert(id, npc.actions);
+        }
+    }
+    Ok(actions)
 }
 
 pub fn npc_type_model(
@@ -1937,26 +1946,28 @@ fn cache_placements(
             regions.push((rx, ry));
         }
     }
-    let files: Vec<[i32; 2]> = regions
-        .iter()
-        .map(|&(rx, ry)| [region_id(rx, ry) as i32, 1])
-        .collect();
+    let ids: Vec<u32> = regions.iter().map(|&(rx, ry)| region_id(rx, ry)).collect();
+    let data = cache_files(pid, MAPS_INDEX, &map_square_files(&ids))?;
     let mut found = Vec::new();
-    for (data, &(rx, ry)) in cache_files(pid, MAPS_INDEX, &files)?
-        .into_iter()
-        .zip(&regions)
-    {
-        let Some(data) = data else { continue };
-        let placements = decode_locs(&data)
-            .ok_or_else(|| format!("map square {}'s locs don't decode", region_id(rx, ry)))?;
-        for p in placements {
-            let (x, y, plane) = (rx * 64 + p.x as i32, ry * 64 + p.y as i32, p.plane as i32);
-            if x >= x1
+    for (pair, &(rx, ry)) in data.as_chunks::<2>().0.iter().zip(&regions) {
+        let (Some(terrain), Some(locs)) = (&pair[0], &pair[1]) else {
+            continue;
+        };
+        let region = region_id(rx, ry);
+        let settings = decode_terrain(terrain)
+            .ok_or_else(|| format!("map square {region}'s terrain doesn't decode"))?;
+        let placements =
+            decode_locs(locs).ok_or_else(|| format!("map square {region}'s locs don't decode"))?;
+        for mut p in placements {
+            let (x, y, plane) = (rx * 64 + p.x as i32, ry * 64 + p.y as i32, walked_plane(&settings, &p));
+            if plane >= 0
+                && x >= x1
                 && x <= x2
                 && y >= y1
                 && y <= y2
                 && plane_wanted.is_none_or(|want| want == plane)
             {
+                p.plane = plane as u8;
                 found.push((p, x, y));
             }
         }
@@ -2980,6 +2991,10 @@ pub fn map_regions(pid: u32) -> Result<Vec<[i32; 2]>, String> {
         .ok_or_else(|| "the scene's map squares can't be found".into())
 }
 
+pub fn house(pid: u32) -> Result<crate::house::Survey, String> {
+    Ok(crate::house::survey(in_instance(pid)?, &clickable_locs(pid)?))
+}
+
 pub fn in_instance(pid: u32) -> Result<bool, String> {
     let (layout, memory) = reader(pid, part::PLAYER | part::SCENE_LOADER, "the scene loader")?;
     ipc::read::in_instance(&memory, &layout)
@@ -3948,6 +3963,59 @@ pub fn set_cursor(pid: u32, cursor: &crate::Cursor) -> Result<(), String> {
     Ok(())
 }
 
+pub fn publish_world(pid: u32, channel: usize, shapes: &[Shape]) -> Result<(), String> {
+    let session = session(pid)?;
+    let world = session.world(pid)?;
+    unsafe {
+        let font = World::font(world);
+        if world_shapes::Font::sequence(font) == 0
+            && shapes.iter().any(|s| matches!(s, Shape::Label { .. }))
+        {
+            let bold = cache_font(pid, crate::font::B12_FULL)?;
+            let plain = label_font(pid)?;
+            let fonts = crate::font::Font::encode_all(&[&plain, &bold]);
+            world_shapes::Font::publish(font, std::process::id(), &fonts)?;
+        }
+        let at = World::channel(world, channel)
+            .ok_or_else(|| format!("there is no world channel {channel}"))?;
+        let bytes = decode::shapes::encode(shapes);
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash = hasher.finish();
+        let mut published = lock(&PUBLISHED);
+        let last = published
+            .iter_mut()
+            .find(|p| p.pid == pid && p.channel == channel);
+        if last
+            .as_ref()
+            .is_some_and(|p| p.sequence == Channel::sequence(at) && p.hash == hash)
+        {
+            return Ok(());
+        }
+        Channel::publish(at, std::process::id(), &bytes)?;
+        let sequence = Channel::sequence(at);
+        match last {
+            Some(last) => (last.sequence, last.hash) = (sequence, hash),
+            None => published.push(Published {
+                pid,
+                channel,
+                sequence,
+                hash,
+            }),
+        }
+        Ok(())
+    }
+}
+
+struct Published {
+    pid: u32,
+    channel: usize,
+    sequence: u32,
+    hash: u64,
+}
+
+static PUBLISHED: Mutex<Vec<Published>> = Mutex::new(Vec::new());
+
 pub fn draw(pid: u32, overlay: &Overlay) -> Result<(), String> {
     draw_batch(pid, std::slice::from_ref(overlay))
 }
@@ -4049,7 +4117,6 @@ const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Rgba {
 }
 
 const STROKE_WIDTH: i32 = 2;
-const SCREEN_LIMIT: f32 = 100_000.0;
 const LABEL_SHADOW: Rgba = rgba(0, 0, 0, 255);
 const TEXT_COLOR: Rgba = rgba(255, 255, 255, 255);
 const LABEL_SCALE: i32 = 2;
@@ -4092,7 +4159,6 @@ const NPC_TILE_COLOR: Rgba = rgba(255, 255, 0, 255);
 const WORLD_ENTITY_COLOR: Rgba = rgba(0, 0, 255, 255);
 const INTERACTING_COLOR: Rgba = rgba(0, 255, 255, 255);
 const INTERACTING_SHIFT: f32 = 16.0;
-const ARROW_SCALE: f32 = 2.0;
 const OBJECT_TILE_COLOR: Rgba = rgba(0, 255, 0, 255);
 const GROUND_ITEM_COLOR: Rgba = rgba(221, 44, 0, 255);
 const GROUND_OBJECT_COLOR: Rgba = rgba(170, 0, 255, 255);
@@ -4120,18 +4186,22 @@ fn label_font(pid: u32) -> Result<Arc<crate::font::Font>, String> {
     if let Some(font) = cached.as_ref() {
         return Ok(font.clone());
     }
-    let archive = |index: u32| -> Result<Vec<u8>, String> {
-        cache_files(pid, index, &[[crate::font::P12_FULL, 0]])?
-            .pop()
-            .flatten()
-            .ok_or_else(|| format!("the client has no p12_full in index {index}"))
-    };
-    let font = Arc::new(crate::font::Font::decode(
-        &archive(crate::font::FONTS_INDEX)?,
-        &archive(crate::font::SPRITES_INDEX)?,
-    )?);
+    let font = Arc::new(cache_font(pid, crate::font::P12_FULL)?);
     *cached = Some(font.clone());
     Ok(font)
+}
+
+fn cache_font(pid: u32, archive: i32) -> Result<crate::font::Font, String> {
+    let file = |index: u32| -> Result<Vec<u8>, String> {
+        cache_files(pid, index, &[[archive, 0]])?
+            .pop()
+            .flatten()
+            .ok_or_else(|| format!("the client has no font {archive} in index {index}"))
+    };
+    crate::font::Font::decode(
+        &file(crate::font::FONTS_INDEX)?,
+        &file(crate::font::SPRITES_INDEX)?,
+    )
 }
 
 #[derive(Default)]
@@ -4172,7 +4242,6 @@ struct Stroke {
     points: Vec<usize>,
     color: Rgba,
     closed: bool,
-    marker: bool,
 }
 
 struct Arrow {
@@ -4200,13 +4269,12 @@ impl Plan {
         self.points.len() - 1
     }
 
-    fn path(&mut self, points: &[projection::Point], color: Rgba, closed: bool, marker: bool) {
+    fn path(&mut self, points: &[projection::Point], color: Rgba, closed: bool) {
         let points = points.iter().map(|&p| self.point(p)).collect();
         self.paths.push(Stroke {
             points,
             color,
             closed,
-            marker,
         });
     }
 
@@ -4224,12 +4292,36 @@ impl Plan {
         });
     }
 
+    fn world_shapes(&self, base: [i32; 2]) -> Vec<Shape> {
+        let point = |i: usize| decode::shapes::Point::from_local(self.points[i], base);
+        let bytes = |c: Rgba| [c.r, c.g, c.b, c.a];
+        let paths = self.paths.iter().map(|path| Shape::Path {
+            points: path.points.iter().map(|&i| point(i)).collect(),
+            color: bytes(path.color),
+            width: STROKE_WIDTH as u8,
+            closed: path.closed,
+        });
+        let arrows = self.arrows.iter().map(|arrow| Shape::Arrow {
+            from: point(arrow.from),
+            to: point(arrow.to),
+            color: bytes(arrow.color),
+            offset_y: INTERACTING_SHIFT as i16,
+        });
+        let labels = self.labels.iter().map(|label| Shape::Label {
+            at: point(label.anchor),
+            text: label.text.clone(),
+            color: bytes(label.color),
+            bold: false,
+        });
+        paths.chain(arrows).chain(labels).collect()
+    }
+
     fn text(&mut self, x: i32, y: i32, text: String, color: Rgba) {
         self.texts.push(Text { x, y, text, color });
     }
 
     fn tile(&mut self, tile: [i32; 2], label: String, color: Rgba) {
-        self.path(&tile_corners(tile), color, true, true);
+        self.path(&tile_corners(tile), color, true);
         self.label(tile_centre(tile), label, color);
     }
 }
@@ -4297,7 +4389,7 @@ fn actor_marker(plan: &mut Plan, local: (i32, i32), height: i32, label: String, 
         tile,
         ..projection::Point::new(local_x + dx, local_y + dy, 0)
     });
-    plan.path(&corners, color, true, true);
+    plan.path(&corners, color, true);
     plan.label(
         projection::Point::new(local_x, local_y, -lift),
         label,
@@ -4334,7 +4426,7 @@ fn player_label(player: &Player) -> String {
 fn loc_marker(plan: &mut Plan, loc: &decode::locs::Loc, color: Rgba) {
     let (tx, ty) = (loc.x as i32, loc.y as i32);
     let (sx, sy) = (loc.size_x.max(1) as i32, loc.size_y.max(1) as i32);
-    plan.path(&footprint(tx, ty, sx, sy), color, true, true);
+    plan.path(&footprint(tx, ty, sx, sy), color, true);
     let centre = projection::Point::new(
         tx * TILE_SIZE + sx * TILE_HALF,
         ty * TILE_SIZE + sy * TILE_HALF,
@@ -4470,7 +4562,11 @@ pub fn scene_tiles_next_frame(
     Ok(Some(frame))
 }
 
-pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
+pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<(), String> {
+    if layers.is_empty() {
+        publish_world(pid, world_shapes::VIEW, &[])?;
+        return draw(pid, &Overlay::Clear);
+    }
     if let Some(unknown) = layers
         .iter()
         .find(|layer| !LAYERS.contains(layer) && widget_layer(layer).is_none())
@@ -4508,7 +4604,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
     if on("grid") {
         let here = here()?;
         for tile in grid_tiles(scene_tile(&here)) {
-            plan.path(&tile_corners(tile), GRID_COLOR, true, false);
+            plan.path(&tile_corners(tile), GRID_COLOR, true);
         }
     }
 
@@ -4624,7 +4720,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     ..tile_centre([p.target_x - origin_x, p.target_y - origin_y])
                 },
             };
-            plan.path(&[at, target], PROJECTILE_PATH_COLOR, false, false);
+            plan.path(&[at, target], PROJECTILE_PATH_COLOR, false);
             plan.label(at, projectile_label(p), PROJECTILE_COLOR);
         }
     }
@@ -4636,7 +4732,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
             .filter(|object| object.view_id == 0 && Some(object.plane) == here.plane)
         {
             let tile = [object.local_x >> 7, object.local_y >> 7];
-            plan.path(&tile_corners(tile), SPOT_ANIM_COLOR, true, true);
+            plan.path(&tile_corners(tile), SPOT_ANIM_COLOR, true);
             plan.label(
                 tile_centre(tile),
                 format!("(ID: {})", object.id),
@@ -4705,11 +4801,11 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
             .collect();
         for &x in &lines {
             let points: Vec<_> = lines.iter().map(|&y| boundary(x, y)).collect();
-            plan.path(&points, CHUNK_COLOR, false, false);
+            plan.path(&points, CHUNK_COLOR, false);
         }
         for &y in &lines {
             let points: Vec<_> = lines.iter().map(|&x| boundary(x, y)).collect();
-            plan.path(&points, CHUNK_COLOR, false, false);
+            plan.path(&points, CHUNK_COLOR, false);
         }
     }
 
@@ -4723,7 +4819,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
             let points: Vec<_> = (near_y - MAP_SQUARE_RANGE..=near_y + MAP_SQUARE_RANGE)
                 .map(|y| boundary(x - origin_x, y - origin_y))
                 .collect();
-            plan.path(&points, MAP_SQUARE_COLOR, false, false);
+            plan.path(&points, MAP_SQUARE_COLOR, false);
         }
         for y in (near_y - MAP_SQUARE_RANGE..=near_y + MAP_SQUARE_RANGE)
             .filter(|y| y.rem_euclid(MAP_SQUARE_TILES) == 0)
@@ -4731,7 +4827,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
             let points: Vec<_> = (near_x - MAP_SQUARE_RANGE..=near_x + MAP_SQUARE_RANGE)
                 .map(|x| boundary(x - origin_x, y - origin_y))
                 .collect();
-            plan.path(&points, MAP_SQUARE_COLOR, false, false);
+            plan.path(&points, MAP_SQUARE_COLOR, false);
         }
     }
 
@@ -4743,7 +4839,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
             boundary(far, far),
             boundary(far, near),
         ];
-        plan.path(&square, CHUNK_COLOR, true, false);
+        plan.path(&square, CHUNK_COLOR, true);
     }
 
     if on("line-of-sight") {
@@ -4761,7 +4857,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                 {
                     continue;
                 }
-                plan.path(&tile_corners(tile), LINE_OF_SIGHT_COLOR, true, false);
+                plan.path(&tile_corners(tile), LINE_OF_SIGHT_COLOR, true);
             }
         }
     }
@@ -4778,7 +4874,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     && in_scene(tile)
                     && crate::pathfinding::can_step(&world, plane, here.x, here.y, dx, dy)
                 {
-                    plan.path(&tile_corners(tile), LOCAL_VALID_MOVEMENT_COLOR, true, false);
+                    plan.path(&tile_corners(tile), LOCAL_VALID_MOVEMENT_COLOR, true);
                 }
             }
         }
@@ -4813,7 +4909,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                     };
                     let tile = [x - origin_x, y - origin_y];
                     if in_scene(tile) {
-                        plan.path(&tile_corners(tile), color, true, false);
+                        plan.path(&tile_corners(tile), color, true);
                     }
                 }
             }
@@ -4862,7 +4958,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
         let here = here()?;
         let (origin_x, origin_y) = scene_origin(&here);
         if let Some((tile, cursor)) = hovered_tile(pid, scene_tile(&here))? {
-            plan.path(&tile_corners(tile), HOVER_COLOR, true, false);
+            plan.path(&tile_corners(tile), HOVER_COLOR, true);
             let (x, y) = (origin_x + tile[0], origin_y + tile[1]);
             let mut lines = Vec::new();
             if on("tile-location") {
@@ -4921,38 +5017,16 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
         ]);
     }
 
-    let screen = if plan.points.is_empty() {
-        Vec::new()
-    } else {
-        project_clipped(pid, &plan.points)?
+    let shapes = match state.position {
+        Some(here) => {
+            let (base_x, base_y) = scene_origin(&here);
+            plan.world_shapes([base_x, base_y])
+        }
+        None => Vec::new(),
     };
-    let on_screen = |[x, y]: &[f32; 2]| x.abs() < SCREEN_LIMIT && y.abs() < SCREEN_LIMIT;
-    let drawn = plan
-        .paths
-        .iter()
-        .filter(|path| path.marker && path.points.iter().all(|&i| on_screen(&screen[i])))
-        .count();
+    publish_world(pid, world_shapes::VIEW, &shapes)?;
 
     let mut hasher = DefaultHasher::new();
-    for path in &plan.paths {
-        (path.color, path.closed).hash(&mut hasher);
-        for &i in &path.points {
-            let [x, y] = screen[i];
-            (on_screen(&[x, y]), x.round() as i32, y.round() as i32).hash(&mut hasher);
-        }
-    }
-    for arrow in &plan.arrows {
-        (
-            arrow.color,
-            screen[arrow.from].map(|v| v.round() as i32),
-            screen[arrow.to].map(|v| v.round() as i32),
-        )
-            .hash(&mut hasher);
-    }
-    for label in &plan.labels {
-        let [x, y] = screen[label.anchor];
-        (&label.text, label.color, x.round() as i32, y.round() as i32).hash(&mut hasher);
-    }
     for text in &plan.texts {
         (text.x, text.y, &text.text, text.color).hash(&mut hasher);
     }
@@ -4969,62 +5043,6 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
         false,
         Some(hasher.finish()),
         |buf, width, height| unsafe {
-            for path in &plan.paths {
-                let count = path.points.len();
-                let edges = if path.closed {
-                    count
-                } else {
-                    count.saturating_sub(1)
-                };
-                for i in 0..edges {
-                    let (a, b) = (screen[path.points[i]], screen[path.points[(i + 1) % count]]);
-                    if on_screen(&a) && on_screen(&b) {
-                        draw_stroke(
-                            buf,
-                            width,
-                            height,
-                            [
-                                a[0].round() as i32,
-                                a[1].round() as i32,
-                                b[0].round() as i32,
-                                b[1].round() as i32,
-                            ],
-                            path.color,
-                            Layer::World,
-                        );
-                    }
-                }
-            }
-            for arrow in &plan.arrows {
-                let [from, to] = [arrow.from, arrow.to].map(|i| screen[i]);
-                if on_screen(&from) && on_screen(&to) {
-                    draw_arrow(
-                        buf,
-                        width,
-                        height,
-                        [from[0], from[1] + INTERACTING_SHIFT],
-                        [to[0], to[1] + INTERACTING_SHIFT],
-                        arrow.color,
-                    );
-                }
-            }
-            for label in &plan.labels {
-                let [ax, ay] = screen[label.anchor];
-                if !on_screen(&[ax, ay]) {
-                    continue;
-                }
-                let left = ax.round() as i32 - font.width(&label.text, LABEL_SCALE) / 2;
-                let top = ay.round() as i32 - font.max_height * LABEL_SCALE;
-                draw_text(
-                    buf,
-                    width,
-                    height,
-                    &font,
-                    &label.text,
-                    [left, top],
-                    (label.color, Layer::World),
-                );
-            }
             for rect in &plan.rects {
                 let (left, top, right, bottom) =
                     (rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
@@ -5052,8 +5070,7 @@ pub fn scene_tiles(pid: u32, layers: &[&str]) -> Result<usize, String> {
                 );
             }
         },
-    )?;
-    Ok(drawn)
+    )
 }
 
 struct Fetched<T>(Option<T>);
@@ -5252,57 +5269,6 @@ unsafe fn draw_rect(
     }
 }
 
-unsafe fn draw_arrow(
-    buf: *mut u8,
-    width: i32,
-    height: i32,
-    from: [f32; 2],
-    to: [f32; 2],
-    color: Rgba,
-) {
-    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-    let length = dx.hypot(dy);
-    let round = |[x, y]: [f32; 2]| [x.round() as i32, y.round() as i32];
-    let [x1, y1] = round(from);
-    let [x2, y2] = round(to);
-    unsafe { draw_stroke(buf, width, height, [x1, y1, x2, y2], color, Layer::World) };
-    if length < 1.0 {
-        return;
-    }
-    let (ux, uy) = (dx / length * ARROW_SCALE, dy / length * ARROW_SCALE);
-    let base = [to[0] - 5.0 * ux, to[1] - 5.0 * uy];
-    let corners = [
-        to,
-        [base[0] - 3.0 * uy, base[1] + 3.0 * ux],
-        [base[0] + 3.0 * uy, base[1] - 3.0 * ux],
-    ];
-    let edge = |a: [f32; 2], b: [f32; 2], p: [f32; 2]| {
-        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
-    };
-    let extent = |axis: usize| {
-        corners.iter().fold((i32::MAX, i32::MIN), |(low, high), c| {
-            (
-                low.min(c[axis].floor() as i32),
-                high.max(c[axis].ceil() as i32),
-            )
-        })
-    };
-    let ((low, high), (top, bottom)) = (extent(0), extent(1));
-    for y in top..=bottom {
-        for x in low..=high {
-            let p = [x as f32 + 0.5, y as f32 + 0.5];
-            let sides = [
-                edge(corners[0], corners[1], p),
-                edge(corners[1], corners[2], p),
-                edge(corners[2], corners[0], p),
-            ];
-            if sides.iter().all(|&s| s >= 0.0) || sides.iter().all(|&s| s <= 0.0) {
-                unsafe { put_pixel(buf, width, height, x, y, color) };
-            }
-        }
-    }
-}
-
 unsafe fn draw_line(
     buf: *mut u8,
     width: i32,
@@ -5332,10 +5298,6 @@ unsafe fn draw_line(
             y = y.wrapping_add(sy);
         }
     }
-}
-
-unsafe fn put_pixel(buf: *mut u8, width: i32, height: i32, x: i32, y: i32, color: Rgba) {
-    unsafe { put_layer_pixel(buf, width, height, x, y, color, Layer::World) }
 }
 
 unsafe fn put_layer_pixel(

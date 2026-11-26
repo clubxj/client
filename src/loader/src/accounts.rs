@@ -59,13 +59,17 @@ const LAMP_SKILLS: [&str; 24] = [
     "Woodcutting",
 ];
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     pub name: String,
     pub hash: String,
     pub pin: String,
     #[serde(default)]
     pub lamp_skill: String,
+    #[serde(default)]
+    pub transports_off: Vec<String>,
+    #[serde(default)]
+    pub house: Vec<String>,
 }
 
 pub(crate) fn seal(key: &[u8; 32], plain: &[u8]) -> Result<Vec<u8>, String> {
@@ -229,6 +233,7 @@ pub struct Accounts {
     editing: Option<Editing>,
     deleting: Option<usize>,
     reading: bool,
+    version: u64,
 }
 
 impl Accounts {
@@ -273,7 +278,68 @@ impl Accounts {
             .map(|entry| entry.lamp_skill.clone()))
     }
 
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        match self.locked {
+            Some(_) => Vec::new(),
+            None => self.entries.iter().map(|entry| entry.name.clone()).collect(),
+        }
+    }
+
+    pub fn saved_entry(&self, index: usize) -> Option<&Entry> {
+        self.saved().ok()?.get(index)
+    }
+
+    pub fn settings(&self) -> injector::account::Accounts {
+        self.saved()
+            .unwrap_or_default()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.hash.clone(),
+                    injector::account::Settings {
+                        off: entry.transports_off.clone(),
+                        house: entry.house.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    pub fn settings_line(&self) -> String {
+        injector::account::line(&self.settings())
+    }
+
+    pub fn set_transport(&mut self, index: usize, name: &str, on: bool) {
+        self.change_saved(index, |entry| toggle(&mut entry.transports_off, name, !on));
+    }
+
+    pub fn set_house_piece(&mut self, index: usize, kind: &str, built: bool) {
+        self.change_saved(index, |entry| toggle(&mut entry.house, kind, built));
+    }
+
+    pub fn set_house(&mut self, index: usize, pieces: Vec<String>) {
+        self.change_saved(index, |entry| entry.house = pieces.clone());
+    }
+
+    fn change_saved(&mut self, index: usize, change: impl Fn(&mut Entry)) {
+        if self.locked.is_some() {
+            return;
+        }
+        let (Some(saved), Some(working)) = (self.entries.get_mut(index), self.working.get_mut(index))
+        else {
+            return;
+        };
+        change(saved);
+        change(working);
+        self.persist();
+    }
+
     fn persist(&mut self) {
+        self.version += 1;
         self.error = store(&self.entries)
             .err()
             .map(|why| format!("Couldn't save the accounts: {why}"));
@@ -302,6 +368,8 @@ impl Accounts {
             hash: hash_name(account),
             pin: draft.pin.clone(),
             lamp_skill: String::new(),
+            transports_off: Vec::new(),
+            house: Vec::new(),
         };
         self.entries.push(entry.clone());
         self.working.push(entry);
@@ -419,6 +487,16 @@ impl Accounts {
     }
 }
 
+fn toggle(list: &mut Vec<String>, name: &str, present: bool) {
+    if present {
+        if !list.iter().any(|item| item == name) {
+            list.push(name.to_owned());
+        }
+    } else {
+        list.retain(|item| item != name);
+    }
+}
+
 fn read(accounts: &RwLock<Accounts>) -> RwLockReadGuard<'_, Accounts> {
     accounts.read().unwrap_or_else(PoisonError::into_inner)
 }
@@ -435,6 +513,7 @@ fn sync(input: &Entity<InputState>, text: &str, window: &mut Window, cx: &mut Ap
 }
 
 type DraftField = fn(&mut Draft) -> &mut String;
+type OnOpen<V> = Rc<dyn Fn(&mut V, usize, &mut Context<V>)>;
 
 pub struct Ui {
     name: Entity<InputState>,
@@ -578,6 +657,7 @@ pub fn render<V: 'static>(
     ui: &Ui,
     client: bool,
     on_read: impl Fn(&mut V, &mut Context<V>) + 'static,
+    on_open: impl Fn(&mut V, usize, &mut Context<V>) + 'static,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> AnyElement {
@@ -636,7 +716,8 @@ pub fn render<V: 'static>(
                 .child(if state.working.is_empty() {
                     widgets::weak("No accounts saved yet.").into_any_element()
                 } else {
-                    list(accounts, &state, ui, enabled, window, cx).into_any_element()
+                    list(accounts, &state, ui, enabled, Rc::new(on_open), window, cx)
+                        .into_any_element()
                 }),
         );
     let dialog = state.draft.as_ref().map(|draft| {
@@ -658,16 +739,17 @@ fn list<V: 'static>(
     state: &Accounts,
     ui: &Ui,
     enabled: bool,
+    on_open: OnOpen<V>,
     window: &mut Window,
     cx: &mut Context<V>,
 ) -> Div {
-    let button_width =
-        widgets::widest(window, &["Save", "Delete", "Sure?"], theme::BODY) + BUTTON_PADDING * 2.0;
-    let row_actions = button_width * 2.0 + ITEM_GAP;
+    let button_width = widgets::widest(window, &["Open", "Save", "Delete", "Sure?"], theme::BODY)
+        + BUTTON_PADDING * 2.0;
+    let row_actions = button_width * 3.0 + ITEM_GAP * 2.0;
     let stacked = ui.width.get() < MIN_TEXT_WIDTH * 4.0 + ITEM_GAP * 5.0 + row_actions;
     let actions_width = if stacked { button_width } else { row_actions };
     let row_height = if stacked {
-        ROW_HEIGHT.max(INTERACT_HEIGHT * 2.0 + LINE_GAP)
+        ROW_HEIGHT.max(INTERACT_HEIGHT * 3.0 + LINE_GAP * 2.0)
     } else {
         ROW_HEIGHT
     };
@@ -780,6 +862,21 @@ fn list<V: 'static>(
                     "What a random event's lamp is spent on. None keeps the lamp.",
                 )),
         );
+        let open = {
+            let on_open = on_open.clone();
+            widgets::button(
+                "open",
+                "Open",
+                enabled,
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    on_open(view, index, cx);
+                    cx.notify();
+                }),
+            )
+            .min_w(button_width)
+            .justify_center()
+            .tooltip(widgets::tooltip("This account's house and transportation"))
+        };
         let armed = state.deleting == Some(index);
         let changed = state.entries.get(index) != Some(entry);
         let save = widgets::button(
@@ -808,6 +905,7 @@ fn list<V: 'static>(
             .when(!stacked, |this| {
                 this.items_center().justify_end().gap(ITEM_GAP)
             })
+            .child(open)
             .child(save)
             .child(delete);
         widgets::striped(row(row_height).id(("account", index)), index)
@@ -961,6 +1059,16 @@ pub fn snapshot_adding(accounts: &RwLock<Accounts>) {
 }
 
 #[cfg(test)]
+pub fn snapshot_account(accounts: &RwLock<Accounts>, house: &[&str], off: &[&str]) {
+    let accounts = &mut *crate::script::write(accounts);
+    let owned = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+    for list in [&mut accounts.entries, &mut accounts.working] {
+        list[0].house = owned(house);
+        list[0].transports_off = owned(off);
+    }
+}
+
+#[cfg(test)]
 pub fn snapshot_changing(accounts: &RwLock<Accounts>) {
     crate::script::write(accounts).change_account(1);
 }
@@ -976,6 +1084,7 @@ mod tests {
             hash: hash_name("a"),
             pin: "1234".into(),
             lamp_skill: "Slayer".into(),
+            ..Entry::default()
         }];
         let sealed = encode(&[7; 32], &entries).unwrap();
         assert!(
@@ -999,12 +1108,41 @@ mod tests {
     }
 
     #[test]
+    fn scripts_get_what_is_saved_by_hash_and_nothing_when_locked() {
+        let saved = Entry {
+            hash: "set".into(),
+            transports_off: vec!["items".into()],
+            house: vec!["glory".into()],
+            ..Entry::default()
+        };
+        let unsaved = Entry {
+            transports_off: vec!["spells".into()],
+            ..saved.clone()
+        };
+        let accounts = Accounts {
+            entries: vec![saved],
+            working: vec![unsaved],
+            ..Accounts::default()
+        };
+        let expected = injector::account::Settings {
+            off: vec!["items".into()],
+            house: vec!["glory".into()],
+        };
+        assert_eq!(
+            accounts.settings(),
+            injector::account::Accounts::from([("set".to_owned(), expected)])
+        );
+        assert!(Accounts::locked("no keyring").settings().is_empty());
+    }
+
+    #[test]
     fn the_lamp_skill_comes_from_what_is_saved() {
         let entry = |hash: &str, skill: &str| Entry {
             name: "main".into(),
             hash: hash.into(),
             pin: "1234".into(),
             lamp_skill: skill.into(),
+            ..Entry::default()
         };
         let accounts = Accounts {
             entries: vec![entry("set", "Slayer"), entry("unset", "")],

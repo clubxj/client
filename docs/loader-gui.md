@@ -97,6 +97,7 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - The output panel shows the run of the page's client (the open run, else its live run, else its latest) next to the Loader log; outside a client it shows the Loader log.
 - Each client has its own editor and inspectors. The one on screen lives in `LoaderApp::editor`/`dev` and the others are parked by owner (`show_editor`, `show_dev`), so page code works on one set. A client's editor starts as a copy of the global editor's file, and saving updates other editors of the same file that hold no unsaved edits; the rest get the reload prompt when they run. Only the global editor's file is saved to `app.ron`. Inspectors poll only for the client whose development page was opened last, so a capture keeps going while other pages are open; parked ones pause and their tiles worker stops.
 - The global `editor/` only edits files. The accounts page reads the account name from the client opened last.
+- `accounts/` lists each saved account as a child page with House and Transportation tabs, which save as soon as they change. Transport types are per account only: an account that isn't saved gets every type.
 
 ## Agent runs
 
@@ -121,10 +122,10 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 ## Scripts, settings and stdin contract
 
 - Each script runs as `injector run --script <path> <pid>`, so a crash can't take the app down. On Windows it starts with `backend::no_window` (`CREATE_NO_WINDOW`): the loader is a GUI program outside debug builds, so a console child would otherwise open a terminal per run. Use it for any console program the loader starts.
-- Lines written to the script's stdin before start: antiban config (`injector::antiban::line`), transports (`TRANSPORT_SETTINGS`), Script debugging (`DEBUG`), `prices_url` (`injector::prices::line`), `SETTINGS` (the form's values, `script::Launch`) and, for a queue entry, `RESUME` (the previous entry's break plan). Live: `UPDATE` (settings changed while running, read by `Host.form_update()`), antiban push, transport push, Script debugging push, skip-next, `FINISH` (queue only).
+- Lines written to the script's stdin before start: antiban config (`injector::antiban::line`), `ACCOUNTS` (every saved account's transport toggles and house pieces, keyed by name hash; `Accounts::settings_line`), Script debugging (`DEBUG`), `prices_url` (`injector::prices::line`), `SETTINGS` (the form's values, `script::Launch`) and, for a queue entry, `RESUME` (the previous entry's break plan). Live: `UPDATE` (settings changed while running, read by `Host.form_update()`), antiban push, `ACCOUNTS` push (whenever the saved accounts change: `Accounts::version`), Script debugging push, skip-next, `FINISH` (queue only).
 - Settings come from the script's `manifest.json` (`injector::manifest`): the store's live revision through `GET /launcher/scripts/:id/manifest`, cached in memory by script and revision, or the file beside an editor script. A script with settings opens a **configuring** run (`Run::is_configuring`: no process, no session) whose Start quotes, starts the session and launches it, so nothing is billed while the form is open. Without settings it starts at once. Values are remembered per script title; layouts resolve to their contents when Start is pressed.
 - Script requests on stdout: `LAMPREQ`, PIN, `HTTPREQ`. The layout JSON a script gets is documented in `sdk/luau/modules/host.luau`.
-- Settings persisted: `helper`, `lib_dir`, `antiban`, `transports`, `include_system_info`, `log_lines`. `helper` is replaced by the detected file on start (see Update flow).
+- Settings persisted: `helper`, `lib_dir`, `antiban`, `include_system_info`, `log_lines`. `helper` is replaced by the detected file on start (see Update flow).
 - Cursor preference is passed to `injector load`; the injector leaves it in an `AGENT_CURSOR_<pid>` mapping the agent reads.
 - The agent exists only inside `injector.exe`, so every load runs `injector.exe load`, on Windows too, and the outdated check compares clients against `injector.exe agent-version` (cached per file size and mtime on Windows). Under Wine the long-lived `serve` processes are restarted when `injector.exe` changes on disk; otherwise a rebuilt injector would keep loading the old agent from the process still running.
 
@@ -140,6 +141,12 @@ The desktop app (GPUI with gpui-component, through `gpui-kit`). It never touches
 - `GET /launcher/sessions` (last 24 h), `POST .../:id/score` (one score per script per account), `POST .../:id/report`.
 - Account names are scrubbed (`feedback::scrub`) from logs: every name seen during the run (`App::run_names`) in any case and separator becomes `[account]`.
 - On store run end (`App::keep_run_record`, before ending the session) a record is sealed to `<data>/runs/<session id>.bin` under the accounts key, so a report on an ended session can include its log. Pruned after `KEEP` (24 h, the server's window).
+
+## Account house
+
+- The House tab keeps only what can't be read from outside the house (`injector::house::PIECES`, the same kinds and name parts as the SDK's `House.SAVED` and `House.FURNITURE`). Scripts read the Nexus, a fancy or ornate box and the town from varbits themselves.
+- "Read from client" runs `injector house <pid>`, and only after the client's logged-in account matches the entry's hash. It replaces the saved pieces only when the player is inside a house (in an instance with the exit portal); otherwise it warns. It can't tell whose house it is.
+- A run's own survey wins for that run and is never written back.
 
 ## Transports
 

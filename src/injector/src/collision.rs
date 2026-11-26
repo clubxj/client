@@ -75,6 +75,11 @@ pub struct Placement {
 
 pub type Settings = [[[u8; REGION_SIZE as usize]; REGION_SIZE as usize]; PLANES];
 
+pub fn walked_plane(settings: &Settings, loc: &Placement) -> i32 {
+    let bridged = settings[1][loc.x as usize][loc.y as usize] & SETTING_BRIDGE != 0;
+    loc.plane as i32 - bridged as i32
+}
+
 pub fn decode_terrain(data: &[u8]) -> Option<Box<Settings>> {
     let mut settings = Box::new([[[0u8; REGION_SIZE as usize]; REGION_SIZE as usize]; PLANES]);
     let mut r = Reader::new(data);
@@ -312,7 +317,7 @@ impl<T: Cell> WorldCollision<T> {
             }
         }
         for loc in locs {
-            let walked = loc.plane as i32 - bridge(loc.x as usize, loc.y as usize) as i32;
+            let walked = walked_plane(settings, loc);
             if walked < 0 {
                 continue;
             }

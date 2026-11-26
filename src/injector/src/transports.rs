@@ -7,8 +7,6 @@ use crate::nav::{Point, UNDERGROUND, fold};
 
 pub const PREFIX: &str = "\u{1e}TRANSPORTS ";
 
-pub const SETTINGS_PREFIX: &str = "\u{1e}TRANSPORT_SETTINGS ";
-
 pub const TYPES: &[(&str, &str)] = &[
     ("spells", "Teleport spells"),
     ("home_teleports", "Home teleports"),
@@ -34,33 +32,6 @@ pub const TYPES: &[(&str, &str)] = &[
     ("levers", "Levers"),
     ("shortcuts", "Agility shortcuts"),
 ];
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Settings {
-    pub off: Vec<String>,
-}
-
-static SETTINGS: Mutex<Settings> = Mutex::new(Settings { off: Vec::new() });
-
-pub fn settings_line(settings: &Settings) -> String {
-    format!(
-        "{SETTINGS_PREFIX}{}",
-        serde_json::to_string(settings).expect("settings serialize")
-    )
-}
-
-pub fn parse_settings(payload: &str) -> Option<Settings> {
-    serde_json::from_str(payload.trim()).ok()
-}
-
-pub fn set_settings(settings: Settings) {
-    *lock(&SETTINGS) = settings;
-}
-
-pub fn current_settings() -> Settings {
-    lock(&SETTINGS).clone()
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skill {

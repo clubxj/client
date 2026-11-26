@@ -997,6 +997,7 @@ function Clickbox.approach(
 			near = within,
 			timeout_ms = o.timeout_ms or Clickbox.APPROACH_TIMEOUT_MS,
 			straight = walk.straight,
+			prefer_house = walk.prefer_house,
 			before_click = walk.before_click,
 			accept = walk.accept or function(entry: Host.MenuEntry): boolean
 				for _, option in ipairs(options) do
@@ -1056,6 +1057,7 @@ function Clickbox.approach(
 		near = closer,
 		timeout_ms = o.timeout_ms or Clickbox.APPROACH_TIMEOUT_MS,
 		straight = walk.straight,
+		prefer_house = walk.prefer_house,
 	})
 	if not reached then
 		return false

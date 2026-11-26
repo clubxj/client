@@ -31,7 +31,7 @@ use crate::{
     draw, draw_batch, draw_lines, entry_swaps, enum_def, find_path, game_state, game_val_names,
     ground_items, in_instance, item_container, item_names, item_params, item_stackable, landmasses,
     loc_model, loc_shown, locs, map_regions, menu, menu_click, menu_layout, menu_open, movement,
-    nav_plan, npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npcs,
+    nav_plan, npc_actions, npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npcs,
     player_hitsplats, player_model, player_overhead_text, player_plane, players, project_from,
     projectiles, raw_packet_layouts, reach_route, reach_tiles, scene_collision, scene_route,
     selected_widget, send_input, send_input_with, server_tile, spot_anims, sub_interfaces, varbit,
@@ -148,6 +148,7 @@ mod offline {
         fn map_regions(u32) -> Vec<[i32; 2]>;
         fn in_instance(u32) -> bool;
         fn npc_sizes(u32, &[i32]) -> BTreeMap<i32, i32>;
+        fn npc_actions(u32, &[i32]) -> BTreeMap<i32, Vec<String>>;
         fn npc_hitsplats(u32, &[i32]) -> BTreeMap<i32, Vec<decode::world::Hitsplat>>;
         fn player_hitsplats(u32, &[i32]) -> BTreeMap<i32, Vec<decode::world::Hitsplat>>;
         fn npc_overhead_text(u32, &[i32]) -> BTreeMap<i32, String>;
@@ -315,7 +316,9 @@ fn target_arg(table: &mlua::Table) -> Result<crate::pathfinding::Target, String>
             get(table, "shape")?,
             get::<Option<u8>>(table, "rotation")?.unwrap_or(0),
         )),
-        other => Err(format!("unknown target kind {other:?}: use tile, npc or loc")),
+        other => Err(format!(
+            "unknown target kind {other:?}: use tile, npc or loc"
+        )),
     }
 }
 
@@ -381,11 +384,13 @@ fn layer_arg(name: Option<String>) -> mlua::Result<Layer> {
 
 type ShapeArgs = (i32, i32, i32, i32, u8, u8, u8, Option<u8>, Option<String>);
 
-fn shape_args(
-    line: bool,
-    (x1, y1, x2, y2, r, g, b, a, layer): ShapeArgs,
-) -> mlua::Result<Overlay> {
-    Ok(shape(line, [x1, y1, x2, y2], rgba(r, g, b, a), layer_arg(layer)?))
+fn shape_args(line: bool, (x1, y1, x2, y2, r, g, b, a, layer): ShapeArgs) -> mlua::Result<Overlay> {
+    Ok(shape(
+        line,
+        [x1, y1, x2, y2],
+        rgba(r, g, b, a),
+        layer_arg(layer)?,
+    ))
 }
 
 fn overlay_arg(table: &mlua::Table) -> mlua::Result<Overlay> {
@@ -423,6 +428,54 @@ fn fine_point(p: &mlua::Table) -> mlua::Result<crate::projection::Point> {
             p.get::<Option<i32>>("z")?.unwrap_or(0),
         )
     })
+}
+
+fn world_point(p: &mlua::Table) -> mlua::Result<decode::shapes::Point> {
+    Ok(decode::shapes::Point::from_local(fine_point(p)?, [0, 0]))
+}
+
+fn color_arg(t: &mlua::Table) -> mlua::Result<decode::shapes::Color> {
+    let c = rgba(t.get("r")?, t.get("g")?, t.get("b")?, t.get("a")?);
+    Ok([c.r, c.g, c.b, c.a])
+}
+
+fn world_shape(t: &mlua::Table) -> mlua::Result<decode::shapes::Shape> {
+    let kind: String = t.get("kind")?;
+    if kind == "loc" {
+        let transparent = |name: &str| -> mlua::Result<decode::shapes::Color> {
+            t.get::<Option<mlua::Table>>(name)?
+                .map_or(Ok([0; 4]), |c| color_arg(&c))
+        };
+        return Ok(decode::shapes::Shape::Loc {
+            kind: t.get("loc_kind")?,
+            tile: [t.get("x")?, t.get("y")?],
+            id: t.get("id")?,
+            faces: transparent("faces")?,
+            hull: transparent("hull")?,
+        });
+    }
+    let color = color_arg(t)?;
+    match kind.as_str() {
+        "path" => Ok(decode::shapes::Shape::Path {
+            points: t
+                .get::<Vec<mlua::Table>>("points")?
+                .iter()
+                .map(world_point)
+                .collect::<mlua::Result<_>>()?,
+            color,
+            width: t.get::<Option<u8>>("width")?.unwrap_or(2),
+            closed: t.get::<Option<bool>>("closed")?.unwrap_or(false),
+        }),
+        "label" => Ok(decode::shapes::Shape::Label {
+            at: world_point(&t.get("at")?)?,
+            text: t.get("text")?,
+            color,
+            bold: t.get::<Option<bool>>("bold")?.unwrap_or(false),
+        }),
+        _ => Err(mlua::Error::RuntimeError(format!(
+            "unknown debug shape kind: {kind}"
+        ))),
+    }
 }
 
 fn scene_options(t: &mlua::Table) -> Result<crate::scene_graph::Options, String> {
@@ -1449,8 +1502,7 @@ pub fn run_with_modules(
         lua.create_function(
             move |_, (ids, callback, sent): (Vec<PacketId>, mlua::Function, Option<bool>)| {
                 let mut events = registry.borrow_mut();
-                let opcodes =
-                    packet_opcodes("on_packet", &ids, sent, &mut || events.layouts(pid))?;
+                let opcodes = packet_opcodes("on_packet", &ids, sent, &mut || events.layouts(pid))?;
                 let filter = packet_filter("on_packet", &opcodes, sent)?;
                 let id = events.next_id();
                 events.packet_callbacks.push((id, filter, callback));
@@ -1562,7 +1614,6 @@ pub fn run_with_modules(
     s.value("antiban_resume", crate::form::take_resume)?;
     s.value("form_update", crate::form::take_update)?;
     s.value("antiban_config", crate::antiban::current_value)?;
-    s.value("transport_settings", crate::transports::current_settings)?;
     s.value("transports", crate::transports::current_value)?;
     #[cfg(test)]
     s.set(
@@ -1706,6 +1757,7 @@ pub fn run_with_modules(
     s.query("npc_sizes", |pid, indices: Vec<i32>| {
         npc_sizes(pid, &indices)
     })?;
+    s.query("npc_actions", |pid, ids: Vec<i32>| npc_actions(pid, &ids))?;
     s.query("npc_hitsplats", |pid, indices: Vec<i32>| {
         npc_hitsplats(pid, &indices)
     })?;
@@ -1784,17 +1836,20 @@ pub fn run_with_modules(
             })
         },
     )?;
-    s.query("reach_route", |pid, (from, to): (mlua::Table, mlua::Table)| {
-        let route = reach_route(pid, tile_arg(&from)?, target_arg(&to)?)?;
-        Ok(SceneRoute {
-            tiles: route
-                .tiles
-                .into_iter()
-                .map(|(x, y)| PathTile { x, y })
-                .collect(),
-            reached: route.reached,
-        })
-    })?;
+    s.query(
+        "reach_route",
+        |pid, (from, to): (mlua::Table, mlua::Table)| {
+            let route = reach_route(pid, tile_arg(&from)?, target_arg(&to)?)?;
+            Ok(SceneRoute {
+                tiles: route
+                    .tiles
+                    .into_iter()
+                    .map(|(x, y)| PathTile { x, y })
+                    .collect(),
+                reached: route.reached,
+            })
+        },
+    )?;
     s.query("reach_tiles", |pid, to: mlua::Table| {
         Ok(reach_tiles(pid, target_arg(&to)?)?
             .into_iter()
@@ -1878,6 +1933,12 @@ pub fn run_with_modules(
                 .map_err(mlua::Error::RuntimeError)
         })?,
     )?;
+    s.read("account_settings", |pid| {
+        Ok(game_state(pid)?
+            .account_name
+            .as_deref()
+            .and_then(crate::account::settings_for))
+    })?;
     s.read("lamp_skill", |pid| match game_state(pid)?.account_name {
         Some(account) => crate::lamp::skill_for(&account),
         None => Ok(None),
@@ -1978,15 +2039,25 @@ pub fn run_with_modules(
         Ok(draw(pid, &shape_args(true, args)?))
     })?;
     type LinesArgs = (Vec<mlua::Table>, u8, u8, u8, Option<u8>, Option<String>);
-    s.action("draw_lines", |pid, (lines, r, g, b, a, layer): LinesArgs| {
-        let lines = lines
-            .iter()
-            .map(|line| rounded(line, [1, 2, 3, 4]))
-            .collect::<mlua::Result<Vec<_>>>()?;
-        Ok(draw_lines(pid, &lines, rgba(r, g, b, a), layer_arg(layer)?))
-    })?;
+    s.action(
+        "draw_lines",
+        |pid, (lines, r, g, b, a, layer): LinesArgs| {
+            let lines = lines
+                .iter()
+                .map(|line| rounded(line, [1, 2, 3, 4]))
+                .collect::<mlua::Result<Vec<_>>>()?;
+            Ok(draw_lines(pid, &lines, rgba(r, g, b, a), layer_arg(layer)?))
+        },
+    )?;
     s.action("clear_overlay", |pid, (): ()| {
         Ok(draw(pid, &Overlay::Clear))
+    })?;
+    s.action("debug_shapes", |pid, shapes: Vec<mlua::Table>| {
+        let shapes = shapes
+            .iter()
+            .map(world_shape)
+            .collect::<mlua::Result<Vec<_>>>()?;
+        Ok(crate::debug_shapes::set(pid, shapes))
     })?;
     s.action("draw_batch", |pid, shapes: Vec<mlua::Table>| {
         let overlays = shapes
@@ -2043,6 +2114,58 @@ mod tests {
     }
 
     #[test]
+    fn debug_shapes_are_world_paths_and_labels() {
+        let lua = Lua::new();
+        let shape = |source: &str| {
+            let table: mlua::Table = lua.load(source).eval().unwrap();
+            world_shape(&table)
+        };
+        let path = shape(
+            "{ kind = 'path', points = { { x = 409600, y = 409664, tile = { x = 3200, y = 3200 } }, { x = 1, y = 2, z = -40 } }, r = 1, g = 2, b = 3, closed = true }",
+        )
+        .unwrap();
+        let decode::shapes::Shape::Path {
+            points,
+            color,
+            width,
+            closed,
+        } = path
+        else {
+            panic!("expected a path");
+        };
+        assert_eq!((color, width, closed), ([1, 2, 3, 255], 2, true));
+        assert_eq!(
+            (points[0].x, points[0].y, points[0].tile, points[1].z),
+            (409600, 409664, Some([3200, 3200]), -40)
+        );
+        let label = shape(
+            "{ kind = 'label', at = { x = 5, y = 6 }, text = 'Hi', r = 9, g = 9, b = 9, a = 100 }",
+        )
+        .unwrap();
+        assert!(
+            matches!(label, decode::shapes::Shape::Label { ref text, color: [9, 9, 9, 100], .. } if text == "Hi")
+        );
+        let bold = shape("{ kind = 'label', at = { x = 5, y = 6 }, text = 'B', r = 1, g = 1, b = 1, bold = true }").unwrap();
+        assert!(matches!(
+            bold,
+            decode::shapes::Shape::Label { bold: true, .. }
+        ));
+        let loc = shape("{ kind = 'loc', loc_kind = 10, x = 3200, y = 3201, id = 99, faces = { r = 255, g = 255, b = 0, a = 70 } }").unwrap();
+        assert_eq!(
+            loc,
+            decode::shapes::Shape::Loc {
+                kind: 10,
+                tile: [3200, 3201],
+                id: 99,
+                faces: [255, 255, 0, 70],
+                hull: [0; 4],
+            }
+        );
+        assert!(shape("{ kind = 'loc', loc_kind = 300, x = 1, y = 1, id = 1 }").is_err());
+        assert!(shape("{ kind = 'circle', r = 1, g = 1, b = 1 }").is_err());
+    }
+
+    #[test]
     fn draw_batch_shapes_take_a_world_or_ui_layer() {
         let lua = Lua::new();
         let shape = |source: &str| {
@@ -2054,7 +2177,10 @@ mod tests {
             Overlay::Rect { layer, .. } | Overlay::Line { layer, .. } => Some(layer),
             Overlay::Clear => None,
         };
-        assert_eq!(layer_of(shape(&format!("{{ {base} }}")).unwrap()), Some(Layer::World));
+        assert_eq!(
+            layer_of(shape(&format!("{{ {base} }}")).unwrap()),
+            Some(Layer::World)
+        );
         assert_eq!(
             layer_of(shape(&format!("{{ {base}, layer = 'ui' }}")).unwrap()),
             Some(Layer::Ui)
@@ -2162,9 +2288,17 @@ mod tests {
             PacketId::Opcode(9),
             PacketId::Named(Name::Tick),
         ];
-        assert_eq!(packet_opcodes("t", &ids, None, &mut get).unwrap(), [1, 9, 0]);
+        assert_eq!(
+            packet_opcodes("t", &ids, None, &mut get).unwrap(),
+            [1, 9, 0]
+        );
         let missing = packet_opcodes("t", &[PacketId::Named(Name::VarpLarge)], None, &mut get);
-        assert!(missing.unwrap_err().to_string().contains("VARP_LARGE wasn't found"));
+        assert!(
+            missing
+                .unwrap_err()
+                .to_string()
+                .contains("VARP_LARGE wasn't found")
+        );
         let sent = packet_opcodes("t", &[PacketId::Named(Name::Tick)], Some(true), &mut get);
         assert!(sent.unwrap_err().to_string().contains("never sent"));
         let mut unused = || -> mlua::Result<Rc<Vec<Layout>>> { panic!("layouts read for opcodes") };
@@ -2199,7 +2333,10 @@ mod tests {
         let received = ipc::packets::direction::RECEIVED;
         let sound = entry(1, received, vec![0x13, 0x5f, 1, 0, 30]);
         lua.globals()
-            .set("sound", packet_to_lua(&lua, &sound, Some(&layouts)).unwrap())
+            .set(
+                "sound",
+                packet_to_lua(&lua, &sound, Some(&layouts)).unwrap(),
+            )
             .unwrap();
         let cut = entry(1, received, vec![0x13]);
         lua.globals()
@@ -2207,7 +2344,10 @@ mod tests {
             .unwrap();
         let plain = entry(2, received, vec![]);
         lua.globals()
-            .set("plain", packet_to_lua(&lua, &plain, Some(&layouts)).unwrap())
+            .set(
+                "plain",
+                packet_to_lua(&lua, &plain, Some(&layouts)).unwrap(),
+            )
             .unwrap();
         let sent = entry(1, ipc::packets::direction::SENT, vec![0x13, 0x5f, 1, 0, 30]);
         lua.globals()
@@ -3102,7 +3242,7 @@ stage.rows = {
     row('teleportation_spells_home', 'Lumbridge Home Teleport', nil, tile(3900, 3000)),
 }
 local off = {}
-Host.transport_settings = function() return { off = off } end
+Host.account_settings = function() return { off = off, house = {} } end
 assert(T.is_enabled('spells'))
 assert(T.choose(home, far) ~= nil, 'on')
 off = { 'spells' }
@@ -3310,7 +3450,7 @@ stage.rows = { row('teleportation_portals', '', home, far, { menu = 'Enter Soul 
 local c = T.choose(home, far)
 assert(c and c.kind == 'ride', 'a portal is a trip')
 assert(T.choose(home, far, { exclude = { portals = true } }) == nil, 'a script can leave them out')
-Host.transport_settings = function() return { off = { 'portals' } } end
+Host.account_settings = function() return { off = { 'portals' }, house = {} } end
 assert(T.choose(home, far) == nil, 'and so can the user')
 "#,
         );
@@ -3332,6 +3472,61 @@ T.VALID_FOR_MS = -1
 local c = T.choose(here, there)
 assert(c and c.kind == 'wilderness_obelisks' and c.transport.label == 'Level 50 Wilderness', 'with it, a trip')
 assert(T.choose(home, there) == nil, 'from safety, no')
+"#,
+        );
+    }
+
+    #[test]
+    fn preferring_the_house_drops_trips_it_can_replace() {
+        chooser_test(
+            r#"
+local House = require('@volcren/house')
+local inside = tile(1858, 7051)
+local tablet = row('teleportation_items', 'Teleport to House tablet: Inside the house', nil, inside, { items = '8013=1', consumable = true })
+local barrows = row('teleportation_portals_poh', 'Barrows Portal', inside, far, { menu = 'Enter Barrows Portal 37591' })
+local direct = row('teleportation_items', 'Barrows teleport: Barrows', nil, tile(far.x + 3, far.y), { items = '19629=1', consumable = true })
+local elsewhere = row('teleportation_items', 'Barrows teleport: Elsewhere', nil, tile(far.x + 200, far.y), { items = '19629=1', consumable = true })
+stage.rows = { tablet, barrows, direct, elsewhere }
+stage.inventory = { { id = 8013, quantity = 1, slot = 0 }, { id = 19629, quantity = 5, slot = 1 } }
+local vars = { [House.NEXUS_SLOT_VARBITS[1]] = 10 }
+Host.varbit = function(id) return vars[id] or 0 end
+Host.enum_def = function(id) return if id == House.NEXUS_ENUM then { entries = { { key = 10, value = 500 } } } else nil end
+Host.cache_files = function() return { '\249\1\1' .. string.pack('>I3', House.NEXUS_NAME_PARAM) .. 'Barrows\0' } end
+local c = T.choose(home, far)
+assert(c and c.id == direct.name, 'the direct teleport is quicker')
+c = T.choose(home, far, { prefer_house = true })
+assert(c and c.id == tablet.name, 'preferring the house goes in for the Nexus')
+c = T.choose(home, tile(far.x + 200, far.y), { prefer_house = true })
+assert(c and c.id == elsewhere.name, 'a place the house cannot reach keeps its teleport')
+stage.inventory = { { id = 19629, quantity = 5, slot = 1 } }
+c = T.choose(home, far, { prefer_house = true })
+assert(c and c.id == direct.name, 'with no way into the house nothing is dropped')
+"#,
+        );
+    }
+
+    #[test]
+    fn the_pool_is_drunk_only_for_what_its_tier_restores() {
+        chooser_test(
+            r#"
+local House = require('@volcren/house')
+local Player = require('@volcren/player')
+local run, spec, poison = 100, 100, 'healthy'
+Player.run_energy = function() return run end
+Player.special_attack = function() return spec end
+Player.poison = function() return poison end
+Player.prayer = function() return 99, 99 end
+Player.hitpoints = function() return 99, 99 end
+Host.game_state = function() return { skills = {} } end
+assert(#House.pool_needed('Ornate pool of Rejuvenation') == 0, 'nothing drained')
+run = 85
+assert(#House.pool_needed('Ornate pool of Rejuvenation') == 0, 'run above the line')
+run = 79
+assert(#House.pool_needed('Pool of Restoration') == 0, 'restoration gives no run energy')
+assert(House.pool_needed('Pool of Revitalisation')[1] == 'run', 'revitalisation does')
+run, poison = 100, 'envenomed'
+assert(#House.pool_needed('Fancy pool of Rejuvenation') == 0, 'only the ornate pool cures venom')
+assert(House.pool_needed('Ornate pool of Rejuvenation')[1] == 'poison', 'and it does')
 "#,
         );
     }
@@ -3420,6 +3615,10 @@ local before = T.choose(home, far, { exclude = { fairy_rings = true } })
 assert(before == nil, 'no visit yet: no ring to teleport in for, even holding a tablet')
 local c_tree = T.choose(home, tile(3000, 500), { exclude = { fairy_rings = true } })
 assert(c_tree == nil, 'nor a tree')
+Host.account_settings = function() return { off = {}, house = { 'spirit_tree' } } end
+c_tree = T.choose(home, tile(3000, 500), { exclude = { fairy_rings = true } })
+assert(c_tree and c_tree.kind == 'item', 'a tree saved for the account counts before a visit')
+assert(T.choose(home, far, { exclude = { fairy_rings = true } }) == nil, 'but not a ring it did not save')
 Host.in_instance = function() return true end
 local function built(id, name) return { id = id, name = name, x = 11670, y = 5270, plane = 0, clickable = true, size_x = 1, size_y = 1 } end
 scene = { built(House.EXIT_PORTAL, 'Portal') }
@@ -3485,7 +3684,7 @@ assert(T.choose(home, far) == nil, 'and then the same axe does not bring them ba
 stage.inventory = {}
 assert(T.choose(home, far) ~= nil, 'with the axes changed, one may have gone to a keeper')
 assert(T.choose(home, far, { exclude = { canoes = true } }) == nil, 'and a script can leave them out')
-Host.transport_settings = function() return { off = { 'canoes' } } end
+Host.account_settings = function() return { off = { 'canoes' }, house = {} } end
 assert(T.choose(home, far) == nil, 'and so can the user')
 "#,
         );

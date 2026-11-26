@@ -134,14 +134,13 @@ local function freeze_route(target: Tile)
 		end
 		for _, faded in ipairs({ true, false }) do
 			for i = passed + 1, last do
-				local quad = if jumped(i) == faded then Projection.tile(tiles[i]) else nil
-				if quad then
+				if jumped(i) == faded then
 					local color = if faded
 						then Walker.ROUTE_JUMPED_COLOR
 						elseif i < last then Walker.ROUTE_COLOR
 						elseif route.reached then Walker.ROUTE_END_COLOR
 						else Walker.ROUTE_SHORT_COLOR
-					Draw.quad(quad, color)
+					DebugDraw.outline({ tiles[i] }, color)
 				end
 			end
 		end
@@ -164,9 +163,7 @@ end
 
 Walker.CAMERA_TARGET_COLOR = Draw.color(255, 64, 255, 255)
 Walker.CAMERA_LINE_COLOR = Draw.color(255, 64, 255, 128)
-Walker.LABEL_SHADOW_COLOR = Draw.color(0, 0, 0, 255)
 Walker.STEP_COLOR = Draw.color(64, 160, 255, 255)
-Walker.LABEL_SIZE = 12
 
 type Point = { x: number, y: number }
 
@@ -174,58 +171,18 @@ local camera_aim: Point? = nil
 local steps: { Tile } = {}
 local camera_shown = false
 
-local function outline(quad: Geometry.Quad, color: Draw.Color)
-	local q = quad
-	Draw.lines({ { q.top, q.right }, { q.right, q.bottom }, { q.bottom, q.left }, { q.left, q.top } }, color, 2)
-end
-
-local function label(text: string, quad: Geometry.Quad, color: Draw.Color)
-	local corners = { quad.top, quad.right, quad.bottom, quad.left }
-	local top, x = math.huge, 0
-	for _, c in ipairs(corners) do
-		top = math.min(top, c.y)
-		x += c.x / 4
-	end
-	local size = Walker.LABEL_SIZE
-	local left, y = x - #text * size * 0.4, top - size - 4
-	for _, offset in ipairs({ { 1, 0 }, { 0, 1 }, { 1, 1 } }) do
-		Draw.text(text, left + offset[1], y + offset[2], size, Walker.LABEL_SHADOW_COLOR)
-	end
-	Draw.text(text, left, y, size, color)
-end
-
 local function paint_camera()
 	local aim = camera_aim
 	local me = Walker.position()
-	local base = Projection.base()
-	if aim and me and base then
-		local function ground(x: number, y: number): Host.FinePoint
-			return {
-				x = math.round((x - base.x) * Projection.TILE + Projection.TILE / 2),
-				y = math.round((y - base.y) * Projection.TILE + Projection.TILE / 2),
-				z = 0,
-				tile = { x = math.round(x) - base.x, y = math.round(y) - base.y },
-			}
-		end
-		local ends = Projection.points({ ground(me.x, me.y), ground(aim.x, aim.y) })
-		if ends and ends[1] and ends[2] then
-			Draw.lines({ { ends[1], ends[2] } }, Walker.CAMERA_LINE_COLOR, 3)
-		end
-		local quad = Projection.tile({ x = math.round(aim.x), y = math.round(aim.y) })
-		if quad then
-			outline(quad, Walker.CAMERA_TARGET_COLOR)
-			label("Camera target", quad, Walker.CAMERA_TARGET_COLOR)
-		end
+	if aim and me then
+		DebugDraw.line(me, aim, Walker.CAMERA_LINE_COLOR, 3)
+		local tile = { x = math.round(aim.x), y = math.round(aim.y) }
+		DebugDraw.outline({ tile }, Walker.CAMERA_TARGET_COLOR, 2)
+		DebugDraw.label(tile, "Camera\ntarget", Walker.CAMERA_TARGET_COLOR, true)
 	end
-	if #steps > 0 then
-		local quads = Projection.tiles(steps)
-		for i = 1, #steps do
-			local quad = quads[i]
-			if quad then
-				outline(quad, Walker.STEP_COLOR)
-				label(`Step {i}`, quad, Walker.STEP_COLOR)
-			end
-		end
+	for i, step in ipairs(steps) do
+		DebugDraw.outline({ step }, Walker.STEP_COLOR, 2)
+		DebugDraw.label(step, `Step {i}`, Walker.STEP_COLOR, true)
 	end
 end
 
@@ -870,9 +827,11 @@ export type WalkOptions = {
 	shortcuts: boolean?,
 	nav: Host.NavOptions?,
 	transports: (boolean | { exclude: { [string]: boolean }?, min_saving_ticks: number? })?,
+	prefer_house: boolean?,
 }
 
 Walker.ACTION_RANGE = 16
+Walker.PREFER_HOUSE = false
 Walker.ACTION_CHECK_MS = 150
 Walker.UNDERGROUND = 6400
 Walker.ACTION_ATTEMPTS = 3
@@ -1521,6 +1480,7 @@ local function walk(to: Tile, options: WalkOptions?): boolean
 		else {}
 	choices.shortcuts = opts.shortcuts
 	choices.on_step = opts.on_step
+	choices.prefer_house = if opts.prefer_house ~= nil then opts.prefer_house else Walker.PREFER_HOUSE
 	local hops, failures = 0, 0
 	while hops < Walker.TRANSPORT_HOPS do
 		local here = Walker.here()

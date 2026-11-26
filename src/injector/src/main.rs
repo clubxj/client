@@ -327,6 +327,7 @@ fn dispatch(args: &[&str]) -> String {
         }
         ["scene-collision", pid] => with_pid(pid, injector::scene_collision),
         ["locs", pid] => with_pid(pid, |pid| injector::locs(pid, None)),
+        ["house", pid] => with_pid(pid, injector::house),
         ["loc-model", pid, kind, x, y, id] => {
             checked(args, "loc-model command (kind scene_x scene_y id)", || {
                 Some(injector::loc_model(
@@ -488,7 +489,7 @@ fn run() -> ExitCode {
             injector::HIDER_NAMES.map(|(name, _)| name).join(" ")
         );
         eprintln!(
-            "       injector container <pid> <id> | containers <pid> | widget-tree <pid> | widget-words <pid> <group> <child> <index|-1> <count> | widget-dump <pid> <count> | item-names <pid> <id>... | item-icons <pid> <id[:quantity[:1]]>... | sprites <pid> <id>... | item-stackable <pid> <id>... | item-families <pid> <id>... | varc <pid> <id> | npcs <pid> | tiles <pid> [layer]... | npc-model <pid> <index> | spot-anims <pid> | packets <pid> <since> | scripts <pid> <since> | varc-changes <pid> <since> | item-changes <pid> <since> [wait ms] (u64 max: only the position) | locs <pid> | loc-model <pid> <kind> <scene x> <scene y> <id> | ground-items <pid> | chat <pid> | players <pid> | world-select <pid> | selected <pid>"
+            "       injector container <pid> <id> | containers <pid> | widget-tree <pid> | widget-words <pid> <group> <child> <index|-1> <count> | widget-dump <pid> <count> | item-names <pid> <id>... | item-icons <pid> <id[:quantity[:1]]>... | sprites <pid> <id>... | item-stackable <pid> <id>... | item-families <pid> <id>... | varc <pid> <id> | npcs <pid> | tiles <pid> [layer]... | npc-model <pid> <index> | spot-anims <pid> | packets <pid> <since> | scripts <pid> <since> | varc-changes <pid> <since> | item-changes <pid> <since> [wait ms] (u64 max: only the position) | locs <pid> | house <pid> | loc-model <pid> <kind> <scene x> <scene y> <id> | ground-items <pid> | chat <pid> | players <pid> | world-select <pid> | selected <pid>"
         );
         eprintln!(
             "       injector move <pid> <x> <y> | click <pid> left|right|middle <x> <y> | type <pid> <text> [hold ms]"
@@ -545,13 +546,14 @@ fn apply_setting(line: &str) -> bool {
         if let Some(url) = prices::parse_url(payload) {
             prices::set_url(url);
         }
-    } else if let Some(payload) = line.strip_prefix(transports::SETTINGS_PREFIX) {
-        if let Some(settings) = transports::parse_settings(payload) {
-            transports::set_settings(settings);
+    } else if let Some(payload) = line.strip_prefix(injector::account::PREFIX) {
+        if let Some(accounts) = injector::account::parse(payload) {
+            injector::account::set(accounts);
         }
     } else if let Some(payload) = line.strip_prefix(form::DEBUG_PREFIX) {
         if let Some(on) = form::parse_debug(payload) {
             form::set_debugging(on);
+            let _ = injector::debug_shapes::debugging_changed();
         }
     } else {
         return false;

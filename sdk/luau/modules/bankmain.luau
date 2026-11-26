@@ -4,6 +4,7 @@ local widget_children = Host.widget_children
 type Widget = Host.Widget
 local Item = require("@volcren/item")
 type Item = Item.Item
+local BankList = require("@volcren/bank_list")
 local BankpinKeypad = require("@volcren/bankpin_keypad")
 local Biometrics = require("@volcren/biometrics")
 local Chat = require("@volcren/chat")
@@ -432,6 +433,104 @@ function Bankmain.nearest(): Source?
 	return best
 end
 
+export type Bank = { x: number, y: number, plane: number, name: string }
+export type Requirement = {
+	area: { x1: number, y1: number, x2: number, y2: number },
+	quests: { string }?,
+	skills: { { name: string, level: number } }?,
+}
+
+Bankmain.BANKS = BankList :: { Bank }
+Bankmain.TRAVEL_NEAR = 8
+Bankmain.TRAVEL_TRIES = 3
+Bankmain.REQUIREMENTS = {
+	{ area = { x1 = 3200, y1 = 6030, x2 = 3330, y2 = 6150 }, quests = { "Song of the Elves" } },
+	{ area = { x1 = 2455, y1 = 2835, x2 = 2475, y2 = 2860 }, quests = { "Dragon Slayer II" } },
+	{ area = { x1 = 3590, y1 = 3355, x2 = 3620, y2 = 3380 }, quests = { "Sins of the Father" } },
+	{ area = { x1 = 2575, y1 = 3410, x2 = 2595, y2 = 3430 }, skills = { { name = "Fishing", level = 68 } } },
+	{ area = { x1 = 1580, y1 = 3465, x2 = 1600, y2 = 3485 }, skills = { { name = "Woodcutting", level = 60 } } },
+	{ area = { x1 = 1235, y1 = 3745, x2 = 1260, y2 = 3770 }, skills = { { name = "Farming", level = 45 } } },
+	{ area = { x1 = 3000, y1 = 9705, x2 = 3025, y2 = 9730 }, skills = { { name = "Mining", level = 60 } } },
+	{ area = { x1 = 2925, y1 = 3270, x2 = 2945, y2 = 3290 }, skills = { { name = "Crafting", level = 40 } } },
+} :: { Requirement }
+
+local left_out: { [number]: boolean } = {}
+local travelled: number? = nil
+
+local function transports(): any
+	return (require :: any)("@volcren/transports")
+end
+
+local function within(area: { x1: number, y1: number, x2: number, y2: number }, bank: Bank): boolean
+	return bank.x >= area.x1 and bank.x <= area.x2 and bank.y >= area.y1 and bank.y <= area.y2
+end
+
+function Bankmain.usable(bank: Bank, wilderness: boolean?): boolean
+	local Transports = transports()
+	if not wilderness and Transports.wilderness_level(bank.x, bank.y) > 0 then
+		return false
+	end
+	for _, need in ipairs(Bankmain.REQUIREMENTS) do
+		if within(need.area, bank) then
+			local row = { quests = need.quests or {}, skills = need.skills or {} }
+			if not Transports.quests_done(row) or not Transports.skills_met(row) then
+				return false
+			end
+		end
+	end
+	return true
+end
+
+function Bankmain.travel(walk: Walker.WalkOptions?): boolean
+	local opts: Walker.WalkOptions = walk or {}
+	if opts.transports == false then
+		return false
+	end
+	local here = Walker.position()
+	if here == nil then
+		return false
+	end
+	local plan: { [string]: any } = if type(opts.transports) == "table"
+		then table.clone(opts.transports) :: { [string]: any }
+		else {}
+	plan.shortcuts = opts.shortcuts
+	plan.prefer_house = if opts.prefer_house ~= nil then opts.prefer_house else Walker.PREFER_HOUSE
+	local indices: { number } = {}
+	local tiles: { Tile } = {}
+	for i, bank in ipairs(Bankmain.BANKS) do
+		if not left_out[i] and Bankmain.usable(bank, plan.wilderness) then
+			table.insert(indices, i)
+			table.insert(tiles, { x = bank.x, y = bank.y, plane = bank.plane })
+		end
+	end
+	local costs = transports().costs({ x = here.x, y = here.y, plane = here.plane or 0 }, tiles, plan)
+	local order: { number } = {}
+	for k = 1, #indices do
+		if costs[k] < math.huge then
+			table.insert(order, k)
+		end
+	end
+	table.sort(order, function(a: number, b: number): boolean
+		return costs[a] < costs[b]
+	end)
+	for attempt = 1, math.min(#order, Bankmain.TRAVEL_TRIES) do
+		local k = order[attempt]
+		local i, bank = indices[k], Bankmain.BANKS[indices[k]]
+		Log.log("Bankmain", `travelling to the bank at {bank.x}, {bank.y} (about {math.floor(costs[k])} ticks)`)
+		local go = table.clone(opts) :: Walker.WalkOptions
+		go.near = Bankmain.TRAVEL_NEAR
+		go.plane = bank.plane
+		local ok, reached = pcall(Walker.walk, { x = bank.x, y = bank.y }, go)
+		if ok and reached and Bankmain.nearest() ~= nil then
+			travelled = i
+			return true
+		end
+		left_out[i] = true
+		Log.log("Bankmain", `couldn't get to the bank at {bank.x}, {bank.y}: left out for this run`)
+	end
+	return false
+end
+
 local function resolve(source: Source?): Source?
 	if source and (source.loc or source.npc) then
 		return source
@@ -439,17 +538,40 @@ local function resolve(source: Source?): Source?
 	return Bankmain.nearest()
 end
 
-local function stand_near(source: Source): boolean
-	local at: Tile = (source.loc or source.npc) :: Tile
-	return Walker.walk({ x = math.floor(at.x), y = math.floor(at.y) }, { near = Clickbox.APPROACH_NEAR })
+local function walk_options(walk: (Walker.WalkOptions | false)?): Walker.WalkOptions
+	return if type(walk) == "table" then walk else {}
 end
 
-function Bankmain.hover(source: Source?, walk: boolean?): boolean
+local function stand_near(source: Source, walk: Walker.WalkOptions): boolean
+	local at: Tile = (source.loc or source.npc) :: Tile
+	local go = table.clone(walk) :: Walker.WalkOptions
+	go.near = Clickbox.APPROACH_NEAR
+	return Walker.walk({ x = math.floor(at.x), y = math.floor(at.y) }, go)
+end
+
+local function refused_here()
+	local i = travelled
+	local here = Walker.position()
+	if i == nil or here == nil then
+		return
+	end
+	local bank = Bankmain.BANKS[i]
+	if math.max(math.abs(bank.x - here.x), math.abs(bank.y - here.y)) <= Bankmain.TRAVEL_NEAR * 2 then
+		left_out[i] = true
+		travelled = nil
+		Log.log("Bankmain", `the bank at {bank.x}, {bank.y} didn't open: left out for this run`)
+	end
+end
+
+function Bankmain.hover(source: Source?, walk: (Walker.WalkOptions | false)?): boolean
 	local target = resolve(source)
+	if target == nil and source == nil and walk ~= false and Bankmain.travel(walk_options(walk)) then
+		target = resolve(nil)
+	end
 	if target == nil then
 		return false
 	end
-	if walk ~= false and not stand_near(target) then
+	if walk ~= false and not stand_near(target, walk_options(walk)) then
 		return false
 	end
 	if target.loc then
@@ -458,7 +580,7 @@ function Bankmain.hover(source: Source?, walk: boolean?): boolean
 	return Npcs.hover(target.npc :: Npc)
 end
 
-function Bankmain.open(source: Source?, walk: boolean?): boolean
+function Bankmain.open(source: Source?, walk: (Walker.WalkOptions | false)?): boolean
 	if BankpinKeypad.is_open() then
 		return Bankmain.wait_open()
 	end
@@ -469,6 +591,9 @@ function Bankmain.open(source: Source?, walk: boolean?): boolean
 		return false
 	end
 	local target = resolve(source)
+	if target == nil and source == nil and walk ~= false and Bankmain.travel(walk_options(walk)) then
+		target = resolve(nil)
+	end
 	if target == nil then
 		Log.log("Bankmain", "no bank or banker around")
 		return false
@@ -476,14 +601,14 @@ function Bankmain.open(source: Source?, walk: boolean?): boolean
 	local picked: boolean
 	if target.loc then
 		if walk ~= false then
-			picked = Objects.approach(target.loc, OBJECT_OPTIONS)
+			picked = Objects.approach(target.loc, OBJECT_OPTIONS, { walk = walk_options(walk) })
 		else
 			picked = Objects.interact(target.loc, OBJECT_OPTIONS)
 		end
 	else
 		local npc = target.npc :: Npc
 		if walk ~= false then
-			picked = Npcs.approach(npc, NPC_OPTIONS, { stand = Bankmain.counter_tiles(npc) })
+			picked = Npcs.approach(npc, NPC_OPTIONS, { stand = Bankmain.counter_tiles(npc), walk = walk_options(walk) })
 		else
 			picked = Npcs.interact(npc, NPC_OPTIONS)
 		end
@@ -494,10 +619,15 @@ function Bankmain.open(source: Source?, walk: boolean?): boolean
 			return false
 		end
 		if not Minimenu.select("Bank") then
+			refused_here()
 			return false
 		end
 	end
-	return Bankmain.wait_open()
+	if not Bankmain.wait_open() then
+		refused_here()
+		return false
+	end
+	return true
 end
 
 local function wait_varbit(varbit: number, value: number, timeout_ms: number): boolean

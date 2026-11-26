@@ -18,7 +18,7 @@ use gpui_kit::{
     TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, canvas, div, img,
     point, prelude::FluentBuilder, px, relative, size,
 };
-use injector::{Cursor, CursorStyle, DisplayName, GameState, LoadReport, Overlay, varp};
+use injector::{Cursor, CursorStyle, DisplayName, GameState, LoadReport, varp};
 use serde::{Deserialize, Serialize};
 
 use loader::backend::{self, Scan, Settings, Target};
@@ -89,6 +89,12 @@ enum Event {
         result: Result<GameState, String>,
     },
     AccountName(Result<Option<String>, String>),
+    HouseRead {
+        index: usize,
+        hash: String,
+        pid: u32,
+        result: Result<injector::house::Survey, String>,
+    },
     Name {
         pid: u32,
         name: String,
@@ -563,8 +569,15 @@ enum Page {
     Run(RunPage),
     Terminal,
     Accounts,
+    Account(usize, AccountTab),
     Feedback,
     Settings(Option<SettingsSection>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum AccountTab {
+    House,
+    Transportation,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -806,7 +819,7 @@ impl TilesWorker {
                     Ok(None) => {}
                     Err(error) => {
                         let since = *failing.get_or_insert_with(|| {
-                            let _ = backend::draw(&target, &settings, &Overlay::Clear);
+                            let _ = backend::scene_tiles_next_frame(&target, &settings, &[], 0);
                             Instant::now()
                         });
                         if since.elapsed() > TILES_GIVE_UP {
@@ -821,7 +834,7 @@ impl TilesWorker {
                     }
                 }
             }
-            let _ = backend::draw(&target, &settings, &Overlay::Clear);
+            let _ = backend::scene_tiles_next_frame(&target, &settings, &[], 0);
         }));
         worker
     }
@@ -1230,6 +1243,7 @@ pub struct LoaderApp {
     proxies: crate::proxies::Proxies,
     assigned_proxies: crate::proxies::Assigned,
     accounts_ui: Option<crate::accounts::Ui>,
+    account_page: accounts_page::AccountPage,
     run_ui: run_page::Ui,
     cursor: Cursor,
     ui_font: crate::ui::theme::UiFont,
@@ -1359,6 +1373,7 @@ impl LoaderApp {
             proxies: crate::proxies::Proxies::load(),
             assigned_proxies: crate::proxies::Assigned::default(),
             accounts_ui: None,
+            account_page: accounts_page::AccountPage::default(),
             run_ui: run_page::Ui::default(),
             cursor: storage.get(CURSOR_KEY).unwrap_or(DEFAULT_CURSOR),
             ui_font: storage.get(UI_FONT_KEY).unwrap_or_default(),
@@ -2859,6 +2874,7 @@ impl LoaderApp {
                 Event::Tiles { .. }
                     | Event::XpState { .. }
                     | Event::AccountName(_)
+                    | Event::HouseRead { .. }
                     | Event::Packets { .. }
                     | Event::PacketLayouts { .. }
                     | Event::Vars { .. }
@@ -3116,6 +3132,12 @@ impl LoaderApp {
                     Err(error) => self.error(format!("Setting the display name in {pid} failed: {error}")),
                 },
                 Event::AccountName(result) => crate::script::write(&self.accounts).client_name(result),
+                Event::HouseRead {
+                    index,
+                    hash,
+                    pid,
+                    result,
+                } => self.house_read(index, hash, pid, result),
                 Event::XpState { run: id, result } => {
                     if let Some(run) = self.run_by_id_mut(id) {
                         run.xp_reading = false;

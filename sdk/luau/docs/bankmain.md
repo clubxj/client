@@ -124,25 +124,64 @@ for _, tile in ipairs(banker and Bankmain.counter_tiles(banker) or {}) do
 end
 ```
 
+## Far banks
+
+Definition:
+
+```luau
+export type Bank = { x: number, y: number, plane: number, name: string }
+export type Requirement = {
+	area: { x1: number, y1: number, x2: number, y2: number },
+	quests: { string }?,
+	skills: { { name: string, level: number } }?,
+}
+Bankmain.BANKS = { Bank }
+Bankmain.REQUIREMENTS = { Requirement }
+Bankmain.TRAVEL_NEAR = 8
+Bankmain.TRAVEL_TRIES = 3
+```
+
+`BANKS` is every bank in the game, one object of each, from the `bank_list` module. `tools/bank_list.luau` generates that module from the cache: every object that offers "Bank", or "Use" with "Collect", grouped when within 12 tiles on one plane. Regenerate it after a game update adds or moves a bank by running the tool with `injector run` on any client and saving its output as `modules/bank_list.luau`. `REQUIREMENTS` are written by hand: the quests and skills a bank inside `area` needs. Anything they miss is learnt: a bank that can't be reached or doesn't open is left out for the rest of the run.
+
+## Bankmain.usable
+
+Definition:
+
+```luau
+function Bankmain.usable(bank: Bank, wilderness: boolean?): boolean
+```
+
+Whether the account meets the bank's `REQUIREMENTS`, and the bank is outside the Wilderness unless `wilderness` is true.
+
+## Bankmain.travel
+
+Definition:
+
+```luau
+function Bankmain.travel(walk: Walker.WalkOptions?): boolean
+```
+
+Goes to the bank fastest to reach from here, by every transport the walk may use (`Transports.costs` with the walk's `transports`, `shortcuts` and `prefer_house`). Only `usable` banks on a known landmass count, and the Wilderness only when `walk.transports.wilderness` is set. Tries the next fastest when a walk fails, up to `TRAVEL_TRIES`, leaving each failure out for the run. True once a bank is loaded around the player; false with `transports = false`.
+
 ## Bankmain.hover
 
 Definition:
 
 ```luau
-function Bankmain.hover(source: Source?, walk: boolean?): boolean
+function Bankmain.hover(source: Source?, walk: (Walker.WalkOptions | false)?): boolean
 ```
 
-Hovers the closest bank (or `source`). Walks closer first unless `walk` is `false`.
+Hovers the closest bank (or `source`), travelling to one first (`travel`) when none is loaded. `walk` is passed to the walks (e.g. `{ prefer_house = true }`); `false` doesn't walk at all.
 
 ## Bankmain.open
 
 Definition:
 
 ```luau
-function Bankmain.open(source: Source?, walk: boolean?): boolean
+function Bankmain.open(source: Source?, walk: (Walker.WalkOptions | false)?): boolean
 ```
 
-Opens the closest bank (or `source`) with "Bank" (or "Use" on objects) and waits for it. Walks closer first unless `walk` is `false`; a banker is approached with its `counter_tiles` as `stand`, so from outside the wall behind it the walk goes round to the counter instead of clicking where the server answers "I can't reach that". Another interface in the way is closed with Escape first. If the keypad shows up, `is_open` has the injector enter the PIN. `true` when the bank ends up open.
+Opens the closest bank (or `source`) with "Bank" (or "Use" on objects) and waits for it. With no `source` and no bank loaded, it first travels to the fastest bank anywhere (`travel`), and a bank it travelled to that then doesn't open is left out for the run. Walks closer first, with `walk` as the walk's options, unless `walk` is `false`; a banker is approached with its `counter_tiles` as `stand`, so from outside the wall behind it the walk goes round to the counter instead of clicking where the server answers "I can't reach that". Another interface in the way is closed with Escape first. If the keypad shows up, `is_open` has the injector enter the PIN. `true` when the bank ends up open.
 
 Example:
 

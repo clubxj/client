@@ -1,7 +1,7 @@
 pub use decode::{
     GameState, Position, ServerTile,
     chat::ChatMessage,
-    game_state_name, memory, state,
+    font, game_state_name, memory, projection, state,
     state::MAX_VARPS,
     strip_tags, widgets,
     widgets::{SubInterface, TreeWidget, Widget, WidgetDetail, WidgetTree},
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub const HOST_API: u32 = 29;
 pub const HOST_API_MIN: u32 = 22;
 
+pub mod account;
 pub mod antiban;
 pub mod async_input;
 pub mod bank_pin;
@@ -27,11 +28,12 @@ pub mod biometrics;
 pub mod cache;
 pub mod collision;
 pub mod config;
+pub mod debug_shapes;
 pub mod devtools;
 pub mod entry_swaps;
 pub use entry_swaps::{EntrySwaps, Swap};
-pub mod font;
 pub mod form;
+pub mod house;
 pub mod http;
 pub mod input_jobs;
 pub mod lamp;
@@ -40,7 +42,6 @@ pub mod manifest;
 pub mod nav;
 pub mod pathfinding;
 pub mod prices;
-pub mod projection;
 pub mod sandbox;
 pub mod scene_collision;
 pub mod scene_graph;
@@ -334,11 +335,11 @@ pub(crate) use win::paint_overlay;
 pub use win::{
     ItemWatcher, PacketWatcher, cache_archive_files, cache_archives, cache_files, cache_locs,
     chat_messages, client_cycle, collision_area, connection, draw, draw_batch, draw_lines,
-    entry_swaps, enum_def, find_path, game_state, game_val_names, ground_items, hider, in_instance,
+    entry_swaps, enum_def, find_path, game_state, game_val_names, ground_items, hider, house, in_instance,
     item_changes, item_changes_wait, item_container, item_containers, item_families, item_icons,
     item_names, item_params, item_stackable, landmasses, list_clients, load, loc_model, loc_shown,
     locs, map_regions, memory_words, menu, menu_click, menu_layout, menu_open, movement, nav_plan,
-    npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npc_words, npcs,
+    npc_actions, npc_hitsplats, npc_model, npc_overhead_text, npc_sizes, npc_type_model, npc_words, npcs,
     packet_layouts, packets, player_hitsplats, player_model, player_overhead_text, player_plane,
     player_words, players, project, project_from, projectiles, proxy, raw_packet_layouts,
     reach_route, reach_tiles, scene_collision, scene_route, scene_tiles, scene_tiles_next_frame,

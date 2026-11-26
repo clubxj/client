@@ -90,6 +90,20 @@ impl Chrome {
     }
 }
 
+impl LoaderApp {
+    fn account_children(&self) -> Vec<Node> {
+        crate::script::read(&self.accounts)
+            .names()
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let label = format!("{name}/");
+                Node::new((Page::Account(index, AccountTab::House), None), name, label)
+            })
+            .collect()
+    }
+}
+
 fn settings_children() -> Vec<Node> {
     SettingsSection::ALL
         .iter()
@@ -100,6 +114,7 @@ fn settings_children() -> Vec<Node> {
 pub(super) fn sidebar_pick(page: Page, active_run: Option<u64>) -> Pick {
     match page {
         Page::Run(_) => (page, active_run),
+        Page::Account(index, _) => (Page::Account(index, AccountTab::House), None),
         _ => (page, None),
     }
 }
@@ -337,6 +352,10 @@ impl LoaderApp {
                 if *page == Page::Settings(None) {
                     node.folds = true;
                     node.children = settings_children();
+                }
+                if *page == Page::Accounts {
+                    node.folds = true;
+                    node.children = self.account_children();
                 }
                 node
             }))
@@ -788,7 +807,7 @@ impl LoaderApp {
             }
             self.followed_tab = followed;
             self.log_collapsed =
-                matches!(self.page, Page::Accounts | Page::Settings(_) | Page::Feedback);
+                matches!(self.page, Page::Accounts | Page::Account(..) | Page::Settings(_) | Page::Feedback);
             self.log_tab = followed.1.map_or(LogTab::Loader, LogTab::Run);
         }
     }
@@ -805,6 +824,7 @@ impl LoaderApp {
             Page::Run(sub) => self.render_run(sub, window, cx),
             Page::Terminal => self.render_terminal(window, cx),
             Page::Accounts => self.render_accounts(window, cx),
+            Page::Account(index, tab) => self.render_account_page(index, tab, window, cx),
             Page::Feedback => self.render_feedback(window, cx),
             Page::Settings(section) => self.render_settings(section, window, cx),
         }

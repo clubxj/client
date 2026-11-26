@@ -489,6 +489,11 @@ export type Packet = {
 	fields: { [string]: number | string }?,
 }
 
+export type AccountSettings = {
+	off: { string },
+	house: { string },
+}
+
 export type ServerTile = {
 	x: number,
 	y: number,
@@ -837,6 +842,37 @@ export type Shape =
 	}
 	| { kind: "clear" }
 
+export type DebugShape =
+	{
+		kind: "path",
+		points: { FinePoint },
+		r: number,
+		g: number,
+		b: number,
+		a: number?,
+		width: number?,
+		closed: boolean?,
+	}
+	| {
+		kind: "label",
+		at: FinePoint,
+		text: string,
+		r: number,
+		g: number,
+		b: number,
+		a: number?,
+		bold: boolean?,
+	}
+	| {
+		kind: "loc",
+		loc_kind: number,
+		x: number,
+		y: number,
+		id: number,
+		faces: { r: number, g: number, b: number, a: number? }?,
+		hull: { r: number, g: number, b: number, a: number? }?,
+	}
+
 export type HttpRequest = {
 	url: string,
 	method: string?,
@@ -926,6 +962,7 @@ return {
 		orientation: number
 	) -> NpcModel?,
 	npc_sizes = g.npc_sizes :: (indices: { number }) -> { [number]: number }?,
+	npc_actions = g.npc_actions :: (ids: { number }) -> { [number]: { string } }?,
 	npc_hitsplats = g.npc_hitsplats :: (indices: { number }) -> { [number]: { Hitsplat } }?,
 	player_hitsplats = g.player_hitsplats :: (indices: { number }) -> { [number]: { Hitsplat } }?,
 	npc_overhead_text = g.npc_overhead_text :: (indices: { number }) -> { [number]: string }?,
@@ -948,7 +985,6 @@ return {
 	scene_route = g.scene_route :: (from: Tile, to: Tile, options: SceneRouteOptions?) -> SceneRoute?,
 	reach_route = g.reach_route :: (from: Tile, to: ReachTarget) -> (SceneRoute?, string?),
 	reach_tiles = g.reach_tiles :: (to: ReachTarget) -> ({ Tile }?, string?),
-	transport_settings = g.transport_settings :: () -> { off: { string } },
 	world_route = g.world_route :: (from: NavTile, to: NavTile, allow_climbs: { string }?) -> WorldRoute?,
 	nav_plan = g.nav_plan :: (from: Tile | NavTile, to: Tile | NavTile, options: NavOptions?) -> (NavPlan?, string?),
 	loc_model = g.loc_model :: (loc: Loc) -> NpcModel?,
@@ -981,6 +1017,7 @@ return {
 	input_cancel = g.input_cancel :: () -> (),
 	act = g.act :: (spec: ActSpec) -> ActResult,
 	bank_pin_enter = g.bank_pin_enter :: () -> string,
+	account_settings = g.account_settings :: () -> (AccountSettings?, string?),
 	lamp_skill = g.lamp_skill :: () -> (string?, string?),
 	http_request = g.http_request :: (options: HttpRequest) -> (HttpResponse?, string?),
 	item_prices = g.item_prices :: (items: { number | string }) -> ({ ItemPrice? }?, string?),
@@ -1016,6 +1053,7 @@ return {
 	) -> (),
 	clear_overlay = g.clear_overlay :: () -> (),
 	draw_batch = g.draw_batch :: (shapes: { Shape }) -> (),
+	debug_shapes = g.debug_shapes :: (shapes: { DebugShape }) -> (),
 	sleep = g.sleep :: (ms: number) -> (),
 	time = g.time :: () -> number,
 	clock = g.clock :: () -> number,

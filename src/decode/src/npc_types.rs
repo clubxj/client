@@ -7,6 +7,7 @@ pub struct NpcType {
     pub width_scale: i32,
     pub height_scale: i32,
     pub transforms: Option<Transforms>,
+    pub actions: Vec<String>,
 }
 
 impl Default for NpcType {
@@ -17,6 +18,7 @@ impl Default for NpcType {
             width_scale: 128,
             height_scale: 128,
             transforms: None,
+            actions: Vec::new(),
         }
     }
 }
@@ -56,7 +58,13 @@ fn decode_npc_with_idle(data: &[u8]) -> Option<(NpcType, Option<u16>)> {
     loop {
         match r.u8()? {
             0 => return Some((npc, idle)),
-            2 | 30..=34 => r.string()?,
+            2 => r.string()?,
+            30..=34 => {
+                let action = r.text()?;
+                if !action.eq_ignore_ascii_case("hidden") {
+                    npc.actions.push(action);
+                }
+            }
             12 => npc.size = r.u8()?,
             13 => idle = Some(r.u16()?),
             14..=16 | 18 | 42 | 74..=79 | 95 | 103 | 114 | 116 | 124 | 126 | 146 => r.skip(2)?,
@@ -171,6 +179,18 @@ mod tests {
     use super::*;
     use crate::model_data::{self, ModelData};
     use std::collections::HashMap;
+
+    #[test]
+    fn options_keep_their_order_and_hidden_ones_are_left_out() {
+        let mut data = Vec::new();
+        for (opcode, text) in [(30u8, "Talk-to"), (31, "Hidden"), (33, "Charter")] {
+            data.push(opcode);
+            data.extend_from_slice(text.as_bytes());
+            data.push(0);
+        }
+        data.push(0);
+        assert_eq!(decode_npc(&data).unwrap().actions, ["Talk-to", "Charter"]);
+    }
 
     #[test]
     fn npcs_default_like_the_client() {

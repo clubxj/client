@@ -6,7 +6,7 @@ The player's house. Its layout is the player's choice, so nothing here assumes a
 local House = require("@volcren/house")
 ```
 
-The transport data treats the whole house as one tile, `House.TILE`: every way in arrives there and every way out leaves from there (see `Transports.house`). From anywhere you can read the house's town, the Portal Nexus teleports and its left-click, and the jewellery box size once fancy or ornate. Mounted pieces, the pool and the altar only show inside; `House.survey` remembers them for the run. Struck-through box places only show in the box. The spellbook altar is `OccultAltar`.
+The transport data treats the whole house as one tile, `House.TILE`: every way in arrives there and every way out leaves from there (see `Transports.house`). From anywhere you can read the house's town, the Portal Nexus teleports and its left-click, and the jewellery box size once fancy or ornate. Mounted pieces, the pool and the altar only show inside: until `House.survey` sees them in a run, the account's House tab in the loader says which are built (`House.SAVED`). Struck-through box places only show in the box. The spellbook altar is `OccultAltar`.
 
 ## Constants
 
@@ -37,6 +37,9 @@ House.BOX_TIERS = { "basic", "fancy", "ornate" }
 House.BOX_PLACES = { basic = { ... }, fancy = { ... }, ornate = { ... } }
 House.MOUNTED_PLACES = { glory = { ... }, cape = { ... }, talisman = { ... }, digsite = { ... } }
 House.POOL_OPTION = "Drink"
+House.POOL_RUN_BELOW = 80
+House.POOLS = { { name = "ornate", restores = { ... } }, ... }
+House.SAVED = { "box", "glory", "cape", "talisman", "digsite", "fairy_ring", "spirit_tree", "pool", "occult_altar" }
 ```
 - `TILE`: the data's stand-in tile for the house. `EXIT_PORTAL`/`EXIT_OPTION`: the exit portal loc and its option.
 - `STAIRS`, `CLIMB_UP`, `CLIMB_DOWN`: staircase name and options. `PLANES`, `SIZE`: floors and scene size searched.
@@ -47,6 +50,8 @@ House.POOL_OPTION = "Drink"
 - `NEXUS_ALTERNATES`: second places (Grand Exchange, Seers' Village, Yanille) by slot, listed after their teleport once the diary varbit `unlocked_by` is set.
 - `BOX_VARBIT`: box size (0 basic or none, 1 fancy, 2 ornate). `BOX_TIERS`, `BOX_PLACES`: sizes and the places each adds to the one below.
 - `MOUNTED_PLACES`: places of each mounted piece. `POOL_OPTION`: the pool's option.
+- `POOLS`: what each pool restores, by a word in its name, most first: `special` (all), `run` (revitalisation up), `prayer` (rejuvenation up), `stats` (fancy up, not hitpoints), `hitpoints` and `poison` (ornate, also its trailblazer skin; poison covers venom). `POOL_RUN_BELOW`: run energy under this counts as needing the pool.
+- `SAVED`: the `FURNITURE` kinds that can't be read from outside, so the loader keeps them per account (`Host.account_settings`); `box` there means a basic box. The loader's `injector::house::PIECES` lists the same kinds and name parts.
 
 ## House.Furniture
 
@@ -195,7 +200,7 @@ Definition:
 ```luau
 function House.seen(kind: string): boolean?
 ```
-Whether this `FURNITURE` kind was built at the last survey; nil before any survey this run.
+Whether this `FURNITURE` kind was built at the last survey. Before any survey this run, a `SAVED` kind comes from the account's House tab in the loader; nil for other kinds, or when the account isn't saved.
 
 Example:
 ```luau
@@ -303,7 +308,7 @@ Definition:
 ```luau
 function House.box_tier(): BoxTier?
 ```
-The box size from the last survey, else `BOX_VARBIT`. Nil when a survey saw no box, or unsurveyed and the varbit is 0 (basic reads as none).
+The box size from the last survey, else `BOX_VARBIT`, else basic when `House.seen("box")` (the varbit reads a basic box as none). Nil when a survey saw no box, or none of these knows of one.
 
 Example:
 ```luau
@@ -385,6 +390,51 @@ Example:
 local House = require("@volcren/house")
 
 print(House.restore())
+```
+
+## House.pool_restores
+
+Definition:
+```luau
+function House.pool_restores(name: string): { string }
+```
+What a pool named `name` restores (`POOLS`); empty for an unknown name.
+
+Example:
+```luau
+local House = require("@volcren/house")
+
+print(table.concat(House.pool_restores("Fancy pool of Rejuvenation"), ", "))
+```
+
+## House.pool_needed
+
+Definition:
+```luau
+function House.pool_needed(name: string): { string }
+```
+What a pool named `name` would restore right now: special attack under 100, run energy under `POOL_RUN_BELOW`, prayer or hitpoints under full, a lowered stat, or poison or venom, each only if the pool restores it.
+
+Example:
+```luau
+local House = require("@volcren/house")
+
+print(#House.pool_needed("Ornate pool of Rejuvenation"))
+```
+
+## House.refresh
+
+Definition:
+```luau
+function House.refresh(): (boolean, string?)
+```
+Drinks from the house's pool only when it would restore something (`House.pool_needed`), and waits until it has. True when it drank; false with no reason when there is no pool or nothing is needed; false and why when drinking failed.
+
+Example:
+```luau
+local House = require("@volcren/house")
+
+print(House.refresh())
 ```
 
 ## House.leave

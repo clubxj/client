@@ -74,15 +74,17 @@ Nil when walking is possible and no transport saves `MIN_SAVING_TICKS`, when non
 
 Usable means the row's varbit tests hold, its skills, quests and items are met (items count in the inventory or worn), and for a spell the game says it can be cast (`Magic.can_cast`, whose icons are only as fresh as the last time the spellbook was shown). A transport that failed in the last `RETRY_AFTER_MS` is out.
 
+**Preferring the house.** With `options.prefer_house`, once the house can be reached (a usable way in, or already inside), any trip that lands within `PREFER_HOUSE_NEAR` (20) tiles, same plane, of where a usable house teleport (Nexus, box, mounted piece, house fairy ring or spirit tree) lands is left out, so the way goes through the house even when it is slower. Walking links and the groups in `NOT_REPLACED_BY_HOUSE` (passages, gates, levers, the house itself) are never left out, nor is anything when there is no way in.
+
 **The Wilderness.** A trip never goes from safety into the Wilderness unless a script asks, with `options.wilderness = true` for one plan or `Transports.WILDERNESS = true` for all of them. From outside, nothing that starts or ends in it is chosen, except a trip that lands in the Ferox Enclave when the goal is inside it too (`Ferox.contains`): that's how Clan Wars and Last Man Standing are reached. The Enclave is safe, and with the goal inside, no walk through the Wilderness follows. Its bounds are approximate. Once you are in it, a trip that leaves it or stays inside it is fine, but walking out to a start in safety that leads back in isn't. A goal in the Wilderness doesn't count as asking: the walk there is on foot. The player's own house is left out: the data puts it where "Teleport to House" lands, a stand-in for an instance somewhere else. Fares are not weighed against time.
 
 `options.exclude` names what never to use: a spell's or item's name, a charter's or ride's label, a minigame's activity (`Castle Wars`), or a group: `spells`, `minigames`, `items`, `charter`, `ride`, `canoes`, `portals`, `house`, `gates`, `levers`, `passages`, or a network's kind (`fairy_rings`).
 
-**Passages.** `transports.tsv` has about 600 rows too far for the planner: a tunnel, a cart, or a ladder to another part of the map. That means more than 15 tiles on one plane, or more than 350 when the plane changes. The chooser takes them as whole trips through `Transports.ride`, under the group `passages`, with their requirements and the Wilderness rule like any row. They aren't on the loader's Settings page, because turning them off would cut places off. `Join Castle Wars` is left out, along with these entrances: Wintertodt's Door of Dinh, Zalcano's platform, the Giant Mole's mole hills, the Corporeal Beast's cave, Puro-Puro's crop circle, the Mage of Zamorak, the Ancient Cavern's whirlpool and the Trollweiss sled. Their ways back out stay in. This only covers rows too far for the planner, so a boss entrance among the nearer climbs is still usable.
+**Passages.** `transports.tsv` has about 600 rows too far for the planner: a tunnel, a cart, or a ladder to another part of the map. That means more than 15 tiles on one plane, or more than 350 when the plane changes. The chooser takes them as whole trips through `Transports.ride`, under the group `passages`, with their requirements and the Wilderness rule like any row. They aren't among the toggles on an account's Transportation tab in the loader, because turning them off would cut places off. `Join Castle Wars` is left out, along with these entrances: Wintertodt's Door of Dinh, Zalcano's platform, the Giant Mole's mole hills, the Corporeal Beast's cave, Puro-Puro's crop circle, the Mage of Zamorak, the Ancient Cavern's whirlpool and the Trollweiss sled. Their ways back out stay in. This only covers rows too far for the planner, so a boss entrance among the nearer climbs is still usable.
 
 **Doors that ask for something.** A row of one tile with "Open" and a requirement (a guild's door, a locked gate) goes one way, and a guild's often only asks on the way in. When the player doesn't meet it, the planner won't step through that way, though it can still walk out the other way. On the world map these doors split the landmasses, so a goal behind one has no way on foot until the row is allowed. The other one-tile rows (`Pick-lock`, `Slash Web`, `Jump-over`) are links, as stiles are.
 
-**Types the user turned off.** Anything of a type turned off on the loader's Settings page is never chosen, whatever the script asks. See `Transports.is_enabled`.
+**Types the user turned off.** Anything of a type turned off for the logged-in account (the Transportation tab of its page under the loader's `accounts/`) is never chosen, whatever the script asks. See `Transports.is_enabled`.
 
 **Requirements in a comment.** A comment above a block of rows can state a requirement, like `varbit:4566=0?COINS=200`: the items are owed while the variable is at most the value, and free once it's past it. Varbit 4566 is the Karamja elite diary, so its carts stop charging when that's done, even with no coins held. Rows that name the items themselves are the ones it applies to, and the free rows beside them (Karamja's log crossing) aren't bound. When no row in the block names them (Port Phasmatys's barriers, the Waterfall rows), the comment binds every row. A form that can't be read leaves its rows out, logged once.
 
@@ -233,6 +235,22 @@ local Transports = require("@volcren/transports")
 print(#Transports.allowed_climbs({ shortcuts = false }))
 ```
 
+## Transports.costs
+
+Definition:
+```luau
+function Transports.costs(from: Tile, goals: { Tile }, options: Options?): { number }
+```
+The ticks to reach each of `goals` from `from` (in order) on the same way `choose` weighs: one shortest path over every usable transport, with walks costed by straight-line distance on one landmass. A goal on no known landmass, or one nothing reaches, costs `math.huge`. Used to pick the nearest of many places, such as banks (`Bankmain.travel`).
+
+Example:
+```luau
+local Transports = require("@volcren/transports")
+
+local costs = Transports.costs({ x = 3213, y = 3424, plane = 0 }, { { x = 2725, y = 3492, plane = 0 }, { x = 3092, y = 3243, plane = 0 } })
+print(costs[1], costs[2])
+```
+
 ## Transports.walkable
 
 Definition:
@@ -256,7 +274,7 @@ function Transports.house(choice: Choice): (boolean, boolean?)
 ```
 Takes a trip from inside the player's house, by its Portal Nexus, its jewellery box or something mounted on its walls (`Mounted`; the data's `teleportation_portals_poh` and `teleportation_boxes`). A house's layout can change, so the data's single tile stands for the whole house (`House.TILE`): a tablet, a spell or the home portal arrives there, and the furniture is found by name in that visit's scene, on any floor.
 
-**What is built.** A trip counts when `House.offers` names its furniture for its place. The variables say what the Nexus holds by name and how big the box is (fancy and ornate; a basic box reads like none until a visit), from anywhere. The rest can only be seen from inside, so `choose` looks around whenever the player is in a house (`House.survey`), and from then on in that run what it saw decides, even from outside: the mounted pieces, the fairy ring and the spirit tree count as not met until a visit shows them, and no teleport is spent to find out. The trip runs by `House.start_teleport`. A teleport that turns out not to be there is left out for the rest of the run, and the walk plans again from inside the house. The way out is `Transports.house_exit`, so a walk never gets stuck in there. The second result is true when trying again is pointless.
+**What is built.** A trip counts when `House.offers` names its furniture for its place. The variables say what the Nexus holds by name and how big the box is (fancy and ornate; a basic box reads like none unless the House tab or a visit shows it), from anywhere. The rest can only be seen from inside. Until a visit, the account's House tab in the loader says what is built (`House.seen`); without it the mounted pieces, the fairy ring and the spirit tree count as not met, and no teleport is spent to find out. `choose` looks around whenever the player is in a house (`House.survey`), and from then on in that run what it saw decides, even from outside. The trip runs by `House.start_teleport`. A teleport that turns out not to be there is left out for the rest of the run, and the walk plans again from inside the house. The way out is `Transports.house_exit`, so a walk never gets stuck in there. Every way out, whether furniture or the exit portal, first drinks from the pool when it would restore something (`House.refresh`). The second result is true when trying again is pointless.
 
 **The fairy rings and spirit trees** take the house as one more stop, once a visit has shown one (`furniture` on the network, run by `Transports.hub`): out of it, and in by code DIQ or "Your house". A Spiritual Fairy Tree counts as both.
 
@@ -322,7 +340,7 @@ Definition:
 ```luau
 function Transports.is_enabled(name: string): boolean
 ```
-Whether the user has this type of transport on, on the loader's Settings page. All are on until turned off. The names are `spells`, `home_teleports`, `minigames`, `items`, `quetzal_whistle`, `scroll_book`, `quetzals`, `spirit_trees`, `gnome_gliders`, `hot_air_balloons`, `fairy_rings`, `magic_mushtrees`, `magic_carpets`, `canoes`, `portals`, `wilderness_obelisks`, `house`, `charter`, `ride`, `minecarts`, `gates`, `levers` and `shortcuts`.
+Whether the user has this type of transport on for the logged-in account, on its Transportation tab in the loader (`Host.account_settings`). All are on until turned off, and for an account that isn't saved. The names are `spells`, `home_teleports`, `minigames`, `items`, `quetzal_whistle`, `scroll_book`, `quetzals`, `spirit_trees`, `gnome_gliders`, `hot_air_balloons`, `fairy_rings`, `magic_mushtrees`, `magic_carpets`, `canoes`, `portals`, `wilderness_obelisks`, `house`, `charter`, `ride`, `minecarts`, `gates`, `levers` and `shortcuts`.
 
 Example:
 ```luau

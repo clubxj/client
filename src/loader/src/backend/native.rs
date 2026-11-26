@@ -150,6 +150,10 @@ pub fn varps(target: &Target, _settings: &Settings) -> Result<Option<Vec<i32>>, 
     injector::varps(target.client.pid)
 }
 
+pub fn house(target: &Target, _settings: &Settings) -> Result<injector::house::Survey, String> {
+    injector::house(target.client.pid)
+}
+
 pub fn varbit(target: &Target, _settings: &Settings, id: i32) -> Result<Option<i32>, String> {
     injector::varbit(target.client.pid, id)
 }

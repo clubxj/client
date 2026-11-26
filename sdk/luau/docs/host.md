@@ -611,19 +611,6 @@ local way = Host.world_route({ x = 3222, y = 3218, plane = 0 }, { x = 2884, y = 
 print(way and way.reachable)
 ```
 
-## Host.transport_settings
-
-Definition:
-```luau
-Host.transport_settings: () -> { off: { string } }
-```
-Transport types the user disabled in the loader settings; can change mid-run. Use `Transports.is_enabled` / `Transports.require_enabled`.
-
-Example:
-```luau
-print(#Host.transport_settings().off)
-```
-
 ## Host.landmasses
 
 Definition:
@@ -755,6 +742,20 @@ local npc = (Host.npcs() or {})[1]
 print(npc and (Host.npc_sizes({ npc.index }) or {})[npc.index])
 ```
 
+## Host.npc_actions
+
+Definition:
+```luau
+Host.npc_actions: (ids: { number }) -> { [number]: { string } }?
+```
+The menu options of each NPC type by id, read from the cache after the type's variable picks what it shows ("Hidden" left out). Ids that show nothing are omitted. Use `Npcs.options`.
+
+Example:
+```luau
+local npc = (Host.npcs() or {})[1]
+print(npc and table.concat((Host.npc_actions({ npc.id }) or {})[npc.id] or {}, ", "))
+```
+
 ## Host.npc_hitsplats
 
 Definition:
@@ -869,7 +870,7 @@ Definition:
 ```luau
 Host.cache_locs: (area: Corners, filter: CacheLocFilter?) -> { CacheLoc }?
 ```
-Objects the cache places inside `area` (corners included) on every plane, loaded or not. The filter matches `plane`, substrings of `names` and whole `actions` (case-insensitive). At most 64 map squares. Reflects the cache only: no runtime changes, transforming objects as their first form. 80 x 80 tiles takes about 50 ms.
+Objects the cache places inside `area` (corners included) on every plane, loaded or not. `plane` is the one the object is walked on: an object on a bridge tile is a plane lower than the cache stores it, as in the game and the collision data. The filter matches `plane`, substrings of `names` and whole `actions` (case-insensitive). At most 64 map squares. Reflects the cache only: no runtime changes, transforming objects as their first form. 80 x 80 tiles takes about 50 ms.
 
 Example:
 ```luau
@@ -1525,6 +1526,31 @@ Host.bank_pin_enter: () -> string
 ```
 Enters the account's bank PIN on the open keypad inside the injector; the PIN comes from the loader by account name hash and never reaches the script. Returns `"entered"`, `"closed"`, `"no_pin"`, `"unavailable"`, `"locked"`, `"wrong"` or `"failed"`. Blocking input. Use [BankpinKeypad.enter](bankpin_keypad.md).
 
+## Host.AccountSettings
+
+Definition:
+```luau
+export type AccountSettings = {
+	off: { string },
+	house: { string },
+}
+```
+`off`: transport types the user turned off for the account. `house`: the `House.SAVED` pieces the user says the house has.
+
+## Host.account_settings
+
+Definition:
+```luau
+Host.account_settings: () -> (AccountSettings?, string?)
+```
+What the loader's Accounts page holds for the logged-in account (looked up by name hash, so no other account is reachable); can change mid-run. Nil when the account isn't saved, logged out or no loader; nil and a reason when there is no client. Use `Transports.is_enabled` and `House.seen`.
+
+Example:
+```luau
+local account = Host.account_settings()
+print(account and #account.off)
+```
+
 ## Host.lamp_skill
 
 Definition:
@@ -1631,6 +1657,22 @@ Example:
 Host.draw_batch({
 	{ kind = "clear" },
 	{ kind = "rect", x1 = 50, y1 = 50, x2 = 150, y2 = 100, r = 255, g = 0, b = 0 },
+})
+```
+
+## Host.debug_shapes
+
+Definition:
+```luau
+Host.debug_shapes: (shapes: { DebugShape }) -> ()
+```
+Replaces this run's world drawings, which the agent projects every frame so they follow the camera. A shape is `{ kind = "path", points, r, g, b, a?, width?, closed? }` (a line through `points`, `width` 1 to 16 pixels, default 2) , `{ kind = "label", at, text, r, g, b, a?, bold? }` (game-font text centred on `at`, its bottom at the point, with a shadow; `\n` splits it into centred lines) or `{ kind = "loc", loc_kind, x, y, id, faces?, hull? }` (the model the client drew this frame for the loc of that kind and id at world tile `x, y`: its triangle edges in the `faces` color and its outline in `hull`, each `{ r, g, b, a? }`). Points are `FinePoint`s in world units, 128 per tile from tile 0, on the ground of the player's plane plus `z` (negative is up); `tile` picks the tile whose ground they sit on. They show only while Script debugging is on and come back when it's turned on again, and the agent drops them when the run's process ends. At most 20000 shapes, 100000 points and 16 locs, labels up to 200 bytes. `DebugDraw` builds them; use it instead.
+
+Example:
+```luau
+Host.debug_shapes({
+	{ kind = "path", points = { { x = 3200 * 128, y = 3200 * 128 }, { x = 3201 * 128, y = 3200 * 128 } }, r = 255, g = 0, b = 0 },
+	{ kind = "label", at = { x = 3200 * 128 + 64, y = 3200 * 128 + 64 }, text = "Here", r = 255, g = 255, b = 255 },
 })
 ```
 
