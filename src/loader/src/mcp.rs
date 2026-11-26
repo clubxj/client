@@ -34,6 +34,7 @@ Workflow:
 3. Before using an SDK module, find it with sdk_docs (search, then read the page). Don't guess function names or signatures.
 4. check_luau a script before running it.
 5. run_luau runs it on one client and returns its output. A run that outlasts the wait keeps going: read it with run_output and end it with stop_run. One script runs per client at a time.
+6. talk talks to an NPC in one call and returns the dialogue. Use it at once for a random event NPC interacting with the player: they leave within about a minute.
 
 Scripts:
 - Start with --!strict and require SDK modules by name: docs/walker.md documents require(\"@volcren/walker\"), docs/host.md documents require(\"@volcren/host\").
@@ -237,6 +238,17 @@ fn tools() -> Vec<Value> {
             &["pid"],
         ),
         tool(
+            "talk",
+            "Talks to an NPC at once and returns the dialogue: every line, then the options it stops at. Without `npc` it picks the NPC interacting with you, such as a random event, which doesn't wait long. `choose` picks options in order as they appear.",
+            json!({
+                "pid": pid,
+                "npc": { "type": "string", "description": "The NPC's name or id. Leave it out for the NPC interacting with you." },
+                "choose": { "type": "array", "items": { "type": "string" }, "description": "Option texts to pick, in order." },
+                "wait_seconds": wait(RUN_WAIT),
+            }),
+            &["pid"],
+        ),
+        tool(
             "run_output",
             "Returns a run's status and output lines from `since` (the `next line` of the last call). Waits up to wait_seconds for new lines.",
             json!({
@@ -286,6 +298,7 @@ fn call(context: &Context, params: &Value) -> Result<Value, Failure> {
         "load_agent" => load_agent(context, &args),
         "game_state" => game_state(context, &args),
         "run_luau" => run_luau(context, &args),
+        "talk" => talk(context, &args),
         "run_output" => run_output(context, &args),
         "stop_run" => stop_run(context, &args),
         "sdk_docs" => sdk_docs(&args),
@@ -431,10 +444,27 @@ fn snippet_path(workspace: &Path, pid: u32, source: &str) -> Result<PathBuf, Str
     Ok(path)
 }
 
+const TALK: &str = include_str!("mcp/talk.luau");
+
+fn talk(context: &Context, args: &Value) -> Result<String, String> {
+    let pid = pid(args)?;
+    let waiting = wait(args, RUN_WAIT)?;
+    let saved = saved();
+    let workspace = crate::workspace::prepare(&saved.settings)?;
+    let path = snippet_path(&workspace, pid, TALK)?;
+    let choose = match args.get("choose") {
+        None | Some(Value::Null) => json!([]),
+        Some(Value::Array(options)) if options.iter().all(Value::is_string) => json!(options),
+        Some(_) => return Err("choose must be a list of option texts.".into()),
+    };
+    let launch =
+        crate::script::Launch::with(json!({ "npc": text(args, "npc")?, "choose": choose }));
+    start(context, pid, waiting, &saved, TALK, &path, "talk", &launch)
+}
+
 fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
     let pid = pid(args)?;
     let waiting = wait(args, RUN_WAIT)?;
-    let api = context.signed_in()?;
     let saved = saved();
     let workspace = crate::workspace::prepare(&saved.settings)?;
     let (source, path) = match (text(args, "source")?, text(args, "path")?) {
@@ -448,6 +478,30 @@ fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
         _ => return Err("Give either source or path.".into()),
     };
     let launch = launch(args, text(args, "path")?.map(Path::new))?;
+    let title = match text(args, "path")? {
+        Some(_) => path.file_name().map_or_else(
+            || "agent file".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        ),
+        None => "agent snippet".to_owned(),
+    };
+    start(
+        context, pid, waiting, &saved, &source, &path, &title, &launch,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start(
+    context: &Context,
+    pid: u32,
+    waiting: Duration,
+    saved: &Saved,
+    source: &str,
+    path: &Path,
+    title: &str,
+    launch: &crate::script::Launch,
+) -> Result<String, String> {
+    let api = context.signed_in()?;
     if let Some(run) = context.runs.running_on(pid) {
         return Err(format!(
             "Run {run} is still running on client {pid}. Stop it first."
@@ -460,28 +514,21 @@ fn run_luau(context: &Context, args: &Value) -> Result<String, String> {
         wake: crate::wake::Wake::default(),
         accounts: Arc::new(RwLock::new(crate::accounts::Accounts::load())),
         whitelist: Arc::new(RwLock::new(crate::whitelist::Whitelist::new(
-            saved.whitelist,
+            saved.whitelist.clone(),
             config,
         ))),
         prices_url: config.prices_url.clone(),
     };
-    let title = match text(args, "path")? {
-        Some(_) => path.file_name().map_or_else(
-            || "agent file".to_owned(),
-            |name| name.to_string_lossy().into_owned(),
-        ),
-        None => "agent snippet".to_owned(),
-    };
     let run = context.runs.start(runs::Start {
-        title: &title,
+        title,
         api,
         host: &host,
-        source: &source,
-        path: &path,
+        source,
+        path,
         sdk: sdk.as_deref(),
         target: &target,
         settings: &saved.settings,
-        launch: &launch,
+        launch,
     })?;
     Ok(run.read(0, waiting, true, PAGE_LINES).text())
 }
@@ -582,6 +629,7 @@ mod tests {
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect();
         assert!(names.contains(&"run_luau".to_owned()));
+        assert!(names.contains(&"talk".to_owned()));
     }
 
     #[test]

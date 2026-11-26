@@ -39,6 +39,8 @@ Combat.BUTTON_STYLES = table.freeze({
 	[3728] = "magic",
 } :: { [number]: Style })
 Combat.DEFENSIVE_BUTTON = 3725
+Combat.AUTO_RETALIATE = 32
+Combat.AUTO_RETALIATE_VARP = 172
 
 local POLL_MS = 50
 local PICKER_TIMEOUT_MS = 2000
@@ -281,6 +283,32 @@ function Combat.set_autocast(spell: Magic.SpellRef, defensive: boolean?): boolea
 		end, SET_TIMEOUT_MS)
 	end
 	return set()
+end
+
+function Combat.auto_retaliate(): boolean?
+	local value = Varps.get(Combat.AUTO_RETALIATE_VARP)
+	if value == nil then
+		return nil
+	end
+	return value == 0
+end
+
+function Combat.set_auto_retaliate(on: boolean): boolean
+	if Combat.auto_retaliate() == on then
+		return true
+	end
+	if not Combat.open() then
+		return false
+	end
+	local button = widget(Combat.GROUP, Combat.AUTO_RETALIATE)
+	if button == nil or button.hidden then
+		Log.log("Combat", "the auto retaliate button isn't showing")
+		return false
+	end
+	Mouse.click(button)
+	return wait_until(function(): boolean
+		return Combat.auto_retaliate() == on
+	end, SET_TIMEOUT_MS)
 end
 
 return Combat

@@ -31,6 +31,8 @@ Combat.BUTTON_STYLES = {
 	[3728] = "magic",
 }
 Combat.DEFENSIVE_BUTTON = 3725
+Combat.AUTO_RETALIATE = 32
+Combat.AUTO_RETALIATE_VARP = 172
 ```
 - `GROUP`, `CHOOSE_SPELL`, `CHOOSE_DEFENSIVE`: the tab and its autocast (lower) and defensive (upper) "Choose spell" buttons.
 - `PICKER_GROUP`, `PICKER_SPELLS`, `PICKER_CANCEL`: the picker, the layer whose children are spells by autocast number, and the Cancel child.
@@ -39,6 +41,7 @@ Combat.DEFENSIVE_BUTTON = 3725
 - `AUTOCAST_ENUM`: the autocast list.
 - `BUTTONS_ENUM`: weapon category to an enum of attack style index (`Varps.ATTACK_STYLE`) to button struct.
 - `BUTTON_STYLES`: combat style per button struct. `DEFENSIVE_BUTTON` takes the weapon's style instead.
+- `AUTO_RETALIATE`, `AUTO_RETALIATE_VARP`: the tab's auto retaliate button, and the varp that is 0 while it's on.
 
 ## Combat.Style
 
@@ -261,4 +264,34 @@ Example:
 local Combat = require("@volcren/combat")
 
 Combat.set_autocast("Fire Strike")
+```
+
+## Combat.auto_retaliate
+
+Definition:
+```luau
+function Combat.auto_retaliate(): boolean?
+```
+Whether auto retaliate is on. Nil when the setting can't be read.
+
+Example:
+```luau
+local Combat = require("@volcren/combat")
+
+print(Combat.auto_retaliate())
+```
+
+## Combat.set_auto_retaliate
+
+Definition:
+```luau
+function Combat.set_auto_retaliate(on: boolean): boolean
+```
+Turns auto retaliate on or off by clicking the tab's button, opening the tab first, and waits for the setting to change. True when it already matches.
+
+Example:
+```luau
+local Combat = require("@volcren/combat")
+
+Combat.set_auto_retaliate(false)
 ```
