@@ -22,6 +22,14 @@ Shared-memory contract between the agent (writer, in the client) and the injecto
 - Overlay layers: every non-transparent overlay pixel carries its layer in alpha's lowest bit (`ipc::tag_alpha`): 1 is UI, 0 is world. Every painter must tag every pixel it writes (a ±1 alpha change is invisible); an untagged painter's pixels would land on a random layer.
 - `frame_serial` is unaligned in the packed `Header`: read it unaligned. Waiters on `AGENT_FRAME_<pid>` re-read `frame_serial` in slices because another waiter may consume the auto-reset wake.
 
+## World shapes (`world_shapes.rs`)
+
+- World drawings are retained shapes, not pixels: writers publish `decode::shapes::Shape`s (postcard) and the agent projects them every frame with that frame's camera, so they follow the camera with no repaint and no writer awake. Points are in world units (128 per tile from tile 0), not scene-local, so a scene reload doesn't move them.
+- `AGENT_WORLD_<pid>_<protocol>` is a mapping of its own, created by the agent, so a hot reload never has to grow `AGENT_DATA_<pid>`; the protocol in the name keeps an agent of another protocol from mapping a different layout. A writer that can't open it is talking to an agent without world drawings.
+- Two seqlocked channels, each with one writer at a time: `VIEW` for the loader's development layers (`scene_tiles`) and `SCRIPT` for the running script (`debug_shapes`). Each publish replaces the channel and records the writer's pid; the agent drops a channel's shapes once that process has exited, so a killed run or helper leaves nothing on screen. A channel's writer must therefore stay alive while its shapes should show.
+- The label fonts (`decode::font::Font::encode_all`: `p12_full`, then the bold `b12_full`) are published once into the font block by the first writer that sends a label, since only the injector reads the disk cache. Labels draw nothing until they are there.
+- A `Loc` shape names a loc by kind, id and world tile; the agent draws the model the client drew for it that frame (`model::served`, the worker's own model path), so it moves with the loc's animation and shows nothing while the loc isn't drawn.
+
 ## Proxy setting (`proxy.rs`)
 
 - `AGENT_PROXY_<pid>` is one 4096-byte page in every version, so any release's agent maps whatever another release created. It has its own `proxy::VERSION`, not `PROTOCOL_VERSION`: the loader writes it for agents of older pinned releases too, and asks a pinned injector's `proxy-version` before trusting it. Bump `proxy::VERSION` for any change to it.

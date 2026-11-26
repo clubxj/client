@@ -1,6 +1,6 @@
 # Draw
 
-Debug shapes on the game overlay. Drawings stay until `Draw.clear`; wrap redraws in `Draw.batch` to avoid flicker.
+Debug shapes on the game overlay, in screen pixels. Drawings stay until `Draw.clear`; wrap redraws in `Draw.batch` to avoid flicker. A drawing projected from tiles stays where it was painted when the camera moves; use `DebugDraw`'s world drawings for marks that should follow the camera.
 
 ```luau
 local Draw = require("@volcren/draw")
@@ -203,6 +203,24 @@ Draw.batch(function()
 	Draw.clear()
 	Draw.rect(20, 20, 120, 80)
 end)
+```
+
+## Draw.record
+
+Definition:
+```luau
+function Draw.record(paint: () -> (), layer: Layer?): { Host.Shape }
+```
+Runs `paint` and returns its drawing calls as `Host.draw_batch` shapes without drawing them; batches nested inside it join the list. `layer` works as in `Draw.batch`. If `paint` errors, the error is raised and nothing is returned.
+
+Example:
+```luau
+local Draw = require("@volcren/draw")
+
+local shapes = Draw.record(function()
+	Draw.rect(20, 20, 120, 80)
+end)
+print(#shapes)
 ```
 
 ## Draw.text

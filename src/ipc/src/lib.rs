@@ -13,8 +13,9 @@ pub mod ring;
 pub mod script_runs;
 pub mod state;
 pub mod varc_log;
+pub mod world_shapes;
 
-pub const PROTOCOL_VERSION: u8 = 70;
+pub const PROTOCOL_VERSION: u8 = 71;
 
 pub fn shared_memory_name(pid: u32) -> String {
     format!("AGENT_DATA_{pid}")

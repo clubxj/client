@@ -242,10 +242,22 @@ function Draw.clear()
 	end
 end
 
+function Draw.record(paint: () -> (), layer: Layer?): { Shape }
+	local outer, outer_layer = batch, batch_layer
+	local shapes: { Shape } = {}
+	batch, batch_layer = shapes, layer or outer_layer
+	local ok, err = pcall(paint)
+	batch, batch_layer = outer, outer_layer
+	if not ok then
+		error(err, 0)
+	end
+	return shapes
+end
+
 function Draw.batch(paint: () -> (), layer: Layer?)
-	local outer_layer = batch_layer
-	batch_layer = layer or outer_layer
 	if batch then
+		local outer_layer = batch_layer
+		batch_layer = layer or outer_layer
 		local ok, err = pcall(paint)
 		batch_layer = outer_layer
 		if not ok then
@@ -253,15 +265,7 @@ function Draw.batch(paint: () -> (), layer: Layer?)
 		end
 		return
 	end
-	local shapes: { Shape } = {}
-	batch = shapes
-	local ok, err = pcall(paint)
-	batch = nil
-	batch_layer = outer_layer
-	if not ok then
-		error(err, 0)
-	end
-	draw_batch(shapes)
+	draw_batch(Draw.record(paint, layer))
 end
 
 return Draw

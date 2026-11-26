@@ -6,7 +6,7 @@ use std::{
 use crate::camera::{Camera, NEAR_PLANE, Window, truncate};
 use ipc::{
     read::{self, Memory},
-    state::{Layout, part},
+    state::{Layout, game_state, part},
 };
 
 pub const WALL: u8 = 0;
@@ -430,6 +430,10 @@ fn scene_terrain<'a>(
     decorations: impl FnOnce() -> Option<Vec<Decoration>>,
 ) -> Result<(SceneKey, [f32; 4], &'a mut Terrain), String> {
     let (key, trig) = scene_and_trig(memory, layout, client).ok_or_else(|| unavailable("scene"))?;
+    if read::game_state_in(memory, layout, client) == Some(game_state::LOADING) {
+        *terrain = None;
+        return Err(unavailable("terrain while the scene loads"));
+    }
     let mut current = match terrain.take() {
         Some(kept) if kept.key == key => kept,
         stale => match Terrain::read(memory, layout, key) {
@@ -874,6 +878,24 @@ mod tests {
             asked, 1,
             "terrain and decorations are kept while the scene stays"
         );
+    }
+
+    #[test]
+    fn terrain_read_again_after_the_scene_loads() {
+        let (mut m, layout) = world();
+        m.put_i32(CLIENT + layout.game_state as u64, game_state::LOGGED_IN);
+        let mut terrain = None;
+        let ground_now = |m: &Fake, terrain: &mut Option<Terrain>| {
+            ensure_terrain(m, &layout, terrain, || Some(Vec::new()))
+                .map(|t| t.ground_on(m, &layout, 0, 0, 0, None))
+        };
+        assert_eq!(ground_now(&m, &mut terrain), Ok(0));
+        m.put_i32(CLIENT + layout.game_state as u64, game_state::LOADING);
+        m.put_i32(HEIGHTS, -500);
+        assert!(ground_now(&m, &mut terrain).is_err());
+        assert!(terrain.is_none());
+        m.put_i32(CLIENT + layout.game_state as u64, game_state::LOGGED_IN);
+        assert_eq!(ground_now(&m, &mut terrain), Ok(-500));
     }
 
     #[test]

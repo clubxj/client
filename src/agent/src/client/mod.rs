@@ -26,3 +26,4 @@ pub mod total_xp;
 pub mod unload;
 pub mod varc_log;
 pub mod worker;
+pub mod world_shapes;

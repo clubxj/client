@@ -12,12 +12,13 @@ use gl::{
         GLbitfield, GLchar, GLenum, GLfloat, GLint, GLintptr, GLsizei, GLsizeiptr, GLsync, GLuint,
         GLuint64, GLvoid,
     },
-    ALREADY_SIGNALED, BGRA, BLEND, BLEND_DST, BLEND_SRC, CLAMP_TO_EDGE, CONDITION_SATISFIED,
-    FRAGMENT_SHADER, LINEAR, MAP_COHERENT_BIT, MAP_PERSISTENT_BIT, MAP_READ_BIT,
-    ONE_MINUS_SRC_ALPHA, PIXEL_PACK_BUFFER, PIXEL_PACK_BUFFER_BINDING, POINTS, RGBA8, SRC_ALPHA,
-    SYNC_FLUSH_COMMANDS_BIT, SYNC_GPU_COMMANDS_COMPLETE, TEXTURE0, TEXTURE_2D, TEXTURE_MAG_FILTER,
-    TEXTURE_MIN_FILTER, TEXTURE_WRAP_S, TEXTURE_WRAP_T, TRIANGLE_STRIP, UNPACK_ROW_LENGTH,
-    UNSIGNED_BYTE, VERTEX_SHADER,
+    ALREADY_SIGNALED, ARRAY_BUFFER, ARRAY_BUFFER_BINDING, BGRA, BLEND, BLEND_DST, BLEND_SRC,
+    CLAMP_TO_EDGE, CONDITION_SATISFIED, CULL_FACE, DEPTH_TEST, FLOAT, FRAGMENT_SHADER, LINEAR,
+    MAP_COHERENT_BIT, MAP_PERSISTENT_BIT, MAP_READ_BIT, NEAREST, ONE_MINUS_SRC_ALPHA,
+    PIXEL_PACK_BUFFER, PIXEL_PACK_BUFFER_BINDING, POINTS, R8, RED, RGBA8, SCISSOR_TEST,
+    SRC_ALPHA, STREAM_DRAW, SYNC_FLUSH_COMMANDS_BIT, SYNC_GPU_COMMANDS_COMPLETE, TEXTURE0,
+    TEXTURE_2D, TEXTURE_MAG_FILTER, TEXTURE_MIN_FILTER, TEXTURE_WRAP_S, TEXTURE_WRAP_T, TRIANGLES,
+    TRIANGLE_STRIP, UNPACK_ALIGNMENT, UNPACK_ROW_LENGTH, UNSIGNED_BYTE, VERTEX_SHADER,
 };
 
 use windows::{
@@ -73,6 +74,9 @@ gl_functions! {
     uniform_4iv = c"glUniform4iv": fn(GLint, GLsizei, *const GLint);
     tex_storage_2d = c"glTexStorage2D": fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
     active_texture = c"glActiveTexture": fn(GLenum);
+    buffer_data = c"glBufferData": fn(GLenum, GLsizeiptr, *const GLvoid, GLenum);
+    vertex_attrib_pointer = c"glVertexAttribPointer": fn(GLuint, GLint, GLenum, u8, GLsizei, *const GLvoid);
+    enable_vertex_attrib_array = c"glEnableVertexAttribArray": fn(GLuint);
 }
 
 static GL: OnceLock<Gl> = OnceLock::new();
@@ -468,4 +472,192 @@ pub fn draw_cursor(x: i32, y: i32, w: i32, h: i32, style: u8, color: [u8; 3], si
         (gl.uniform_2fv)(3, 1, point_size.as_ptr());
         glDrawArrays(POINTS, 0, 1);
     };
+}
+
+const WORLD_VS: &CStr = c"
+    #version 460 core
+    layout(location = 0) in vec2 position;
+    layout(location = 1) in vec2 texel;
+    layout(location = 2) in vec4 color;
+    layout(location = 0) uniform vec2 viewport;
+    out vec2 pixel;
+    out vec2 glyphTexel;
+    out vec4 tint;
+    void main() {
+        pixel = position;
+        glyphTexel = texel;
+        tint = color;
+        gl_Position = vec4(position.x / viewport.x * 2.0 - 1.0, 1.0 - position.y / viewport.y * 2.0, 0.0, 1.0);
+    }";
+
+const WORLD_FS: &CStr = c"
+    #version 460 core
+    in vec2 pixel;
+    in vec2 glyphTexel;
+    in vec4 tint;
+    out vec4 FragColor;
+    layout(location = 1) uniform sampler2D atlas;
+    layout(location = 2) uniform int maskCount;
+    layout(location = 3) uniform ivec4 maskRects[32];
+    void main() {
+        ivec2 at = ivec2(floor(pixel));
+        for (int i = 0; i < maskCount; i++) {
+            ivec4 rect = maskRects[i];
+            if (all(greaterThanEqual(at, rect.xy)) && all(lessThan(at, rect.zw))) {
+                discard;
+            }
+        }
+        if (texelFetch(atlas, ivec2(floor(glyphTexel)), 0).r < 0.5) {
+            discard;
+        }
+        FragColor = tint;
+    }";
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldVertex {
+    pub position: [f32; 2],
+    pub texel: [f32; 2],
+    pub color: [u8; 4],
+}
+
+pub struct Atlas {
+    pub generation: u64,
+    pub width: i32,
+    pub height: i32,
+    pub texels: Vec<u8>,
+}
+
+struct WorldGl {
+    program: GLuint,
+    vao: GLuint,
+    buffer: GLuint,
+    atlas: GLuint,
+    atlas_generation: Option<u64>,
+}
+
+static WORLD_GL: Mutex<Option<WorldGl>> = Mutex::new(None);
+
+unsafe fn world_gl() -> WorldGl {
+    let gl = gl();
+    let program = link_program(WORLD_VS, WORLD_FS);
+    let (mut vao, mut buffer) = (0, 0);
+    (gl.gen_vertex_arrays)(1, &mut vao);
+    (gl.gen_buffers)(1, &mut buffer);
+    (gl.bind_vertex_array)(vao);
+    (gl.bind_buffer)(ARRAY_BUFFER, buffer);
+    let stride = size_of::<WorldVertex>() as GLsizei;
+    (gl.vertex_attrib_pointer)(0, 2, FLOAT, 0, stride, null());
+    (gl.vertex_attrib_pointer)(1, 2, FLOAT, 0, stride, 8 as *const GLvoid);
+    (gl.vertex_attrib_pointer)(2, 4, UNSIGNED_BYTE, 1, stride, 16 as *const GLvoid);
+    for attribute in 0..3 {
+        (gl.enable_vertex_attrib_array)(attribute);
+    }
+    WorldGl {
+        program,
+        vao,
+        buffer,
+        atlas: 0,
+        atlas_generation: None,
+    }
+}
+
+unsafe fn bind_atlas(world: &mut WorldGl, atlas: &Atlas) {
+    if world.atlas_generation == Some(atlas.generation) {
+        glBindTexture(TEXTURE_2D, world.atlas);
+        return;
+    }
+    if world.atlas != 0 {
+        glDeleteTextures(1, &world.atlas);
+    }
+    glGenTextures(1, &mut world.atlas);
+    glBindTexture(TEXTURE_2D, world.atlas);
+    glTexParameteri(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST as i32);
+    glTexParameteri(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST as i32);
+    (gl().tex_storage_2d)(TEXTURE_2D, 1, R8, atlas.width, atlas.height);
+    world.atlas_generation = Some(atlas.generation);
+    let (mut row_length, mut alignment) = (0, 0);
+    glGetIntegerv(UNPACK_ROW_LENGTH, &mut row_length);
+    glGetIntegerv(UNPACK_ALIGNMENT, &mut alignment);
+    glPixelStorei(UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(
+        TEXTURE_2D,
+        0,
+        0,
+        0,
+        atlas.width,
+        atlas.height,
+        RED,
+        UNSIGNED_BYTE,
+        atlas.texels.as_ptr().cast(),
+    );
+    glPixelStorei(UNPACK_ROW_LENGTH, row_length);
+    glPixelStorei(UNPACK_ALIGNMENT, alignment);
+}
+
+fn switch(capability: GLenum, on: bool) -> bool {
+    unsafe {
+        let was = glIsEnabled(capability) != 0;
+        match on {
+            true => glEnable(capability),
+            false => glDisable(capability),
+        }
+        was
+    }
+}
+
+pub fn draw_world(
+    [_, _, width, height]: [i32; 4],
+    vertices: &[WorldVertex],
+    atlas: &Atlas,
+    mask: &[Rect],
+) {
+    if vertices.is_empty() || width <= 0 || height <= 0 {
+        return;
+    }
+    let gl = gl();
+    let mut world = WORLD_GL.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        let mut prev_buffer = 0;
+        glGetIntegerv(ARRAY_BUFFER_BINDING, &mut prev_buffer);
+        let world = world.get_or_insert_with(|| world_gl());
+        (gl.use_program)(world.program);
+        (gl.bind_vertex_array)(world.vao);
+        (gl.active_texture)(TEXTURE0);
+        bind_atlas(world, atlas);
+        (gl.bind_buffer)(ARRAY_BUFFER, world.buffer);
+        (gl.buffer_data)(
+            ARRAY_BUFFER,
+            size_of_val(vertices) as GLsizeiptr,
+            vertices.as_ptr().cast(),
+            STREAM_DRAW,
+        );
+        (gl.uniform_2fv)(0, 1, [width as f32, height as f32].as_ptr());
+        (gl.uniform_1i)(1, 0);
+        let rects: Vec<[GLint; 4]> = mask.iter().map(|rect| rect.map(GLint::from)).collect();
+        (gl.uniform_1i)(2, rects.len() as GLint);
+        if !rects.is_empty() {
+            (gl.uniform_4iv)(3, rects.len() as GLsizei, rects.as_ptr().cast());
+        }
+
+        let mut prev_src = 0;
+        let mut prev_dst = 0;
+        glGetIntegerv(BLEND_SRC, &mut prev_src);
+        glGetIntegerv(BLEND_DST, &mut prev_dst);
+        let blend = switch(BLEND, true);
+        let cull = switch(CULL_FACE, false);
+        let depth = switch(DEPTH_TEST, false);
+        let scissor = switch(SCISSOR_TEST, false);
+        glBlendFunc(SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
+
+        glDrawArrays(TRIANGLES, 0, vertices.len() as GLsizei);
+
+        glBlendFunc(prev_src as GLenum, prev_dst as GLenum);
+        switch(BLEND, blend);
+        switch(CULL_FACE, cull);
+        switch(DEPTH_TEST, depth);
+        switch(SCISSOR_TEST, scissor);
+        (gl.bind_buffer)(ARRAY_BUFFER, prev_buffer as GLuint);
+    }
 }

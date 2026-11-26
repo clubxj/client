@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod camera;
 pub mod chat;
+pub mod font;
 pub mod definitions;
 pub mod interface_mask;
 pub mod js5;
@@ -14,6 +15,8 @@ pub mod menu;
 pub mod model;
 pub mod model_data;
 pub mod npc_types;
+pub mod projection;
+pub mod shapes;
 pub mod state;
 pub mod widgets;
 pub mod worker;

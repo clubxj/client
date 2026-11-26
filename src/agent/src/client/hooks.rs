@@ -325,7 +325,11 @@ unsafe fn draw_frame() {
             None => release_frame_buffers(),
         }
 
-        super::interface_mask::want(overlay.map(|_| [width, height]));
+        let world = super::world_shapes::refresh();
+        super::interface_mask::want((overlay.is_some() || world).then_some([width, height]));
+        if world {
+            super::interface_mask::with_current(|mask| super::world_shapes::draw(viewport, mask));
+        }
         if let Some((overlay, size, serial)) = overlay {
             super::interface_mask::with_current(|mask| {
                 draw_overlay(viewport, overlay, size, serial, mask)
@@ -1031,6 +1035,7 @@ pub unsafe extern "system" fn start(lparam: *mut c_void) -> u32 {
     let result = catch_unwind(AssertUnwindSafe(|| {
         super::proxy::start(pid);
         let _ = MEMORY_MANAGER.set(Mutex::new(MemoryManager::create_map(pid)));
+        super::world_shapes::create(pid);
         match LayoutMap::create(pid) {
             Some(layout) => drop(LAYOUT_MAP.set(layout)),
             None => println!("[Agent]: Cannot create the game state layout shared memory.\r\n"),

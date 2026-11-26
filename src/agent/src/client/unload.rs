@@ -55,6 +55,7 @@ pub unsafe fn unload(events: &[HANDLE]) {
     super::proxy::close();
     super::definitions::stop();
     super::interface_mask::stop();
+    super::world_shapes::close();
     super::packets::close();
     super::script_runs::close();
     super::varc_log::close();

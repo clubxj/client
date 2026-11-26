@@ -1087,7 +1087,7 @@ impl<'a> LayoutView<'a> {
     }
 }
 
-unsafe fn seqlock_write_with<T>(
+pub(crate) unsafe fn seqlock_write_with<T>(
     sequence: *mut u32,
     data: *mut T,
     fill: impl FnOnce(*mut T),
@@ -1105,7 +1105,7 @@ pub(crate) unsafe fn seqlock_write<T: Copy>(sequence: *mut u32, data: *mut T, va
     seqlock_write_with(sequence, data, |data| data.write_volatile(*value))
 }
 
-unsafe fn seqlock_read_with<R>(
+pub(crate) unsafe fn seqlock_read_with<R>(
     sequence: *const u32,
     attempts: usize,
     mut read: impl FnMut() -> R,
